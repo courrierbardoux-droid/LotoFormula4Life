@@ -14,6 +14,11 @@ const hasDatabase = !!process.env.DATABASE_URL;
 // MIDDLEWARE DE BASE
 // ============================================
 
+// Trust proxy pour Render.com (nécessaire pour les cookies sécurisés)
+if (process.env.NODE_ENV === 'production') {
+  app.set('trust proxy', 1);
+}
+
 // Parser JSON
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
