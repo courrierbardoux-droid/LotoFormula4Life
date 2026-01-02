@@ -155,64 +155,52 @@ export default function Login() {
   }, []);
 
   // Fonction pour rediriger après login
-  // Si mise à jour nécessaire → Historique + ouvrir lien loterie
-  // Sinon → Dashboard
+  // Toujours vers Dashboard (Console), même si mise à jour nécessaire
+  // L'utilisateur peut choisir de faire la mise à jour plus tard
   const redirectAfterLogin = () => {
-    if (updateNeeded) {
-      // Ouvrir le lien de téléchargement
-      window.open('https://www.loterie-nationale.be/nos-jeux/euromillions/resultats-tirage/statistiques', '_blank');
-      // Rediriger vers la page Historique avec paramètre pour ouvrir la fenêtre
-      setLocation("/history?autoUpdate=true");
-    } else {
-      setLocation("/dashboard");
-    }
+    setLocation("/dashboard");
   };
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    const foundUser = allUsers.find(u => u.username === username);
-
-    if (username === "AntoAbso" && password === "AntoAbso") {
-      login(username, "admin");
-      redirectAfterLogin();
-    } else if (foundUser) {
-        if (foundUser.username === "Guest123" && password === "guest") {
-             login(username, "invite");
-             redirectAfterLogin();
-             return;
-        }
-        if (foundUser.username === "JeanDupont" && password !== "abonne") {
-             setError("Identifiant ou mot de passe incorrect");
-             return;
-        }
-        if (foundUser.username === "MarieCurie" && password !== "vip") {
-             setError("Identifiant ou mot de passe incorrect");
-             return;
-        }
-        login(username, foundUser.role);
+    
+    try {
+      const success = await login(username, password);
+      if (success) {
         redirectAfterLogin();
-    } else {
+      } else {
         setError("Identifiant ou mot de passe incorrect");
+      }
+    } catch (err) {
+      setError("Erreur de connexion. Veuillez réessayer.");
     }
   };
 
-  const handleRegister = (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent) => {
       e.preventDefault();
       if (password !== confirmPassword) {
           setError("Les mots de passe ne correspondent pas");
           return;
       }
-      if (username && email) {
-          register(username, email);
-          setSuccessMsg("Compte créé avec succès ! Vous pouvez vous connecter.");
-          setTimeout(() => { setSuccessMsg(""); }, 10000);
-          setIsRegistering(false);
-          setUsername("");
-          setPassword("");
-          setConfirmPassword("");
-          setEmail("");
-          setError("");
+      if (username && email && password) {
+          try {
+            const success = await register(username, email, password);
+            if (success) {
+              setSuccessMsg("Compte créé avec succès ! Vous pouvez vous connecter.");
+              setTimeout(() => { setSuccessMsg(""); }, 10000);
+              setIsRegistering(false);
+              setUsername("");
+              setPassword("");
+              setConfirmPassword("");
+              setEmail("");
+              setError("");
+            } else {
+              setError("Erreur lors de la création du compte. L'utilisateur existe peut-être déjà.");
+            }
+          } catch (err) {
+            setError("Erreur lors de la création du compte.");
+          }
       }
   };
 

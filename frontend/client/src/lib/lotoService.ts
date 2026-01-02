@@ -76,6 +76,7 @@ export function viderCache() {
 /**
  * Vérifie si une mise à jour est nécessaire
  * Compare la date du dernier tirage avec les dates de tirage EuroMillions (mardi/vendredi 21h)
+ * Retourne le tirage manquant le plus RÉCENT (pas le premier)
  */
 export function verifierMiseAJourNecessaire(dernierTirage: Tirage | null): { 
   necessaire: boolean; 
@@ -89,9 +90,8 @@ export function verifierMiseAJourNecessaire(dernierTirage: Tirage | null): {
   const now = new Date();
   const derniereDateTirage = new Date(dernierTirage.date);
   
-  // Trouver le dernier tirage qui aurait dû avoir lieu
-  // EuroMillions: Mardi (2) et Vendredi (5) à 21h (heure de Paris)
-  const joursDepuisDernier = Math.floor((now.getTime() - derniereDateTirage.getTime()) / (1000 * 60 * 60 * 24));
+  // Collecter TOUS les tirages manquants entre le dernier tirage et maintenant
+  const tiragesManquants: Date[] = [];
   
   // Chercher les dates de tirage entre le dernier tirage et maintenant
   let dateCourante = new Date(derniereDateTirage);
@@ -106,14 +106,20 @@ export function verifierMiseAJourNecessaire(dernierTirage: Tirage | null): {
       const memeJour = dateCourante.toDateString() === now.toDateString();
       
       if (!memeJour || heureActuelle >= 22) {
-        return { 
-          necessaire: true, 
-          dateTirageManquant: new Date(dateCourante),
-          message: `Tirage du ${dateCourante.toLocaleDateString('fr-FR')} manquant`
-        };
+        tiragesManquants.push(new Date(dateCourante));
       }
     }
     dateCourante.setDate(dateCourante.getDate() + 1);
+  }
+  
+  // Si des tirages manquent, retourner le PLUS RÉCENT
+  if (tiragesManquants.length > 0) {
+    const dernierManquant = tiragesManquants[tiragesManquants.length - 1];
+    return { 
+      necessaire: true, 
+      dateTirageManquant: dernierManquant,
+      message: `Tirage du ${dernierManquant.toLocaleDateString('fr-FR')} manquant`
+    };
   }
   
   return { necessaire: false, dateTirageManquant: null, message: "Base à jour" };

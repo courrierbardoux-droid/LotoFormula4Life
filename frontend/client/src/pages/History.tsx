@@ -2,7 +2,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { useLocation, useSearch } from 'wouter';
 import { CasinoLayout } from '@/components/layout/CasinoLayout';
-import { chargerHistorique, Tirage, mettreAJourCache, getGridHistory, checkGridResult, getDernierTirage, PlayedGrid } from '@/lib/lotoService';
+import { chargerHistorique, Tirage, mettreAJourCache, getGridHistory, checkGridResult, getDernierTirage, PlayedGrid, verifierMiseAJourNecessaire } from '@/lib/lotoService';
 import { useUser } from '@/lib/UserContext';
 import { Download, Upload, AlertTriangle, RefreshCw, FileText, CheckCircle, Trophy, PartyPopper } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -21,6 +21,7 @@ export default function History() {
   const [isLoading, setIsLoading] = useState(true);
   const [isBlinking, setIsBlinking] = useState(false);
   const [showUpdateModal, setShowUpdateModal] = useState(false);
+  const [updateNeeded, setUpdateNeeded] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const autoUpdateTriggered = useRef(false);
@@ -59,6 +60,11 @@ export default function History() {
       try {
         const data = await chargerHistorique();
         setHistory(data);
+        
+        // Vérifier si une mise à jour est nécessaire
+        const dernierTirage = getDernierTirage(data);
+        const verif = verifierMiseAJourNecessaire(dernierTirage);
+        setUpdateNeeded(verif.necessaire);
       } catch (error) {
         console.error("Failed to load history", error);
         toast.error("Erreur lors du chargement de l'historique");
@@ -153,6 +159,7 @@ export default function History() {
           
           mettreAJourCache(newTirages); // Mise à jour globale pour que les stats (Console) en profitent aussi
           setHistory(newTirages);
+          setUpdateNeeded(false); // Réinitialiser l'état de mise à jour
           toast.success("Historique mis à jour avec succès !");
           setShowUpdateModal(false);
           
@@ -478,15 +485,15 @@ export default function History() {
                         onClick={() => handleUpdateAction(true)}
                         className={cn(
                             "border rounded-lg px-5 py-2 shadow-[0_0_15px_rgba(0,0,0,0.5)] transition-all hover:scale-105 flex items-center gap-2",
-                            isBlinking 
+                            (isBlinking || updateNeeded)
                                 ? "bg-red-600 hover:bg-red-500 border-red-400 text-white animate-pulse shadow-[0_0_20px_rgba(220,38,38,0.7)]" 
                                 : "bg-zinc-800/80 hover:bg-zinc-700 border-zinc-600 text-zinc-300"
                         )}
-                        title="Mettre à jour l'historique"
+                        title={updateNeeded ? "Mise à jour requise - Cliquez pour mettre à jour" : "Mettre à jour l'historique"}
                     >
-                        <RefreshCw className={cn("h-5 w-5", isBlinking && "animate-spin")} />
+                        <RefreshCw className={cn("h-5 w-5", (isBlinking || updateNeeded) && "animate-spin")} />
                         <span className="font-bold font-rajdhani">
-                            ACTUALISER
+                            {updateNeeded ? "MISE À JOUR REQUISE" : "ACTUALISER"}
                         </span>
                     </button>
                 )}

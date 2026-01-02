@@ -1,5 +1,33 @@
-*.zip
-Fichiers informelle perso/
+# Dependencies
 node_modules/
+
+# Build output
+dist/
+frontend/dist/
+
+# Environment variables (SECRETS - NE JAMAIS COMMITER)
+.env
+.env.local
+.env.production
+frontend/.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Personal files
+Fichiers informelle perso/
 *.zip
-... Fichiers informelle perso/
+
+# Drizzle migrations (optional - generated)
+drizzle/

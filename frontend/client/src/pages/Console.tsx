@@ -26,7 +26,8 @@ import {
   filterTirages,
   computeStatsFromTirages,
   FrequencyConfig,
-  PeriodUnit
+  PeriodUnit,
+  verifierMiseAJourNecessaire
 } from "@/lib/lotoService";
 import { 
   getPrixGrille, 
@@ -289,6 +290,7 @@ export default function Console() {
   const [stats, setStats] = useState<StatsNumeros | null>(null);
   const [dernierTirage, setDernierTirage] = useState<Tirage | null>(null);
   const [prochainTirage, setProchainTirage] = useState<{ date: Date, jour: string } | null>(null);
+  const [updateNeeded, setUpdateNeeded] = useState(false);
   
   // Preset State
   const [selectedPreset, setSelectedPreset] = useState("1"); // 1 to 5
@@ -374,7 +376,7 @@ export default function Console() {
   const [emailNotify, setEmailNotify] = useState(true);
   const [smsNotify, setSmsNotify] = useState(false);
   const [hazardLevel, setHazardLevel] = useState(0); // 0 to 9
-  const [tendencyLevel, setTendencyLevel] = useState(0); // 0 to 10
+  const [tendencyLevel, setTendencyLevel] = useState(10); // 0 to 10, défaut 10 = max tendance (bouton à gauche)
   const [isWeightsEnabled, setIsWeightsEnabled] = useState(true);
 
   // --- NEW: WEIGHT PRESET STATE ---
@@ -658,8 +660,13 @@ export default function Console() {
         const computedStats = computeStatsFromTirages(history);
         setStats(computedStats);
         
-        setDernierTirage(getDernierTirage(history));
+        const dernierTirageData = getDernierTirage(history);
+        setDernierTirage(dernierTirageData);
         setProchainTirage(getProchainTirage());
+        
+        // Vérifier si une mise à jour est nécessaire
+        const verif = verifierMiseAJourNecessaire(dernierTirageData);
+        setUpdateNeeded(verif.necessaire);
         
       } catch (err) {
         console.error("Failed to load EuroMillions data", err);
@@ -2173,7 +2180,7 @@ export default function Console() {
       
       // 4. Reset Chaos et Tendance
       // Chaos à 0 = minimum de chaos (100% statistiques)
-      // Tendance à 10 = influence maximale de la TENDANCE (trendScore)
+      // Tendance à 10 = max influence tendance (bouton à gauche, affiche 10)
       setHazardLevel(0);
       setTendencyLevel(10);
       
@@ -2442,12 +2449,25 @@ export default function Console() {
                          </div>
                          
                          {dernierTirage && (
-                            <div className="flex items-center gap-2 text-lg font-rajdhani text-zinc-400 mt-0.5 animate-in fade-in slide-in-from-left-2 duration-500">
+                            <div 
+                              className={cn(
+                                "flex items-center gap-2 text-lg font-rajdhani mt-0.5 animate-in fade-in slide-in-from-left-2 duration-500",
+                                updateNeeded ? "text-red-400 animate-pulse cursor-pointer hover:text-red-300 transition-colors" : "text-zinc-400"
+                              )}
+                              onClick={updateNeeded ? () => window.location.href = '/history' : undefined}
+                              title={updateNeeded ? "Cliquez pour mettre à jour l'historique" : undefined}
+                            >
                                 <span className="uppercase tracking-wider">DERNIER ({dernierTirage.date && !isNaN(new Date(dernierTirage.date).getTime()) ? format(new Date(dernierTirage.date), 'dd/MM') : dernierTirage.date || '??/??'}):</span>
-                                <span className="text-white font-mono font-bold tracking-widest">
+                                <span className={cn(
+                                  "font-mono font-bold tracking-widest",
+                                  updateNeeded ? "text-red-300" : "text-white"
+                                )}>
                                     {dernierTirage.numeros.join(' ')}
                                 </span>
-                                <span className="text-yellow-500 font-mono font-bold tracking-widest flex items-center gap-1">
+                                <span className={cn(
+                                  "font-mono font-bold tracking-widest flex items-center gap-1",
+                                  updateNeeded ? "text-red-400" : "text-yellow-500"
+                                )}>
                                     <span>★</span>{dernierTirage.etoiles.join(' ')}
                                 </span>
                             </div>
@@ -3120,19 +3140,19 @@ export default function Console() {
                                 </div>
                             </div>
                             
-                            {/* Bouton rotatif ÉLEVÉE */}
-                            <RotaryKnob label="ÉLEVÉE" value={weightHigh} onChange={(v) => { userModifiedRef.current = true; if(checkWeightLimit(v, weightHigh, weightMid, weightLow, weightDormeur)) setWeightHigh(v); }} max={10} labelClassName="text-xs font-bold" size="xl" />
+                            {/* Bouton rotatif ÉLEVÉE - bloqué à 0 si CHAOS = 0 */}
+                            <RotaryKnob label="ÉLEVÉE" value={hazardLevel === 0 ? 0 : weightHigh} onChange={(v) => { userModifiedRef.current = true; if(checkWeightLimit(v, weightHigh, weightMid, weightLow, weightDormeur)) setWeightHigh(v); }} max={10} labelClassName="text-xs font-bold" size="xl" disabled={hazardLevel === 0} />
                             
-                            {/* Bouton rotatif DORMEUR */}
-                            <RotaryKnob label="DORMEUR" value={weightDormeur} onChange={(v) => { userModifiedRef.current = true; if(checkWeightLimit(v, weightDormeur, weightHigh, weightMid, weightLow)) setWeightDormeur(v); }} max={10} labelClassName="text-xs font-bold" size="xl" />
+                            {/* Bouton rotatif DORMEUR - bloqué à 0 si CHAOS = 0 */}
+                            <RotaryKnob label="DORMEUR" value={hazardLevel === 0 ? 0 : weightDormeur} onChange={(v) => { userModifiedRef.current = true; if(checkWeightLimit(v, weightDormeur, weightHigh, weightMid, weightLow)) setWeightDormeur(v); }} max={10} labelClassName="text-xs font-bold" size="xl" disabled={hazardLevel === 0} />
                         </div>
                     ) : (
                         /* Mode classique : 4 boutons rotatifs - 15px above center */
                         <div className="flex justify-between items-center py-2 px-8 h-full -mt-[15px]">
-                            <RotaryKnob label="ÉLEVÉE" value={weightHigh} onChange={(v) => { userModifiedRef.current = true; if(checkWeightLimit(v, weightHigh, weightMid, weightLow, weightDormeur)) setWeightHigh(v); }} max={10} labelClassName="text-xs font-bold" size="xl" />
+                            <RotaryKnob label="ÉLEVÉE" value={hazardLevel === 0 ? 0 : weightHigh} onChange={(v) => { userModifiedRef.current = true; if(checkWeightLimit(v, weightHigh, weightMid, weightLow, weightDormeur)) setWeightHigh(v); }} max={10} labelClassName="text-xs font-bold" size="xl" disabled={hazardLevel === 0} />
                             <RotaryKnob label="MOYENNE" value={weightMid} onChange={(v) => { userModifiedRef.current = true; if(checkWeightLimit(v, weightMid, weightHigh, weightLow, weightDormeur)) setWeightMid(v); }} max={10} labelClassName="text-xs font-bold" size="xl" />
                             <RotaryKnob label="BASSE" value={weightLow} onChange={(v) => { userModifiedRef.current = true; if(checkWeightLimit(v, weightLow, weightHigh, weightMid, weightDormeur)) setWeightLow(v); }} max={10} labelClassName="text-xs font-bold" size="xl" />
-                            <RotaryKnob label="DORMEUR" value={weightDormeur} onChange={(v) => { userModifiedRef.current = true; if(checkWeightLimit(v, weightDormeur, weightHigh, weightMid, weightLow)) setWeightDormeur(v); }} max={10} labelClassName="text-xs font-bold" size="xl" />
+                            <RotaryKnob label="DORMEUR" value={hazardLevel === 0 ? 0 : weightDormeur} onChange={(v) => { userModifiedRef.current = true; if(checkWeightLimit(v, weightDormeur, weightHigh, weightMid, weightLow)) setWeightDormeur(v); }} max={10} labelClassName="text-xs font-bold" size="xl" disabled={hazardLevel === 0} />
                         </div>
                     )}
                 </SectionPanel>
@@ -3220,8 +3240,8 @@ export default function Console() {
                                 <div className="h-[60px] flex items-center justify-center">
                                     <RotaryKnob 
                                         label="" 
-                                        value={tendencyLevel} 
-                                        onChange={(v) => { setTendencyLevel(v); playSound('knob'); }} 
+                                        value={10 - tendencyLevel} 
+                                        onChange={(v) => { setTendencyLevel(10 - v); playSound('knob'); }} 
                                         max={10} 
                                         size="xl"
                                         knobColor="border-red-700 shadow-[0_0_15px_rgba(220,38,38,0.3)] bg-zinc-900"

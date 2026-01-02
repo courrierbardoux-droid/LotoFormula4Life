@@ -22,6 +22,7 @@ interface RotaryKnobProps {
   knobColor?: string;
   indicatorColor?: string;
   displayTransformer?: (value: number) => string | number;
+  disabled?: boolean;
 }
 
 export const RotaryKnob = ({  
@@ -36,7 +37,8 @@ export const RotaryKnob = ({
   valueClassName,
   knobColor,
   indicatorColor,
-  displayTransformer
+  displayTransformer,
+  disabled = false
 }: RotaryKnobProps) => {
   const [rotation, setRotation] = useState(0);
   const [internalValue, setInternalValue] = useState(value);
@@ -59,7 +61,7 @@ export const RotaryKnob = ({
   };
   
   const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
-      if (!knobRef.current) return;
+      if (!knobRef.current || disabled) return;
 
       const rect = knobRef.current.getBoundingClientRect();
       const centerX = rect.left + rect.width / 2;
@@ -92,14 +94,15 @@ export const RotaryKnob = ({
   };
 
   return (
-    <div className={cn("flex flex-col items-center gap-1", className)}>
+    <div className={cn("flex flex-col items-center gap-1", disabled && "opacity-40", className)}>
       {/* Wrapper for Knob + Value Overlay */}
       <div className="relative flex items-center justify-center">
         {/* Knob Body (Rotating) */}
         <div 
             ref={knobRef}
             className={cn(
-                "rounded-full relative shadow-[0_4px_10px_rgba(0,0,0,0.8),inset_0_2px_5px_rgba(255,255,255,0.2)] cursor-pointer transition-transform active:scale-95",
+                "rounded-full relative shadow-[0_4px_10px_rgba(0,0,0,0.8),inset_0_2px_5px_rgba(255,255,255,0.2)] transition-transform active:scale-95",
+                disabled ? "cursor-not-allowed" : "cursor-pointer",
                 knobColor || "bg-gradient-to-b from-[#444] to-[#111] border-2 border-[#222]",
                 sizeClasses[size]
             )}
