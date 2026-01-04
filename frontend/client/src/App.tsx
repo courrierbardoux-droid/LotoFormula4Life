@@ -17,6 +17,8 @@ import MyGrids from "@/pages/MyGrids";
 import Rules from "@/pages/Rules";
 import CGU from "@/pages/CGU";
 import SubscriberManagement from "@/pages/SubscriberManagement";
+import UserDetails from "@/pages/UserDetails";
+import ConfirmDraw from "@/pages/ConfirmDraw";
 
 // Protected Route Wrapper
 function ProtectedRoute({ component: Component, adminOnly = false }: { component: React.ComponentType, adminOnly?: boolean }) {
@@ -68,6 +70,14 @@ function Router() {
       <Route path="/subscribers">
         <ProtectedRoute component={SubscriberManagement} adminOnly />
       </Route>
+      
+      {/* Page détails utilisateur (admin only) */}
+      <Route path="/user/:userId">
+        <ProtectedRoute component={UserDetails} adminOnly />
+      </Route>
+
+      {/* Page de confirmation pour recevoir les numéros par email */}
+      <Route path="/confirm-draw/:token" component={ConfirmDraw} />
 
       <Route component={NotFound} />
     </Switch>

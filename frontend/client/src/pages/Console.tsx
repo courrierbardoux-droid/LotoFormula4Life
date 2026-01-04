@@ -9,6 +9,7 @@ import { Counter } from "@/components/casino/Counter";
 import { LEDIndicator } from "@/components/casino/LEDIndicator";
 import { ProchainTirageSimple } from "@/components/casino/ProchainTirageSimple";
 import { DebugPanel } from "@/components/casino/DebugPanel";
+import { GratitudePopup } from "@/components/GratitudePopup";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { fr as frLocale } from "date-fns/locale";
@@ -293,7 +294,7 @@ export default function Console() {
   const [updateNeeded, setUpdateNeeded] = useState(false);
   
   // Preset State
-  const [selectedPreset, setSelectedPreset] = useState("1"); // 1 to 5
+  const [selectedPreset, setSelectedPreset] = useState("0"); // 0 to 5 (0 = default/reset)
   const [isPresetDropdownOpen, setIsPresetDropdownOpen] = useState(false);
   const [isPriceGridOpen, setIsPriceGridOpen] = useState(false);
   const priceGridRef = useRef<HTMLDivElement>(null);
@@ -417,6 +418,11 @@ export default function Console() {
   const [showCguModal, setShowCguModal] = useState(false);
   const [cguAccepted, setCguAccepted] = useState(false);
 
+  // Popup Gratitude State (VIP/Abonné uniquement)
+  const [showGratitudePopup, setShowGratitudePopup] = useState(false);
+  const [dontShowPopupAgain, setDontShowPopupAgain] = useState(false);
+  const [popupChecked, setPopupChecked] = useState(false); // Pour éviter double appel API
+
   // --- SETTINGS STATE ---
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [freqConfig, setFreqConfig] = useState<FrequencyConfig>({ type: 'all' });
@@ -444,8 +450,9 @@ export default function Console() {
             if (state.generatedNumbers) setGeneratedNumbers(state.generatedNumbers);
             if (state.generatedStars) setGeneratedStars(state.generatedStars);
             
-            // Restore Config
+            // Restore Config (default to "0" if not found)
             if (state.selectedPreset) setSelectedPreset(state.selectedPreset);
+            else setSelectedPreset("0");
             // Load Weight Presets
             if (state.selectedWeightPreset) setSelectedWeightPreset(state.selectedWeightPreset);
             if (state.weightPresetsData) setWeightPresetsData(state.weightPresetsData);
@@ -634,14 +641,73 @@ export default function Console() {
   // --- DERIVED ACCESS RIGHTS ---
   const isAdminOrVip = user?.role === 'admin' || user?.role === 'vip';
   const isInvite = user?.role === 'invite';
-  const canUseManual = !isInvite;
+  const isAbonne = user?.role === 'abonne';
+  const isInviteOrAbonne = isInvite || isAbonne; // Ces utilisateurs ne voient jamais leurs numéros directement
+  const canUseManual = !isInvite && !isAbonne; // Mode manuel réservé aux VIP/Admin
 
-  // --- FORCE AUTO MODE FOR GUESTS ---
+  // --- FORCE AUTO MODE FOR INVITE/ABONNE ---
   useEffect(() => {
-    if (isInvite && mode === 'manual') {
+    if (isInviteOrAbonne && mode === 'manual') {
       setMode('auto');
     }
-  }, [isInvite, mode]);
+  }, [isInviteOrAbonne, mode]);
+
+  // --- POPUP GRATITUDE CHECK (VIP/Abonné uniquement) ---
+  useEffect(() => {
+    // Ne pas vérifier pour Admin et Invite
+    if (user?.role === 'admin' || user?.role === 'invite' || popupChecked) return;
+    
+    // VIP et Abonné uniquement
+    if (user?.role === 'vip' || user?.role === 'abonne') {
+      const checkPopup = async () => {
+        try {
+          // Incrémenter le compteur d'accès
+          await fetch('/api/popup/increment-access', {
+            method: 'POST',
+            credentials: 'include',
+          });
+
+          // Vérifier si on doit afficher le popup
+          const response = await fetch('/api/popup/check', {
+            method: 'POST',
+            credentials: 'include',
+          });
+          const data = await response.json();
+          
+          if (data.showPopup) {
+            setShowGratitudePopup(true);
+            setDontShowPopupAgain(data.popupStatus === 'reduced');
+          }
+          
+          setPopupChecked(true);
+        } catch (err) {
+          console.error('Erreur vérification popup:', err);
+        }
+      };
+      
+      checkPopup();
+    }
+  }, [user?.role, popupChecked]);
+
+  // Handler pour fermer le popup et mettre à jour le statut
+  const handleClosePopup = () => {
+    setShowGratitudePopup(false);
+  };
+
+  const handleDontShowAgain = async (checked: boolean) => {
+    setDontShowPopupAgain(checked);
+    
+    if (checked) {
+      try {
+        await fetch('/api/popup/reduce', {
+          method: 'POST',
+          credentials: 'include',
+        });
+      } catch (err) {
+        console.error('Erreur mise à jour popup status:', err);
+      }
+    }
+  };
 
   // --- SOUND HELPER ---
   const playSound = (type: keyof typeof sounds) => {
@@ -1285,6 +1351,73 @@ export default function Console() {
 
   // --- PRESET LOGIC ---
 
+  // Reset all settings to default values (preset 0)
+  const resetToDefault = () => {
+    // Reset counters
+    setHighFreqCount(0);
+    setMidFreqCount(0);
+    setLowFreqCount(0);
+    setHighStarCount(0);
+    setMidStarCount(0);
+    setLowStarCount(0);
+    
+    // Reset toggles
+    setHighFreqActive(false);
+    setMidFreqActive(false);
+    setLowFreqActive(false);
+    setHighStarActive(false);
+    setMidStarActive(false);
+    setLowStarActive(false);
+    setDormeurStarActive(false);
+    
+    // Reset weights
+    setWeightHigh(0);
+    setWeightMid(0);
+    setWeightLow(0);
+    setWeightDormeur(0);
+    setWeightStarHigh(0);
+    setWeightStarMid(0);
+    setWeightStarLow(0);
+    setWeightStarDormeur(0);
+    
+    // Reset options
+    setAvoidPairExt(false);
+    setBalanceHighLow(false);
+    setAvoidPopSeq(false);
+    setAvoidFriday(false);
+    setEmailNotify(false);
+    setSmsNotify(false);
+    
+    // Reset hazard and tendency
+    setHazardLevel(0);
+    setTendencyLevel(0);
+    
+    // Reset mode to auto
+    setMode('auto');
+    
+    // Reset price/tariff
+    setSelectedTariff(null);
+    
+    // Reset simplified mode
+    setIsSimplifiedMode(false);
+    
+    // Reset priorities
+    setSortPriority1('frequency');
+    setSortPriority2('trend');
+    setSortPriority3('dormeur');
+    
+    // Clear selections
+    setSelectedNumbers([]);
+    setSelectedStars([]);
+    setNumberSources({});
+    setStarSources({});
+    
+    // Clear generated results
+    setGeneratedNumbers([]);
+    setGeneratedStars([]);
+    setAutoDraws([]);
+  };
+
   // Check which presets have data on mount/user change
   useEffect(() => {
     if (!user) return;
@@ -1293,7 +1426,7 @@ export default function Console() {
         try {
             const parsed = JSON.parse(savedPresets);
             const status: Record<string, boolean> = {};
-            for (let i = 1; i <= 5; i++) {
+            for (let i = 0; i <= 5; i++) {
                 status[i.toString()] = !!parsed[i.toString()];
             }
             setPresetHasData(status);
@@ -1311,6 +1444,12 @@ export default function Console() {
     if (isRestoringRef.current) {
         console.log("Skipping preset load to preserve restored state");
         isRestoringRef.current = false;
+        return;
+    }
+
+    // If preset is "0", reset to default
+    if (selectedPreset === "0") {
+        resetToDefault();
         return;
     }
 
@@ -1392,6 +1531,12 @@ export default function Console() {
   const handlePresetDoubleClick = () => {
       if (!user) return;
 
+      // Prevent saving on preset "0"
+      if (selectedPreset === "0") {
+          toast.error("Impossible de sauvegarder sur le réglage 0 (Réinitialisation)");
+          return;
+      }
+
       // Gather current state - TOUS les paramètres
       const currentConfig: PresetConfig = {
         highFreqCount, midFreqCount, lowFreqCount,
@@ -1457,6 +1602,12 @@ export default function Console() {
       e.stopPropagation();
       if (!user) return;
 
+      // Prevent saving on preset "0"
+      if (presetId === "0") {
+          toast.error("Impossible de sauvegarder sur le réglage 0 (Réinitialisation)");
+          return;
+      }
+
       // Gather current state - TOUS les paramètres
       const currentConfig: PresetConfig = {
         highFreqCount, midFreqCount, lowFreqCount,
@@ -1518,6 +1669,13 @@ export default function Console() {
       setSelectedPreset(presetId);
       setIsPresetDropdownOpen(false);
       playSound('click');
+      
+      // If preset is "0", reset to default
+      if (presetId === "0") {
+          resetToDefault();
+          toast.success("Réglage 0 : Console réinitialisée");
+          return;
+      }
       
       // Load saved data if exists
       const savedPresets = localStorage.getItem(`loto_presets_${user.username}`);
@@ -2124,8 +2282,8 @@ export default function Console() {
              setStarSources(calcStarSources);
              
              // STACK MODE for Auto: Add to history of current session
-             // Auto draws are blurred by default
-             const newDraw = { nums: calculatedNums, stars: calculatedStars, date: new Date(), revealed: false };
+             // VIP/Admin: visible immédiatement, Invite/Abonné: toujours masqué
+             const newDraw = { nums: calculatedNums, stars: calculatedStars, date: new Date(), revealed: isAdminOrVip };
              setAutoDraws(prev => [newDraw, ...prev]);
         } else {
              // Manual Mode: Also stack results for visual consistency, but revealed immediately?
@@ -2229,18 +2387,64 @@ export default function Console() {
           return;
       }
 
-      // Pour les invités : afficher la modale CGU d'abord
-      if (isInvite) {
-          setCguAccepted(false); // Réinitialiser la case à cocher
-          setShowCguModal(true);
-          return; // Attendre la validation dans la modale
+      // Pour les invités et abonnés : envoyer par email
+      if (isInviteOrAbonne) {
+          executeEmailSend();
+          return;
       }
 
-      // Pour les admins et VIP : envoi direct
+      // Pour les admins et VIP : envoi direct en local
       executeSend();
   };
 
-  // Fonction d'exécution de l'envoi (appelée après validation CGU pour les invités)
+  // Fonction d'envoi par email pour Invite/Abonné
+  const executeEmailSend = async () => {
+      setIsSending(true);
+      
+      try {
+          // Préparer les grilles à envoyer
+          const drawsToSend = autoDraws.length > 0 
+              ? autoDraws.map(d => ({ nums: d.nums, stars: d.stars }))
+              : [{ nums: generatedNumbers, stars: generatedStars }];
+          
+          // Appeler l'API pour envoyer l'email
+          const response = await fetch('/api/draws/request', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'include',
+              body: JSON.stringify({ draws: drawsToSend }),
+          });
+          
+          const data = await response.json();
+          
+          if (data.success) {
+              playSound('bling');
+              setSendingMessage(`📧 EMAIL ENVOYÉ !`);
+              toast.success(`Un email vous a été envoyé avec ${drawsToSend.length} grille(s). Vérifiez votre boîte mail !`, {
+                  duration: 8000,
+              });
+              
+              // Vider les autoDraws après l'envoi
+              setAutoDraws([]);
+              setGeneratedNumbers([]);
+              setGeneratedStars([]);
+              setSendCount(prev => prev + drawsToSend.length);
+          } else {
+              throw new Error(data.error || 'Erreur envoi');
+          }
+      } catch (error) {
+          console.error('Erreur envoi email:', error);
+          playSound('error');
+          toast.error("Erreur lors de l'envoi de l'email. Réessayez.");
+      } finally {
+          setTimeout(() => {
+              setIsSending(false);
+              setSendingMessage("");
+          }, 5000);
+      }
+  };
+
+  // Fonction d'exécution de l'envoi LOCAL (pour VIP/Admin)
   const executeSend = () => {
       // Set active sending state
       setIsSending(true);
@@ -2282,7 +2486,7 @@ export default function Console() {
       }, 5000);
   };
 
-  // Validation CGU et envoi pour les invités
+  // Validation CGU et envoi pour les invités (plus utilisé, gardé pour compatibilité)
   const handleCguValidate = () => {
       if (!cguAccepted) {
           playSound('error');
@@ -2319,6 +2523,14 @@ export default function Console() {
 
   return (
     <CasinoLayout>
+      {/* Popup Gratitude (VIP/Abonné uniquement) */}
+      <GratitudePopup
+        isOpen={showGratitudePopup}
+        onOpenConsole={handleClosePopup}
+        onDontShowAgain={handleDontShowAgain}
+        dontShowAgainChecked={dontShowPopupAgain}
+      />
+
       {/* Wrapper for perfect centering */}
       <div className="w-full flex justify-center">
         <div 
@@ -2760,25 +2972,29 @@ export default function Console() {
                             {/* Dropdown Menu */}
                             {isPresetDropdownOpen && (
                                 <div className="absolute top-full left-0 right-0 mt-1 bg-black border border-white/50 rounded shadow-[0_0_20px_rgba(255,255,255,0.2)] z-[100] max-h-[300px] overflow-y-auto custom-scrollbar">
-                                    {[1, 2, 3, 4, 5].map(num => {
+                                    {[0, 1, 2, 3, 4, 5].map(num => {
                                         const presetId = num.toString();
                                         const isSaved = !!presetHasData[presetId];
+                                        const isPreset0 = presetId === "0";
                                         
                                         return (
                                         <div 
                                             key={num}
                                             className={cn(
                                                     "px-4 py-2 text-xl font-rajdhani cursor-pointer hover:bg-white/10 transition-colors flex justify-between items-center",
-                                                    selectedPreset === presetId && "bg-white/20 text-white"
+                                                    selectedPreset === presetId && "bg-white/20 text-white",
+                                                    isPreset0 && "text-zinc-500 italic"
                                             )}
                                                 onClick={() => handleLoadPreset(presetId)}
                                         >
-                                                <span className={isSaved ? "text-white font-bold" : "text-zinc-400"}>
-                                                    Réglage {num}
+                                                <span className={isPreset0 ? "text-zinc-500 italic" : (isSaved ? "text-white font-bold" : "text-zinc-400")}>
+                                                    Réglage {num} {isPreset0 && "(Réinitialisation)"}
                                             </span>
                                                 
                                                 <div className="flex items-center gap-2">
-                                                    {isSaved ? (
+                                                    {isPreset0 ? (
+                                                        <span className="text-xs text-zinc-500 italic">Non sauvegardable</span>
+                                                    ) : isSaved ? (
                                                         <>
                                                             {/* Delete button - Red square */}
                                                             <button
@@ -3424,7 +3640,7 @@ export default function Console() {
 
                 <SectionPanel 
                     title={isSimplifiedMode && mode === 'manual' ? "ACTIONS" : <ProchainTirageSimple />}
-                    disabled={!isWeightsEnabled}
+                    disabled={false}
                     showLed={false}
                     headerAction={(isSimplifiedMode && mode === 'manual') ? (
                         /* Envois counter in header for simplified mode */
@@ -3498,30 +3714,26 @@ export default function Console() {
                     {isSimplifiedMode && mode === 'manual' ? (
                         /* Simplified mode: Actions panel with Search/Validate/Email/SMS */
                         <div className="flex flex-col h-full p-3">
-                            {/* Row 1: Email/SMS/Send - centered at top, 20px from title */}
+                            {/* Row 1: Bouton ENVOYER - centered at top, 20px from title */}
                             <div className="flex flex-col items-center mt-5">
-                                <div className="flex items-center gap-4 bg-black/40 px-4 py-3 rounded-lg border border-zinc-700">
-                                    <div className="flex items-center gap-2">
-                                        <ToggleSwitch checked={emailNotify} onChange={v => { setEmailNotify(v); playSound('toggle'); }} className="scale-75" />
-                                        <span className="text-base font-bold text-zinc-400">EMAIL</span>
-                                    </div>
-                                    <div className="w-px h-6 bg-zinc-600" />
-                                    <div className="flex items-center gap-2">
-                                        <ToggleSwitch checked={smsNotify} onChange={v => { setSmsNotify(v); playSound('toggle'); }} className="scale-75" />
-                                        <span className="text-base font-bold text-zinc-400">SMS</span>
-                                    </div>
-                                    <CasinoButton 
-                                        variant={generatedNumbers.length === 0 ? "danger" : "primary"}
-                                        size="md"
-                                        className={cn(
-                                            "px-5 py-2 text-sm font-bold",
-                                            isSending ? "bg-green-900 border-green-500 text-green-400 animate-pulse" : ""
-                                        )}
-                                        onClick={handleSend}
-                                    >
-                                        {isSending ? "..." : "ENVOYER"}
-                                    </CasinoButton>
-                                </div>
+                                <CasinoButton 
+                                    variant={autoDraws.length === 0 ? "danger" : "primary"}
+                                    size="lg"
+                                    className={cn(
+                                        "px-8 py-3 text-lg font-bold min-w-[180px]",
+                                        autoDraws.length === 0 
+                                            ? "opacity-50 cursor-not-allowed" 
+                                            : "animate-pulse bg-green-900 border-green-500 text-green-400 shadow-[0_0_20px_rgba(34,197,94,0.5)]"
+                                    )}
+                                    onClick={handleSend}
+                                    disabled={autoDraws.length === 0}
+                                >
+                                    {isSending ? "..." : (
+                                        <span className={autoDraws.length === 0 ? "text-red-500" : "text-green-400"}>
+                                            ENVOYER
+                                        </span>
+                                    )}
+                                </CasinoButton>
                                 
                                 {/* Trash button - below Email/SMS/Send, 50px gap */}
                                 {!showClearConfirm ? (
@@ -3666,29 +3878,25 @@ export default function Console() {
                                 )}
                             </div>
                             
-                            {/* Right: Email/SMS/Send */}
-                            <div className="flex items-center gap-2 bg-black/40 px-3 py-2 rounded border border-zinc-700">
-                                <div className="flex items-center gap-1">
-                                    <ToggleSwitch checked={emailNotify} onChange={v => { setEmailNotify(v); playSound('toggle'); }} className="scale-60" />
-                                    <span className="text-xs font-bold text-zinc-400">EMAIL</span>
-                                </div>
-                                <div className="w-px h-4 bg-zinc-600" />
-                                <div className="flex items-center gap-1">
-                                    <ToggleSwitch checked={smsNotify} onChange={v => { setSmsNotify(v); playSound('toggle'); }} className="scale-60" />
-                                    <span className="text-xs font-bold text-zinc-400">SMS</span>
-                                </div>
-                                <CasinoButton 
-                                    variant={generatedNumbers.length === 0 ? "danger" : "primary"}
-                                    size="sm"
-                                    className={cn(
-                                        "px-3 py-1 text-xs font-bold",
-                                        isSending ? "bg-green-900 border-green-500 text-green-400 animate-pulse" : ""
-                                    )}
-                                    onClick={handleSend}
-                                >
-                                    {isSending ? "..." : "ENVOYER"}
-                                </CasinoButton>
-                            </div>
+                            {/* Right: Bouton ENVOYER */}
+                            <CasinoButton 
+                                variant={autoDraws.length === 0 ? "danger" : "primary"}
+                                size="md"
+                                className={cn(
+                                    "px-5 py-2 text-sm font-bold min-w-[120px]",
+                                    autoDraws.length === 0 
+                                        ? "opacity-50 cursor-not-allowed" 
+                                        : "animate-pulse bg-green-900 border-green-500 text-green-400 shadow-[0_0_15px_rgba(34,197,94,0.5)]"
+                                )}
+                                onClick={handleSend}
+                                disabled={autoDraws.length === 0}
+                            >
+                                {isSending ? "..." : (
+                                    <span className={autoDraws.length === 0 ? "text-red-500" : "text-green-400"}>
+                                        ENVOYER
+                                    </span>
+                                )}
+                            </CasinoButton>
                         </div>
                     )}
                 </SectionPanel>
@@ -3879,89 +4087,106 @@ export default function Console() {
                  </div>
              ) : (
                  <div className="w-full flex flex-col gap-2 mt-2 max-h-[400px] overflow-y-auto custom-scrollbar">
-                     {autoDraws.length > 0 ? (
-                         autoDraws.map((draw, idx) => {
-                             // Use 'revealed' property, fallback to true if undefined (legacy)
-                             // Manual mode: always revealed (never blur)
-                             const isRevealed = mode === 'manual' ? true : (draw.revealed !== undefined ? draw.revealed : true);
-                             const shouldBlur = !isRevealed;
-                             
-                             return (
-                             <div 
-                                key={`draw-${idx}`}
-                                className="w-full bg-black/50 p-2 rounded-2xl border border-zinc-800 shadow-[inset_0_0_20px_rgba(0,0,0,0.8)] min-h-[60px] flex items-center justify-center relative z-10 animate-in slide-in-from-top-4 duration-500 fade-in cursor-pointer"
-                                onClick={() => { 
-                                    if (shouldBlur) {
-                                        const newDraws = [...autoDraws];
-                                        newDraws[idx].revealed = true;
-                                        setAutoDraws(newDraws);
-                                    }
-                                }}
-                             >
-                                 <div className="absolute left-4 text-xs text-zinc-600 font-mono">
-                                     #{autoDraws.length - idx} {draw.revealed === true && mode === 'manual' && idx === 0 ? '(MANUEL)' : ''}
-                                 </div>
-                                {mode === 'manual' && (
-                                    <button 
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            const newDraws = [...autoDraws];
-                                            newDraws.splice(idx, 1);
-                                            setAutoDraws(newDraws);
-                                            
-                                            // If this was the first/current draw, also clear the selections
-                                            if (idx === 0) {
-                                                setSelectedNumbers([]);
-                                                setSelectedStars([]);
-                                                setGeneratedNumbers([]);
-                                                setGeneratedStars([]);
-                                                setNumberSources({});
-                                                setStarSources({});
-                                            }
-                                            
-                                            playSound('click');
-                                        }}
-                                        className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center rounded-lg bg-red-950/30 text-red-600 hover:bg-red-900/80 hover:text-white transition-all z-50 border border-red-900/50 hover:border-red-500 shadow-lg hover:shadow-red-900/20 hover:scale-110"
-                                        title="Supprimer ce tirage"
-                                    >
-                                        <Trash2 size={20} />
-                                    </button>
+                    {autoDraws.length > 0 ? (
+                        autoDraws.map((draw, idx) => {
+                            // Pour Invite/Abonné : TOUJOURS masqué (jamais révélable)
+                            // Pour VIP/Admin : comportement normal
+                            const isRevealed = isInviteOrAbonne ? false : (mode === 'manual' ? true : (draw.revealed !== undefined ? draw.revealed : true));
+                            const shouldBlur = !isRevealed;
+                            const shouldHideNumbers = isInviteOrAbonne; // Masquer complètement les vrais numéros
+                            
+                            return (
+                            <div 
+                               key={`draw-${idx}`}
+                               className={cn(
+                                   "w-full bg-black/50 p-2 rounded-2xl border shadow-[inset_0_0_20px_rgba(0,0,0,0.8)] min-h-[60px] flex items-center justify-center relative z-10 animate-in slide-in-from-top-4 duration-500 fade-in",
+                                   isInviteOrAbonne ? "border-zinc-700 opacity-60" : "border-zinc-800 cursor-pointer"
+                               )}
+                               onClick={() => { 
+                                   // Invite/Abonné ne peuvent pas révéler
+                                   if (shouldBlur && !isInviteOrAbonne) {
+                                       const newDraws = [...autoDraws];
+                                       newDraws[idx].revealed = true;
+                                       setAutoDraws(newDraws);
+                                   }
+                               }}
+                            >
+                                <div className="absolute left-4 text-xs text-zinc-600 font-mono">
+                                    #{autoDraws.length - idx} {draw.revealed === true && mode === 'manual' && idx === 0 ? '(MANUEL)' : ''}
+                                </div>
+                               {mode === 'manual' && !isInviteOrAbonne && (
+                                   <button 
+                                       onClick={(e) => {
+                                           e.stopPropagation();
+                                           const newDraws = [...autoDraws];
+                                           newDraws.splice(idx, 1);
+                                           setAutoDraws(newDraws);
+                                           
+                                           // If this was the first/current draw, also clear the selections
+                                           if (idx === 0) {
+                                               setSelectedNumbers([]);
+                                               setSelectedStars([]);
+                                               setGeneratedNumbers([]);
+                                               setGeneratedStars([]);
+                                               setNumberSources({});
+                                               setStarSources({});
+                                           }
+                                           
+                                           playSound('click');
+                                       }}
+                                       className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center rounded-lg bg-red-950/30 text-red-600 hover:bg-red-900/80 hover:text-white transition-all z-50 border border-red-900/50 hover:border-red-500 shadow-lg hover:shadow-red-900/20 hover:scale-110"
+                                       title="Supprimer ce tirage"
+                                   >
+                                       <Trash2 size={20} />
+                                   </button>
+                               )}
+                                <div className={cn(
+                                    "flex flex-wrap justify-center items-center gap-x-4 gap-y-2 text-2xl md:text-3xl font-black font-mono tracking-wider transition-all duration-700",
+                                    shouldBlur && !shouldHideNumbers ? "blur-sm" : ""
+                                )}>
+                                   {/* NUMBERS - Masqués pour Invite/Abonné */}
+                                   <div className="flex flex-wrap justify-center gap-2">
+                                       {draw.nums.map((n, i) => (
+                                           <div key={`n-${i}`} className={cn(
+                                               "w-10 h-10 md:w-12 md:h-12 rounded-full flex items-center justify-center shadow-lg border-2",
+                                               shouldHideNumbers 
+                                                   ? "bg-zinc-800 border-zinc-600 text-zinc-500" 
+                                                   : "bg-white border-zinc-200 text-black shadow-[0_0_15px_rgba(255,255,255,0.5)]"
+                                           )}>
+                                               {shouldHideNumbers ? '?' : n}
+                                           </div>
+                                       ))}
+                                   </div>
+                                   
+                                   {/* SEPARATOR */}
+                                   <div className="text-zinc-600 hidden md:flex items-center mx-2 text-4xl">|</div>
+                                   
+                                   {/* STARS - Masquées pour Invite/Abonné */}
+                                   <div className="flex flex-wrap justify-center gap-2">
+                                       {draw.stars.map((n, i) => (
+                                           <div key={`s-${i}`} className={cn(
+                                               "w-10 h-10 md:w-12 md:h-12 rounded-full flex items-center justify-center shadow-lg border-2",
+                                               shouldHideNumbers
+                                                   ? "bg-zinc-800 border-yellow-900/30 text-yellow-700/50"
+                                                   : "bg-yellow-400 border-yellow-200 text-yellow-900 shadow-[0_0_15px_rgba(255,215,0,0.5)]"
+                                           )}>
+                                               {shouldHideNumbers ? '★' : n}
+                                           </div>
+                                       ))}
+                                   </div>
+                                </div>
+                                
+                                {/* Message pour VIP/Admin qui peuvent révéler */}
+                                {shouldBlur && !isInviteOrAbonne && (
+                                   <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
+                                       <div className="bg-black/60 backdrop-blur-sm px-4 py-2 rounded-full border border-white/20 text-white font-rajdhani uppercase tracking-widest text-sm animate-pulse">
+                                           Cliquez pour révéler
+                                       </div>
+                                   </div>
                                 )}
-                                 <div className={cn(
-                                     "flex flex-wrap justify-center items-center gap-x-4 gap-y-2 text-2xl md:text-3xl font-black font-mono tracking-wider transition-all duration-700",
-                                     shouldBlur ? "blur-sm" : ""
-                                 )}>
-                                    {/* NUMBERS IN WHITE */}
-                                    <div className="flex flex-wrap justify-center gap-2">
-                                        {draw.nums.map((n, i) => (
-                                            <div key={`n-${i}`} className="w-10 h-10 md:w-12 md:h-12 rounded-full flex items-center justify-center shadow-lg border-2 bg-white border-zinc-200 text-black shadow-[0_0_15px_rgba(255,255,255,0.5)]">
-                                                {n}
-                                            </div>
-                                        ))}
-                                    </div>
-                                    
-                                    {/* SEPARATOR */}
-                                    <div className="text-zinc-600 hidden md:flex items-center mx-2 text-4xl">|</div>
-                                    
-                                    {/* STARS IN YELLOW */}
-                                    <div className="flex flex-wrap justify-center gap-2">
-                                        {draw.stars.map((n, i) => (
-                                            <div key={`s-${i}`} className="w-10 h-10 md:w-12 md:h-12 rounded-full flex items-center justify-center shadow-lg border-2 bg-yellow-400 border-yellow-200 text-yellow-900 shadow-[0_0_15px_rgba(255,215,0,0.5)]">
-                                                 {n}
-                                            </div>
-                                        ))}
-                                    </div>
-                                 </div>
-                                 
-                                 {shouldBlur && (
-                                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
-                                        <div className="bg-black/60 backdrop-blur-sm px-4 py-2 rounded-full border border-white/20 text-white font-rajdhani uppercase tracking-widest text-sm animate-pulse">
-                                            Cliquez pour révéler
-                                        </div>
-                                    </div>
-                                 )}
-                             </div>
-                         )})
+                                
+                            </div>
+                        )})
                      ) : (
                          <div className="w-full bg-black/50 p-4 rounded-2xl border border-zinc-800 flex items-center justify-center text-zinc-600 font-lcd text-lg tracking-widest opacity-50">
                              {mode === 'manual' ? "VALIDEZ VOTRE SÉLECTION" : "LANCEZ UNE RECHERCHE"}

@@ -127,7 +127,7 @@ export function verifierMiseAJourNecessaire(dernierTirage: Tirage | null): {
 
 /**
  * Charge l'historique des tirages
- * Priorité: 1) Cache mémoire, 2) localStorage, 3) Fichier CSV
+ * Priorité: 1) Cache mémoire, 2) API /api/history (DB), 3) localStorage, 4) Fichier CSV
  */
 export async function chargerHistorique(): Promise<Tirage[]> {
   // 1. Cache mémoire
@@ -135,7 +135,24 @@ export async function chargerHistorique(): Promise<Tirage[]> {
     return cachedTirages;
   }
 
-  // 2. localStorage (données persistantes après mise à jour)
+  // 2. API /api/history (Base de données PostgreSQL)
+  try {
+    const response = await fetch('/api/history', { credentials: 'include' });
+    if (response.ok) {
+      const tirages = await response.json() as Tirage[];
+      if (tirages && tirages.length > 0) {
+        cachedTirages = tirages;
+        // Aussi mettre à jour le localStorage pour cohérence
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(tirages));
+        console.log(`[LotoService] Chargé depuis DB: ${tirages.length} tirages. Dernier: ${tirages[0]?.date}`);
+        return tirages;
+      }
+    }
+  } catch (e) {
+    console.log("[LotoService] API indisponible, fallback localStorage/CSV");
+  }
+
+  // 3. localStorage (données persistantes après mise à jour manuelle)
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
@@ -150,7 +167,7 @@ export async function chargerHistorique(): Promise<Tirage[]> {
     console.error("[LotoService] Erreur lecture localStorage:", e);
   }
 
-  // 3. Fichier CSV (données initiales)
+  // 4. Fichier CSV statique (données initiales de secours)
   try {
     const response = await fetch('/data/euromillions_historique_complet_2004-2025.csv');
     const text = await response.text();
@@ -627,10 +644,34 @@ export function saveGridToHistory(numeros: number[], etoiles: number[]) {
     }
     
     localStorage.setItem('loto_played_grids', JSON.stringify(history));
+    
+    // Synchroniser avec la base de données (async, non bloquant)
+    syncGridToDatabase(numeros, etoiles, nextDraw.date.toISOString().split('T')[0], uniqueId);
+    
     return newGrid;
   } catch (e) {
     console.error("Erreur sauvegarde grille:", e);
     return null;
+  }
+}
+
+// Fonction pour synchroniser la grille avec la base de données
+async function syncGridToDatabase(numbers: number[], stars: number[], targetDate: string, odlId: string) {
+  try {
+    await fetch('/api/grids', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        numbers,
+        stars,
+        targetDate,
+        odlId, // Ancien ID localStorage pour référence
+      }),
+    });
+  } catch (err) {
+    console.error('[lotoService] Erreur sync grille DB:', err);
+    // Ne pas bloquer si la sync échoue - la grille reste en localStorage
   }
 }
 

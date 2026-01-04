@@ -33,6 +33,9 @@ export default function History() {
   // État pour le filtre de dates CSV
   const [dateFrom, setDateFrom] = useState<string>('');
   const [dateTo, setDateTo] = useState<string>('');
+  
+  // État pour le nombre de tirages affichés
+  const [drawsToShow, setDrawsToShow] = useState<number>(10);
 
   // Détecter le paramètre autoUpdate dans l'URL
   useEffect(() => {
@@ -160,10 +163,8 @@ export default function History() {
           mettreAJourCache(newTirages); // Mise à jour globale pour que les stats (Console) en profitent aussi
           setHistory(newTirages);
           setUpdateNeeded(false); // Réinitialiser l'état de mise à jour
-          toast.success("Historique mis à jour avec succès !");
-          setShowUpdateModal(false);
           
-          // Vérifier les grilles jouées pour détecter les gains
+          // Vérifier les grilles jouées locales pour détecter les gains
           const dernierTirage = getDernierTirage(newTirages);
           const grillesJouees = getGridHistory();
           
@@ -182,6 +183,67 @@ export default function History() {
               setShowWinModal(true);
             }
           }
+          
+          // ===== SYNC AVEC BASE DE DONNÉES (Admin uniquement) =====
+          if (user?.role === 'admin') {
+            try {
+              // 1. Mettre à jour la base de données avec les nouveaux tirages
+              const syncRes = await fetch('/api/history', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ tirages: newTirages }),
+              });
+              const syncData = await syncRes.json();
+              
+              if (syncData.success) {
+                console.log(`[History] DB sync: ${syncData.inserted} insérés, ${syncData.skipped} ignorés`);
+              }
+              
+              // 2. Vérifier les grilles gagnantes de TOUS les utilisateurs
+              if (dernierTirage) {
+                const checkRes = await fetch('/api/history/check-winners', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  credentials: 'include',
+                  body: JSON.stringify({
+                    lastDrawDate: dernierTirage.date.split('T')[0], // Format YYYY-MM-DD
+                    lastDrawNumbers: dernierTirage.numeros,
+                    lastDrawStars: dernierTirage.etoiles,
+                  }),
+                });
+                const checkData = await checkRes.json();
+                
+                if (checkData.winnersCount > 0) {
+                  toast.success(`🏆 ${checkData.winnersCount} gagnant(s) détecté(s) ! Email envoyé.`, {
+                    duration: 10000,
+                  });
+                }
+              }
+              
+              // Recharger les données depuis la DB pour être sûr d'avoir les dernières
+              const refreshRes = await fetch('/api/history', { credentials: 'include' });
+              if (refreshRes.ok) {
+                const refreshedData = await refreshRes.json();
+                setHistory(refreshedData);
+                mettreAJourCache(refreshedData);
+              }
+              
+              toast.success("Historique et base de données mis à jour !");
+            } catch (syncErr) {
+              console.error('[History] Erreur sync DB:', syncErr);
+              toast.warning("Historique local mis à jour, mais erreur sync DB");
+            }
+          } else {
+            toast.success("Historique mis à jour avec succès !");
+          }
+          
+          setShowUpdateModal(false);
+          
+          // Forcer le rafraîchissement de la page pour mettre à jour tous les composants
+          setTimeout(() => {
+            window.location.reload();
+          }, 500);
         } catch (err) {
             console.error(err);
             toast.error("Erreur lors de l'analyse du fichier CSV");
@@ -222,27 +284,69 @@ export default function History() {
     return null;
   };
 
-  // Fonction de téléchargement CSV avec filtre de dates
-  const handleDownloadCSV = () => {
+  // Fonction de téléchargement CSV depuis la base de données
+  const handleDownloadCSV = async () => {
+    try {
+      // Construire l'URL avec les paramètres de dates
+      let url = '/api/history/download';
+      const params = new URLSearchParams();
+      if (dateFrom) params.append('from', dateFrom);
+      if (dateTo) params.append('to', dateTo);
+      if (params.toString()) url += '?' + params.toString();
+      
+      // Télécharger depuis l'API (DB)
+      const response = await fetch(url, { credentials: 'include' });
+      
+      if (!response.ok) {
+        // Fallback sur les données locales si l'API échoue
+        toast.warning("API indisponible, téléchargement depuis les données locales...");
+        downloadFromLocalData();
+        return;
+      }
+      
+      // Récupérer le blob et télécharger
+      const blob = await response.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      
+      // Extraire le nom du fichier depuis le header Content-Disposition
+      const contentDisposition = response.headers.get('Content-Disposition');
+      let filename = 'historique_euromillions.csv';
+      if (contentDisposition) {
+        const match = contentDisposition.match(/filename="(.+)"/);
+        if (match) filename = match[1];
+      }
+      
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(downloadUrl);
+      
+      toast.success("Téléchargement depuis la base de données !");
+    } catch (error) {
+      console.error("Erreur téléchargement:", error);
+      toast.warning("Erreur API, téléchargement local...");
+      downloadFromLocalData();
+    }
+  };
+  
+  // Fallback: téléchargement depuis les données en mémoire
+  const downloadFromLocalData = () => {
     if (history.length === 0) {
       toast.error("Aucune donnée à télécharger");
       return;
     }
 
-    // Filtrer par dates si spécifiées
     let filteredHistory = [...history];
-    const totalBefore = filteredHistory.length;
     
     if (dateFrom) {
       const fromDate = new Date(dateFrom);
       fromDate.setHours(0, 0, 0, 0);
       filteredHistory = filteredHistory.filter(t => {
         const tirageDate = parseHistoryDate(t.date);
-        if (!tirageDate) {
-          console.warn("Date invalide:", t.date);
-          return false;
-        }
-        return tirageDate >= fromDate;
+        return tirageDate && tirageDate >= fromDate;
       });
     }
     
@@ -251,58 +355,34 @@ export default function History() {
       toDate.setHours(23, 59, 59, 999);
       filteredHistory = filteredHistory.filter(t => {
         const tirageDate = parseHistoryDate(t.date);
-        if (!tirageDate) return false;
-        return tirageDate <= toDate;
+        return tirageDate && tirageDate <= toDate;
       });
     }
     
-    console.log(`Filtre: ${dateFrom} -> ${dateTo}, Résultat: ${filteredHistory.length}/${totalBefore} tirages`);
-    
     if (filteredHistory.length === 0) {
-      toast.error(`Aucun tirage trouvé entre ${dateFrom || 'le début'} et ${dateTo || 'la fin'}`);
+      toast.error(`Aucun tirage trouvé pour cette période`);
       return;
     }
 
-    try {
-      // Créer le contenu CSV
-      const header = "Date;N1;N2;N3;N4;N5;E1;E2";
-      const rows = filteredHistory.map(tirage => {
-        const tirageDate = parseHistoryDate(tirage.date);
-        const dateFormatted = tirageDate 
-          ? tirageDate.toLocaleDateString('fr-FR') 
-          : tirage.date;
-        return `${dateFormatted};${tirage.numeros.join(';')};${tirage.etoiles.join(';')}`;
-      });
-      
-      const csvContent = [header, ...rows].join('\n');
-      
-      // Nom du fichier avec les dates si filtrées
-      let filename = 'historique_euromillions';
-      if (dateFrom || dateTo) {
-        filename += `_${dateFrom || 'debut'}_${dateTo || 'fin'}`;
-      } else {
-        filename += `_${format(new Date(), 'yyyy-MM-dd')}`;
-      }
-      filename += '.csv';
-      
-      // Méthode simple et directe via data URI
-      const csvData = 'data:text/csv;charset=utf-8,' + encodeURIComponent('\uFEFF' + csvContent);
-      
-      const link = document.createElement('a');
-      link.href = csvData;
-      link.download = filename;
-      
-      // Ajouter au DOM, cliquer, et retirer
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      
-      toast.success(`${filteredHistory.length} tirages téléchargés !`);
-      
-    } catch (error) {
-      console.error("Erreur lors du téléchargement:", error);
-      toast.error("Erreur lors de la création du fichier CSV");
-    }
+    const header = "Date;N1;N2;N3;N4;N5;E1;E2";
+    const rows = filteredHistory.map(tirage => {
+      const tirageDate = parseHistoryDate(tirage.date);
+      const dateFormatted = tirageDate ? tirageDate.toLocaleDateString('fr-FR') : tirage.date;
+      return `${dateFormatted};${tirage.numeros.join(';')};${tirage.etoiles.join(';')}`;
+    });
+    
+    const csvContent = [header, ...rows].join('\n');
+    let filename = `historique_euromillions_${dateFrom || 'debut'}_${dateTo || 'fin'}.csv`;
+    
+    const csvData = 'data:text/csv;charset=utf-8,' + encodeURIComponent('\uFEFF' + csvContent);
+    const link = document.createElement('a');
+    link.href = csvData;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    toast.success(`${filteredHistory.length} tirages téléchargés (local) !`);
   };
 
   // Obtenir le dernier tirage pour l'affichage
@@ -548,7 +628,7 @@ export default function History() {
                                     </td>
                                 </tr>
                             ) : (
-                                history.map((draw, idx) => (
+                                history.slice(0, drawsToShow).map((draw, idx) => (
                                     <tr 
                                         key={`${draw.date}-${idx}`} 
                                         className={`border-b border-zinc-800 transition-colors hover:bg-white/5 ${idx % 2 === 0 ? "bg-zinc-900/50" : "bg-zinc-900/30"}`}
@@ -583,6 +663,25 @@ export default function History() {
                 </div>
             </div>
             
+            {/* Boutons 10/20/50 tirages */}
+            <div className="flex justify-center gap-2 mt-4">
+              <span className="text-zinc-500 font-rajdhani self-center mr-2">Afficher :</span>
+              {[10, 20, 50].map(num => (
+                <button
+                  key={num}
+                  onClick={() => setDrawsToShow(num)}
+                  className={cn(
+                    "px-4 py-2 rounded-lg font-rajdhani font-bold transition-all",
+                    drawsToShow === num
+                      ? "bg-casino-gold text-black shadow-[0_0_10px_rgba(255,215,0,0.5)]"
+                      : "bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-600"
+                  )}
+                >
+                  {num}
+                </button>
+              ))}
+            </div>
+            
             {/* Légende et statistiques */}
             <div className="mt-6 flex justify-center gap-8 text-sm text-zinc-500 font-rajdhani">
                 <div className="flex items-center gap-2">
@@ -595,8 +694,10 @@ export default function History() {
                 </div>
                 {history.length > 0 && (
                     <div className="flex items-center gap-2">
-                        <span className="text-zinc-400">Total :</span>
-                        <span className="text-casino-gold font-bold">{history.length} tirages</span>
+                        <span className="text-zinc-400">Affiché :</span>
+                        <span className="text-casino-gold font-bold">
+                          {Math.min(drawsToShow, history.length)}/{history.length} tirages
+                        </span>
                     </div>
                 )}
             </div>

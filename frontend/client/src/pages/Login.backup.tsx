@@ -72,7 +72,7 @@ const CountdownTimer = () => {
     <div className="flex flex-col items-center gap-3">
       {/* Date du tirage */}
       <div className="flex items-center gap-2 text-casino-gold">
-        <Calendar size={22} />
+        <Calendar size={18} />
         <span className="font-orbitron text-lg tracking-wider">
           {dayName} {nextDrawDate?.getDate()} {nextDrawDate && format(nextDrawDate, 'MMMM yyyy', { locale: fr })}
         </span>
@@ -87,19 +87,19 @@ const CountdownTimer = () => {
           { value: countdown.seconds, label: 'SEC' },
         ].map((item, i) => (
           <div key={i} className="flex flex-col items-center">
-            <div className="bg-black border border-casino-gold/50 rounded px-3 py-2 min-w-[58px]">
+            <div className="bg-black border border-casino-gold/50 rounded px-3 py-2 min-w-[50px]">
               <span className="font-mono text-2xl font-bold text-red-500 tabular-nums">
                 {formatNumber(item.value)}
               </span>
             </div>
-            <span className="text-[11px] text-white font-orbitron mt-1">{item.label}</span>
+            <span className="text-[10px] text-zinc-500 font-orbitron mt-1">{item.label}</span>
           </div>
         ))}
       </div>
       
       {/* Clôture */}
-      <div className="flex items-center gap-2 text-white text-[13px]">
-        <Clock size={16} />
+      <div className="flex items-center gap-2 text-zinc-400 text-sm">
+        <Clock size={14} />
         <span className="font-rajdhani">Clôture des jeux : 20h15</span>
       </div>
     </div>
@@ -133,8 +133,6 @@ export default function Login() {
   const [isRegistering, setIsRegistering] = useState(false);
   const [email, setEmail] = useState("");
   const [successMsg, setSuccessMsg] = useState("");
-  const [inviteCode, setInviteCode] = useState("");
-  const [inviteCodeError, setInviteCodeError] = useState("");
   const [lastDraw, setLastDraw] = useState<Tirage | null>(null);
   const [updateNeeded, setUpdateNeeded] = useState(false);
   const [updateMessage, setUpdateMessage] = useState("");
@@ -181,34 +179,24 @@ export default function Login() {
 
   const handleRegister = async (e: React.FormEvent) => {
       e.preventDefault();
-      setError("");
-      setInviteCodeError("");
-      
       if (password !== confirmPassword) {
           setError("Les mots de passe ne correspondent pas");
           return;
       }
       if (username && email && password) {
           try {
-            const result = await register(username, email, password, inviteCode || undefined);
-            if (result.success) {
-              const roleMsg = inviteCode ? " Votre code a été validé !" : "";
-              setSuccessMsg(`Compte créé avec succès !${roleMsg} Vous pouvez vous connecter.`);
+            const success = await register(username, email, password);
+            if (success) {
+              setSuccessMsg("Compte créé avec succès ! Vous pouvez vous connecter.");
               setTimeout(() => { setSuccessMsg(""); }, 10000);
               setIsRegistering(false);
               setUsername("");
               setPassword("");
               setConfirmPassword("");
               setEmail("");
-              setInviteCode("");
               setError("");
             } else {
-              // Afficher l'erreur sur le bon champ
-              if (result.field === 'inviteCode') {
-                setInviteCodeError(result.error || "Code invalide");
-              } else {
-                setError(result.error || "Erreur lors de la création du compte.");
-              }
+              setError("Erreur lors de la création du compte. L'utilisateur existe peut-être déjà.");
             }
           } catch (err) {
             setError("Erreur lors de la création du compte.");
@@ -218,7 +206,7 @@ export default function Login() {
 
   return (
     <CasinoLayout>
-      <div className="flex flex-col items-center justify-between min-h-screen px-7 py-7">
+      <div className="flex flex-col items-center justify-between min-h-screen px-6 py-6">
         
         {/* ═══════════════ HEADER ═══════════════ */}
         <motion.header 
@@ -228,24 +216,24 @@ export default function Login() {
           className="text-center w-full"
         >
           {/* Titre principal avec effet */}
-          <h1 className="text-4xl md:text-5xl font-orbitron font-black tracking-wider mb-1">
+          <h1 className="text-3xl md:text-5xl font-orbitron font-black tracking-wider mb-1">
             <span className="bg-gradient-to-r from-yellow-400 via-yellow-200 to-yellow-400 bg-clip-text text-transparent drop-shadow-lg">
               LOTOFORMULA4LIFE
             </span>
           </h1>
-          <p className="text-sm md:text-base font-orbitron text-zinc-200 tracking-[0.3em] uppercase mb-3">
+          <p className="text-sm md:text-base font-orbitron text-zinc-500 tracking-[0.3em] uppercase mb-3">
             Statistiques & Prédictibilités
           </p>
           
           {/* Ligne décorative */}
           <div className="flex items-center justify-center gap-4 mb-3">
-            <div className="h-px w-24 bg-gradient-to-r from-transparent to-casino-gold" />
-            <div className="w-2.5 h-2.5 rotate-45 bg-casino-gold" />
-            <div className="h-px w-24 bg-gradient-to-l from-transparent to-casino-gold" />
+            <div className="h-px w-20 bg-gradient-to-r from-transparent to-casino-gold" />
+            <div className="w-2 h-2 rotate-45 bg-casino-gold" />
+            <div className="h-px w-20 bg-gradient-to-l from-transparent to-casino-gold" />
           </div>
           
           {/* Citation */}
-          <p className="text-base md:text-lg font-rajdhani text-white italic max-w-2xl mx-auto">
+          <p className="text-base md:text-lg font-rajdhani text-zinc-400 italic max-w-2xl mx-auto">
             "Il n'y a pas de hasard. Seulement des probabilités qui attendent leur moment."
           </p>
         </motion.header>
@@ -255,18 +243,18 @@ export default function Login() {
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
           transition={{ delay: 0.3, duration: 0.6 }}
-          className="w-full max-w-7xl flex-1 flex flex-col justify-center gap-4 py-4"
+          className="w-full max-w-5xl flex-1 flex flex-col justify-center gap-4 py-4"
         >
-          {/* Grid 3 colonnes : Prochain Tirage | Connexion | Dernier Tirage */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-start">
+          {/* Grid 2 colonnes : Prochain Tirage | Dernier Tirage */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             
             {/* ─── PROCHAIN TIRAGE ─── */}
-            <div className="relative bg-gradient-to-br from-zinc-900 via-black to-zinc-900 border border-zinc-700 rounded-xl p-6 overflow-hidden group hover:border-casino-gold/50 transition-colors duration-300 min-w-[300px]">
+            <div className="relative bg-gradient-to-br from-zinc-900 via-black to-zinc-900 border border-zinc-700 rounded-xl p-5 overflow-hidden group hover:border-casino-gold/50 transition-colors duration-300">
               {/* Accent top */}
               <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-casino-gold via-yellow-300 to-casino-gold" />
               
               <div className="flex items-center justify-center gap-2 mb-4">
-                <Timer size={22} className="text-casino-gold" />
+                <Timer size={20} className="text-casino-gold" />
                 <h2 className="font-orbitron text-casino-gold text-base tracking-widest uppercase">
                   Prochain Tirage
                 </h2>
@@ -275,199 +263,9 @@ export default function Login() {
               <CountdownTimer />
             </div>
 
-            {/* ─── FORMULAIRE DE CONNEXION ─── */}
-            <motion.div 
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.6 }}
-              className="relative bg-gradient-to-br from-zinc-900/95 via-black/95 to-zinc-900/95 border border-zinc-700 rounded-xl p-6 backdrop-blur-md overflow-hidden min-w-[300px]"
-            >
-            {/* Accent décoratif */}
-            <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-casino-gold/50 to-transparent" />
-            <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-casino-gold/50 to-transparent" />
-            
-            {successMsg && (
-              <div className="bg-green-900/50 border border-green-500 text-green-200 p-3 rounded mb-4 text-center font-rajdhani text-sm">
-                {successMsg}
-              </div>
-            )}
-
-            {!isRegistering ? (
-              <form onSubmit={handleLogin} className="space-y-4">
-                <div className="space-y-1">
-                  <label className="text-xs font-orbitron text-casino-gold uppercase tracking-widest">Accès Rapide</label>
-                  <select 
-                    value={selectedPresetUser}
-                    onChange={(e) => setSelectedPresetUser(e.target.value)}
-                    className="w-full bg-black/80 border border-zinc-600 rounded-lg p-3 text-base text-white font-rajdhani focus:border-casino-gold focus:ring-1 focus:ring-casino-gold outline-none transition-all cursor-pointer"
-                  >
-                    <option value="">-- Choisir un compte --</option>
-                    <option value="AntoAbso">AntoAbso (Admin)</option>
-                    <option value="Guest123">Guest123 (Invité)</option>
-                  </select>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-orbitron text-casino-gold uppercase tracking-widest">Identifiant</label>
-                  <input 
-                    type="text" 
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    className="w-full bg-black/80 border border-zinc-600 rounded-lg p-3 text-base text-white font-rajdhani focus:border-casino-gold focus:ring-1 focus:ring-casino-gold outline-none transition-all"
-                    placeholder="Votre identifiant"
-                  />
-                </div>
-                
-                <div className="space-y-1">
-                  <label className="text-xs font-orbitron text-casino-gold uppercase tracking-widest">Mot de passe</label>
-                  <div className="relative">
-                    <input 
-                      type={showPassword ? "text" : "password"} 
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      className="w-full bg-black/80 border border-zinc-600 rounded-lg p-3 text-base text-white font-rajdhani focus:border-casino-gold focus:ring-1 focus:ring-casino-gold outline-none transition-all pr-11"
-                      placeholder="••••••••"
-                    />
-                    <button 
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-casino-gold transition-colors"
-                    >
-                      {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
-                    </button>
-                  </div>
-                </div>
-
-                {error && <p className="text-red-400 text-sm text-center font-rajdhani">{error}</p>}
-
-                <CasinoButton type="submit" variant="primary" size="lg" className="w-full">
-                  CONNEXION
-                </CasinoButton>
-
-                <div className="text-center pt-2">
-                  <button 
-                    type="button"
-                    onClick={() => { setIsRegistering(true); setSuccessMsg(""); setError(""); }}
-                    className="text-[13px] text-white hover:text-casino-gold underline underline-offset-4 transition-colors font-rajdhani"
-                  >
-                    Créer un compte
-                  </button>
-                </div>
-              </form>
-            ) : (
-              <form onSubmit={handleRegister} className="space-y-4">
-                <h2 className="text-center font-orbitron text-white text-lg mb-2">INSCRIPTION</h2>
-                
-                <div className="space-y-1">
-                  <label className="text-xs font-orbitron text-casino-gold uppercase tracking-widest">Identifiant</label>
-                  <input 
-                    type="text" 
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    className="w-full bg-black/80 border border-zinc-600 rounded-lg p-3 text-base text-white font-rajdhani focus:border-casino-gold focus:ring-1 focus:ring-casino-gold outline-none transition-all"
-                    placeholder="Choisissez un pseudo"
-                    required
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-orbitron text-casino-gold uppercase tracking-widest">Email</label>
-                  <input 
-                    type="email" 
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="w-full bg-black/80 border border-zinc-600 rounded-lg p-3 text-base text-white font-rajdhani focus:border-casino-gold focus:ring-1 focus:ring-casino-gold outline-none transition-all"
-                    placeholder="votre@email.com"
-                    required
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-orbitron text-casino-gold uppercase tracking-widest">Mot de passe</label>
-                  <div className="relative">
-                    <input 
-                      type={showPassword ? "text" : "password"} 
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      className="w-full bg-black/80 border border-zinc-600 rounded-lg p-3 text-base text-white font-rajdhani focus:border-casino-gold focus:ring-1 focus:ring-casino-gold outline-none transition-all pr-11"
-                      placeholder="••••••••"
-                      required
-                    />
-                    <button 
-                      type="button"
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-casino-gold transition-colors"
-                    >
-                      {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-orbitron text-casino-gold uppercase tracking-widest">Confirmer</label>
-                  <div className="relative">
-                    <input 
-                      type={showConfirmPassword ? "text" : "password"} 
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      className="w-full bg-black/80 border border-zinc-600 rounded-lg p-3 text-base text-white font-rajdhani focus:border-casino-gold focus:ring-1 focus:ring-casino-gold outline-none transition-all pr-11"
-                      placeholder="••••••••"
-                      required
-                    />
-                    <button 
-                      type="button"
-                      onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-casino-gold transition-colors"
-                    >
-                      {showConfirmPassword ? <EyeOff size={20} /> : <Eye size={20} />}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-orbitron text-casino-gold uppercase tracking-widest">Code d'invitation <span className="text-red-400">*</span></label>
-                  <input 
-                    type="text" 
-                    value={inviteCode}
-                    onChange={(e) => { setInviteCode(e.target.value.toUpperCase()); setInviteCodeError(""); }}
-                    className={`w-full bg-black/80 border rounded-lg p-3 text-2xl text-white font-rajdhani outline-none transition-all tracking-[0.4em] text-center ${
-                      inviteCodeError 
-                        ? 'border-red-500 focus:border-red-500 focus:ring-1 focus:ring-red-500' 
-                        : 'border-zinc-600 focus:border-casino-gold focus:ring-1 focus:ring-casino-gold'
-                    }`}
-                    placeholder="CODE À 6 CARACTÈRES"
-                    maxLength={6}
-                    required
-                  />
-                  {inviteCodeError ? (
-                    <p className="text-xs text-red-400 text-center font-rajdhani animate-pulse">{inviteCodeError}</p>
-                  ) : (
-                    <p className="text-[13px] text-white text-center font-rajdhani">Code reçu par email (VIP ou INVITE)</p>
-                  )}
-                </div>
-
-                {error && <p className="text-red-400 text-sm text-center font-rajdhani">{error}</p>}
-
-                <CasinoButton type="submit" variant="primary" size="lg" className="w-full">
-                  CRÉER MON COMPTE
-                </CasinoButton>
-
-                <div className="text-center pt-2">
-                  <button 
-                    type="button"
-                    onClick={() => setIsRegistering(false)}
-                    className="text-[13px] text-white hover:text-casino-gold underline underline-offset-4 transition-colors font-rajdhani"
-                  >
-                    Retour à la connexion
-                  </button>
-                </div>
-              </form>
-            )}
-          </motion.div>
-
             {/* ─── DERNIER TIRAGE ─── */}
             {lastDraw && (
-              <div className="relative bg-gradient-to-br from-zinc-900 via-black to-zinc-900 border border-zinc-700 rounded-xl p-6 overflow-hidden group hover:border-blue-500/50 transition-colors duration-300 min-w-[300px]">
+              <div className="relative bg-gradient-to-br from-zinc-900 via-black to-zinc-900 border border-zinc-700 rounded-xl p-5 overflow-hidden group hover:border-blue-500/50 transition-colors duration-300">
                 {/* Accent top */}
                 <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-500 via-cyan-400 to-blue-500" />
                 
@@ -476,7 +274,7 @@ export default function Login() {
                 </h2>
                 
                 {/* Date */}
-                <p className="text-center text-white text-[13px] mb-4 font-rajdhani">
+                <p className="text-center text-zinc-400 text-sm mb-4 font-rajdhani">
                   {lastDraw.date && !isNaN(new Date(lastDraw.date).getTime()) 
                     ? format(new Date(lastDraw.date), 'EEEE d MMMM yyyy', { locale: fr })
                     : lastDraw.date || 'Date inconnue'}
@@ -497,7 +295,7 @@ export default function Login() {
                 {updateNeeded && (
                   <div className="mt-4 p-3 bg-red-900/30 border border-red-500/50 rounded-lg animate-pulse">
                     <div className="flex items-center gap-2 text-red-400 mb-1">
-                      <AlertTriangle size={18} />
+                      <AlertTriangle size={16} />
                       <span className="font-bold text-sm">MISE À JOUR REQUISE</span>
                     </div>
                     <p className="text-xs text-red-300">{updateMessage}</p>
@@ -507,6 +305,174 @@ export default function Login() {
               </div>
             )}
           </div>
+
+          {/* ─── FORMULAIRE DE CONNEXION ─── */}
+          <motion.div 
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.6 }}
+            className="relative bg-gradient-to-br from-zinc-900/95 via-black/95 to-zinc-900/95 border border-zinc-700 rounded-xl p-6 backdrop-blur-md max-w-md mx-auto w-full overflow-hidden"
+          >
+            {/* Accent décoratif */}
+            <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-casino-gold/50 to-transparent" />
+            <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-casino-gold/50 to-transparent" />
+            
+            {successMsg && (
+              <div className="bg-green-900/50 border border-green-500 text-green-200 p-3 rounded mb-4 text-center font-rajdhani text-sm">
+                {successMsg}
+              </div>
+            )}
+
+            {!isRegistering ? (
+              <form onSubmit={handleLogin} className="space-y-4">
+                <div className="space-y-1">
+                  <label className="text-xs font-orbitron text-casino-gold uppercase tracking-widest">Accès Rapide</label>
+                  <select 
+                    value={selectedPresetUser}
+                    onChange={(e) => setSelectedPresetUser(e.target.value)}
+                    className="w-full bg-black/80 border border-zinc-600 rounded-lg p-2.5 text-white font-rajdhani focus:border-casino-gold focus:ring-1 focus:ring-casino-gold outline-none transition-all cursor-pointer"
+                  >
+                    <option value="">-- Choisir un compte --</option>
+                    <option value="AntoAbso">AntoAbso (Admin)</option>
+                    <option value="Guest123">Guest123 (Invité)</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-orbitron text-casino-gold uppercase tracking-widest">Identifiant</label>
+                  <input 
+                    type="text" 
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    className="w-full bg-black/80 border border-zinc-600 rounded-lg p-2.5 text-white font-rajdhani focus:border-casino-gold focus:ring-1 focus:ring-casino-gold outline-none transition-all"
+                    placeholder="Votre identifiant"
+                  />
+                </div>
+                
+                <div className="space-y-1">
+                  <label className="text-xs font-orbitron text-casino-gold uppercase tracking-widest">Mot de passe</label>
+                  <div className="relative">
+                    <input 
+                      type={showPassword ? "text" : "password"} 
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="w-full bg-black/80 border border-zinc-600 rounded-lg p-2.5 text-white font-rajdhani focus:border-casino-gold focus:ring-1 focus:ring-casino-gold outline-none transition-all pr-10"
+                      placeholder="••••••••"
+                    />
+                    <button 
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-casino-gold transition-colors"
+                    >
+                      {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
+                  </div>
+                </div>
+
+                {error && <p className="text-red-400 text-sm text-center font-rajdhani">{error}</p>}
+
+                <CasinoButton type="submit" variant="primary" size="lg" className="w-full">
+                  CONNEXION
+                </CasinoButton>
+
+                <div className="text-center pt-2">
+                  <button 
+                    type="button"
+                    onClick={() => { setIsRegistering(true); setSuccessMsg(""); setError(""); }}
+                    className="text-sm text-zinc-400 hover:text-casino-gold underline underline-offset-4 transition-colors font-rajdhani"
+                  >
+                    Créer un compte
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <form onSubmit={handleRegister} className="space-y-4">
+                <h2 className="text-center font-orbitron text-white text-lg mb-2">INSCRIPTION</h2>
+                
+                <div className="space-y-1">
+                  <label className="text-xs font-orbitron text-casino-gold uppercase tracking-widest">Identifiant</label>
+                  <input 
+                    type="text" 
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    className="w-full bg-black/80 border border-zinc-600 rounded-lg p-2.5 text-white font-rajdhani focus:border-casino-gold focus:ring-1 focus:ring-casino-gold outline-none transition-all"
+                    placeholder="Choisissez un pseudo"
+                    required
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-orbitron text-casino-gold uppercase tracking-widest">Email</label>
+                  <input 
+                    type="email" 
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full bg-black/80 border border-zinc-600 rounded-lg p-2.5 text-white font-rajdhani focus:border-casino-gold focus:ring-1 focus:ring-casino-gold outline-none transition-all"
+                    placeholder="votre@email.com"
+                    required
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-orbitron text-casino-gold uppercase tracking-widest">Mot de passe</label>
+                  <div className="relative">
+                    <input 
+                      type={showPassword ? "text" : "password"} 
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="w-full bg-black/80 border border-zinc-600 rounded-lg p-2.5 text-white font-rajdhani focus:border-casino-gold focus:ring-1 focus:ring-casino-gold outline-none transition-all pr-10"
+                      placeholder="••••••••"
+                      required
+                    />
+                    <button 
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-casino-gold transition-colors"
+                    >
+                      {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <label className="text-xs font-orbitron text-casino-gold uppercase tracking-widest">Confirmer</label>
+                  <div className="relative">
+                    <input 
+                      type={showConfirmPassword ? "text" : "password"} 
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      className="w-full bg-black/80 border border-zinc-600 rounded-lg p-2.5 text-white font-rajdhani focus:border-casino-gold focus:ring-1 focus:ring-casino-gold outline-none transition-all pr-10"
+                      placeholder="••••••••"
+                      required
+                    />
+                    <button 
+                      type="button"
+                      onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-casino-gold transition-colors"
+                    >
+                      {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                    </button>
+                  </div>
+                </div>
+
+                {error && <p className="text-red-400 text-sm text-center font-rajdhani">{error}</p>}
+
+                <CasinoButton type="submit" variant="primary" size="lg" className="w-full">
+                  CRÉER MON COMPTE
+                </CasinoButton>
+
+                <div className="text-center pt-2">
+                  <button 
+                    type="button"
+                    onClick={() => setIsRegistering(false)}
+                    className="text-sm text-zinc-400 hover:text-casino-gold underline underline-offset-4 transition-colors font-rajdhani"
+                  >
+                    Retour à la connexion
+                  </button>
+                </div>
+              </form>
+            )}
+          </motion.div>
         </motion.main>
 
         {/* Spacer pour le footer */}

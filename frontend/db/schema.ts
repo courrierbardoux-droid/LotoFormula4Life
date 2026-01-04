@@ -9,6 +9,9 @@ export const users = pgTable('users', {
   email: varchar('email', { length: 255 }).notNull().unique(),
   password: varchar('password', { length: 255 }).notNull(),
   role: varchar('role', { length: 20 }).notNull().default('invite'), // admin, vip, abonne, invite
+  // Popup gratitude settings
+  popupStatus: varchar('popup_status', { length: 20 }).notNull().default('active'), // active (vert), reduced (rouge), disabled (gris)
+  consoleAccessCount: integer('console_access_count').notNull().default(0), // Compteur d'accès à la console
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 });
@@ -52,6 +55,48 @@ export const presets = pgTable('presets', {
 });
 
 // ============================================
+// TABLE INVITATION_CODES - Codes d'invitation
+// ============================================
+export const invitationCodes = pgTable('invitation_codes', {
+  id: serial('id').primaryKey(),
+  code: varchar('code', { length: 6 }).notNull().unique(),
+  email: varchar('email', { length: 255 }).notNull(),
+  type: varchar('type', { length: 10 }).notNull(), // 'vip' ou 'invite'
+  usedAt: timestamp('used_at'),                    // null si pas encore utilisé
+  usedBy: integer('used_by').references(() => users.id), // ID de l'utilisateur qui a utilisé le code
+  expiresAt: timestamp('expires_at').notNull(),    // Date d'expiration (31 jours)
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// ============================================
+// TABLE LOGIN_HISTORY - Historique des connexions
+// ============================================
+export const loginHistory = pgTable('login_history', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id).notNull(),
+  loginAt: timestamp('login_at').defaultNow(),
+  logoutAt: timestamp('logout_at'),                    // Date/heure de déconnexion
+  ipAddress: varchar('ip_address', { length: 45 }),
+  userAgent: varchar('user_agent', { length: 500 }),
+});
+
+// ============================================
+// TABLE PENDING_DRAWS - Tirages en attente d'envoi
+// ============================================
+export const pendingDraws = pgTable('pending_draws', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id).notNull(),
+  token: varchar('token', { length: 64 }).notNull().unique(),
+  numbers: json('numbers').notNull().$type<number[]>(),  // Les numéros générés
+  stars: json('stars').notNull().$type<number[]>(),      // Les étoiles générées
+  targetDate: date('target_date'),                        // Date du tirage visé
+  acknowledged: timestamp('acknowledged'),                // Date où l'user a coché la case
+  sentAt: timestamp('sent_at'),                          // Date d'envoi des numéros
+  expiresAt: timestamp('expires_at').notNull(),          // Expiration du token (24h)
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+// ============================================
 // TYPES INFÉRÉS POUR TYPESCRIPT
 // ============================================
 export type User = typeof users.$inferSelect;
@@ -65,4 +110,13 @@ export type NewGrid = typeof grids.$inferInsert;
 
 export type Preset = typeof presets.$inferSelect;
 export type NewPreset = typeof presets.$inferInsert;
+
+export type InvitationCode = typeof invitationCodes.$inferSelect;
+export type NewInvitationCode = typeof invitationCodes.$inferInsert;
+
+export type LoginHistoryEntry = typeof loginHistory.$inferSelect;
+export type NewLoginHistoryEntry = typeof loginHistory.$inferInsert;
+
+export type PendingDraw = typeof pendingDraws.$inferSelect;
+export type NewPendingDraw = typeof pendingDraws.$inferInsert;
 
