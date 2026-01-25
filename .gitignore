@@ -25,9 +25,29 @@ Thumbs.db
 *.log
 npm-debug.log*
 
+# Cursor / local tooling
+.cursor/
+
 # Personal files
 Fichiers informelle perso/
 *.zip
+
+# Backups (local / portable backups)
+LotoFormula4Life_BACKUP_*/
+BACKUP_REVERSE/
+frontend/BACKUP_REVERSE/
+%DEST%/
+
+# Runtime-generated server state (do not version)
+frontend/server/data/*.json
+
+# Large documents / exports
+*.pdf
+*.docx
+*.rtf
+
+# Local backup artifacts
+*.backup_mode
 
 # Drizzle migrations (optional - generated)
 drizzle/

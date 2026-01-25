@@ -218,7 +218,7 @@ export default function Login() {
 
   return (
     <CasinoLayout>
-      <div className="flex flex-col items-center justify-between min-h-screen px-7 py-7">
+      <div className="flex flex-col items-center justify-between min-h-screen px-7 pt-20 pb-7">
         
         {/* ═══════════════ HEADER ═══════════════ */}
         <motion.header 

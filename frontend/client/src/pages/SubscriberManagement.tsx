@@ -158,7 +158,7 @@ export default function SubscriberManagement() {
     <CasinoLayout>
       <div className="max-w-6xl mx-auto p-4 md:p-8 space-y-6">
         <div className="flex flex-col justify-center items-center gap-4 mb-8">
-            <h1 className="text-3xl font-orbitron text-casino-gold">GESTION DES ABONNÉS</h1>
+            <h1 className="text-3xl font-orbitron text-casino-gold">INFORMATIONS UTILISATEURS</h1>
             
             {/* Ligne 1: Email + Bouton Inviter */}
             <div className="flex items-center gap-4">

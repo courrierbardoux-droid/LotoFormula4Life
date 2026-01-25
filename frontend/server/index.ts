@@ -4,6 +4,8 @@ import session from 'express-session';
 import passport from 'passport';
 import path from 'path';
 import { registerRoutes } from './routes';
+import fs from 'node:fs/promises';
+import { startHistoryAutoUpdater } from './historyAutoUpdater';
 
 const app = express();
 
@@ -97,6 +99,30 @@ async function startServer() {
   
   // Routes API
   registerRoutes(app, hasDatabase);
+
+  // AUTO updater (FDJ) — tourne en tâche de fond si mode AUTO
+  const HISTORY_MODE_FILE = path.join(process.cwd(), 'server', 'data', 'history-update-mode.json');
+  const HISTORY_SCHEDULE_FILE = path.join(process.cwd(), 'server', 'data', 'history-auto-update-schedule.json');
+  const getMode = async () => {
+    try {
+      const raw = await fs.readFile(HISTORY_MODE_FILE, 'utf-8');
+      const parsed = JSON.parse(raw);
+      return parsed?.mode === 'manual' ? 'manual' : 'auto';
+    } catch {
+      return 'auto';
+    }
+  };
+  const getScheduleTime = async () => {
+    try {
+      const raw = await fs.readFile(HISTORY_SCHEDULE_FILE, 'utf-8');
+      const parsed = JSON.parse(raw);
+      const s = String(parsed?.time ?? '').trim();
+      return s || '22:00';
+    } catch {
+      return '22:00';
+    }
+  };
+  startHistoryAutoUpdater({ hasDatabase, getMode, getScheduleTime } as any);
   
   // Servir le frontend en production
   if (process.env.NODE_ENV === 'production') {

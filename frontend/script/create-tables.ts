@@ -27,11 +27,25 @@ async function createTables() {
         id SERIAL PRIMARY KEY,
         user_id INTEGER NOT NULL REFERENCES users(id),
         login_at TIMESTAMP DEFAULT NOW(),
+        logout_at TIMESTAMP,
         ip_address VARCHAR(45),
         user_agent VARCHAR(500)
       )
     `);
     console.log('✅ Table login_history créée');
+
+    // Créer la table activity_events (journal admin)
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS activity_events (
+        id SERIAL PRIMARY KEY,
+        type VARCHAR(50) NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW(),
+        user_id INTEGER NOT NULL REFERENCES users(id),
+        username_snapshot VARCHAR(50) NOT NULL,
+        payload JSON NOT NULL
+      )
+    `);
+    console.log('✅ Table activity_events créée');
 
     console.log('🎉 Toutes les tables ont été créées !');
   } catch (error) {
@@ -42,6 +56,10 @@ async function createTables() {
 }
 
 createTables();
+
+
+
+
 
 
 

@@ -27,6 +27,14 @@ interface DebugPanelProps {
     avoidPairExt: boolean;
     balanceHighLow: boolean;
   };
+  numberSources?: Record<number, 'high' | 'dormeur'>;
+  starSources?: Record<number, 'high' | 'dormeur'>;
+  dormeurProof?: {
+    at: number;
+    effectiveMode: 'manual' | 'auto';
+    nums?: { level: number; k: number; before: number[]; toReplace: number[]; injected: number[]; after: number[] };
+    stars?: { level: number; ks: number; before: number[]; toReplace: number[]; injected: number[]; after: number[] };
+  } | null;
   selectedNumbers: number[];
   selectedStars: number[];
   generatedNumbers: number[];
@@ -42,6 +50,9 @@ export function DebugPanel({
   stats,
   mode,
   config,
+  numberSources,
+  starSources,
+  dormeurProof,
   selectedNumbers,
   selectedStars,
   generatedNumbers,
@@ -86,9 +97,11 @@ export function DebugPanel({
     return { category, freq };
   };
 
-  // Determine which numbers to show (Selected in Manual, Generated in Auto)
-  const numsToShow = mode === 'manual' ? selectedNumbers : generatedNumbers;
-  const starsToShow = mode === 'manual' ? selectedStars : generatedStars;
+  // Prefer showing latest generated draw when available (even if mode is 'manual')
+  const numsToShow = generatedNumbers.length > 0 ? generatedNumbers : (mode === 'manual' ? selectedNumbers : generatedNumbers);
+  const starsToShow = generatedStars.length > 0 ? generatedStars : (mode === 'manual' ? selectedStars : generatedStars);
+
+  const srcLabel = (src?: 'high' | 'dormeur') => (src === 'dormeur' ? 'DORMEUR' : src === 'high' ? 'HIGH' : '—');
 
   return (
     <>
@@ -164,6 +177,55 @@ export function DebugPanel({
             </div>
         </div>
 
+        {/* DORMEURS PROOF (runtime) */}
+        <div className="space-y-4">
+            <h4 className="text-white font-bold text-lg flex items-center gap-2">
+                <List size={20} /> PREUVE DORMEURS (DERNIÈRE GÉNÉRATION)
+            </h4>
+            <div className="pl-6 border-l-2 border-zinc-800 space-y-2 text-lg">
+                {!dormeurProof ? (
+                    <div className="text-zinc-600 italic">Aucune preuve dormeurs (pas de remplacement exécuté)…</div>
+                ) : (
+                    <>
+                        <div className="flex justify-between">
+                            <span>Mode effectif :</span>
+                            <span className="text-white">{dormeurProof.effectiveMode.toUpperCase()}</span>
+                        </div>
+                        <div className="flex justify-between">
+                            <span>Horodatage :</span>
+                            <span className="text-white">{format(new Date(dormeurProof.at), 'HH:mm:ss')}</span>
+                        </div>
+                        <div className="mt-3 text-zinc-400 font-bold">Boules :</div>
+                        {dormeurProof.nums ? (
+                            <div className="pl-4 space-y-1">
+                                <div className="flex justify-between"><span>- Niveau :</span> <span className="text-white">{dormeurProof.nums.level}</span></div>
+                                <div className="flex justify-between"><span>- k :</span> <span className="text-white">{dormeurProof.nums.k}</span></div>
+                                <div><span className="text-zinc-400">- Avant :</span> <span className="text-white">{dormeurProof.nums.before.join(', ')}</span></div>
+                                <div><span className="text-zinc-400">- Sacrifiés :</span> <span className="text-red-400">{dormeurProof.nums.toReplace.join(', ') || '—'}</span></div>
+                                <div><span className="text-zinc-400">- Injectés :</span> <span className="text-blue-400">{dormeurProof.nums.injected.join(', ') || '—'}</span></div>
+                                <div><span className="text-zinc-400">- Après :</span> <span className="text-white">{dormeurProof.nums.after.join(', ')}</span></div>
+                            </div>
+                        ) : (
+                            <div className="pl-4 text-zinc-600 italic">Pas de remplacement boules.</div>
+                        )}
+                        <div className="mt-3 text-zinc-400 font-bold">Étoiles :</div>
+                        {dormeurProof.stars ? (
+                            <div className="pl-4 space-y-1">
+                                <div className="flex justify-between"><span>- Niveau :</span> <span className="text-white">{dormeurProof.stars.level}</span></div>
+                                <div className="flex justify-between"><span>- ks :</span> <span className="text-white">{dormeurProof.stars.ks}</span></div>
+                                <div><span className="text-zinc-400">- Avant :</span> <span className="text-white">{dormeurProof.stars.before.join(', ')}</span></div>
+                                <div><span className="text-zinc-400">- Sacrifiées :</span> <span className="text-red-400">{dormeurProof.stars.toReplace.join(', ') || '—'}</span></div>
+                                <div><span className="text-zinc-400">- Injectées :</span> <span className="text-blue-400">{dormeurProof.stars.injected.join(', ') || '—'}</span></div>
+                                <div><span className="text-zinc-400">- Après :</span> <span className="text-white">{dormeurProof.stars.after.join(', ')}</span></div>
+                            </div>
+                        ) : (
+                            <div className="pl-4 text-zinc-600 italic">Pas de remplacement étoiles.</div>
+                        )}
+                    </>
+                )}
+            </div>
+        </div>
+
         {/* NUMBERS DETAILS */}
         <div className="space-y-4">
             <h4 className="text-white font-bold text-lg flex items-center gap-2">
@@ -183,6 +245,7 @@ export function DebugPanel({
                                     <span className="text-base text-zinc-400">— Catégorie {s.category}</span>
                                 </div>
                                 <ul className="space-y-2 pl-4 text-sm text-zinc-400">
+                                    <li>• Source : <span className={numberSources?.[num] === 'dormeur' ? "text-blue-400" : "text-white"}>{srcLabel(numberSources?.[num])}</span></li>
                                     <li>• Fréquence : <span className="text-white">{s.freq}/{totalDraws} ({((s.freq/totalDraws)*100).toFixed(1)}%)</span></li>
                                     <li>• Tendance : <span className={s.trend.score >= 7 ? "text-green-400" : s.trend.score <= 3 ? "text-blue-400" : "text-zinc-300"}>
                                         {s.trend.direction.toUpperCase()} ({s.trend.score}/10)
@@ -217,6 +280,7 @@ export function DebugPanel({
                                     <span className="text-base text-zinc-400">— Catégorie {s.category}</span>
                                 </div>
                                 <ul className="space-y-2 pl-4 text-sm text-zinc-400">
+                                    <li>• Source : <span className={starSources?.[num] === 'dormeur' ? "text-blue-400" : "text-white"}>{srcLabel(starSources?.[num])}</span></li>
                                     <li>• Fréquence : <span className="text-white">{s.freq}/{totalDraws} ({((s.freq/totalDraws)*100).toFixed(1)}%)</span></li>
                                     {mode === 'auto' && (
                                         <li>• Raison : Pondération active</li>

@@ -14,11 +14,13 @@ interface ToggleSwitchProps {
   onChange: (checked: boolean) => void;
   className?: string;
   activeColor?: string; // CSS color string or Tailwind class logic
+  disabled?: boolean;
 }
 
-export const ToggleSwitch = ({ label, checked, onChange, className, activeColor = "bg-green-500" }: ToggleSwitchProps) => {
+export const ToggleSwitch = ({ label, checked, onChange, className, activeColor = "bg-green-500", disabled = false }: ToggleSwitchProps) => {
   
   const handleClick = () => {
+      if (disabled) return;
       toggleSound.play();
       onChange(!checked);
   };
@@ -27,8 +29,9 @@ export const ToggleSwitch = ({ label, checked, onChange, className, activeColor 
     <div className={cn("flex flex-col items-center gap-1", className)}>
       <div 
         className={cn(
-            "w-12 h-20 bg-[#111] rounded-lg border-2 border-[#333] relative cursor-pointer shadow-[inset_0_0_10px_rgba(0,0,0,1)]",
-            "flex items-center justify-center"
+            "w-12 h-20 bg-[#111] rounded-lg border-2 border-[#333] relative shadow-[inset_0_0_10px_rgba(0,0,0,1)]",
+            "flex items-center justify-center",
+            disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"
         )}
         onClick={handleClick}
       >

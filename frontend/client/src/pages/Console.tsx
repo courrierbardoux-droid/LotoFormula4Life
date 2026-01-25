@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
+import { useLocation } from "wouter";
 import { CasinoLayout } from "@/components/layout/CasinoLayout";
 import { CasinoButton } from "@/components/casino/CasinoButton";
 import { LottoBall } from "@/components/casino/LottoBall";
@@ -20,7 +21,7 @@ import {
   getProchainTirage, 
   getDernierTirage, 
   genererCombinaison, 
-  saveGridToHistory,
+  saveGridToDB,
   StatsNumeros,
   Tirage,
   chargerHistorique,
@@ -40,6 +41,11 @@ import {
 } from "@/lib/pricing";
 import { Howl } from 'howler';
 import { toast } from "sonner";
+
+const LS_FREQ_CONFIG_KEY = "loto_freqConfig_v1";
+const EVENT_FREQ_CONFIG_CHANGED = "loto:freqConfigChanged";
+const LS_POOL_WINDOWS_KEY = "loto_poolWindows_v1";
+const EVENT_POOL_WINDOWS_CHANGED = "loto:poolWindowsChanged";
 
 // Sounds
 const sounds = {
@@ -94,12 +100,12 @@ const BallGrid = ({
     type?: 'number' | 'star',
     selectedNumbers: number[],
     selectedStars: number[],
-    numberSources?: Record<number, 'high' | 'mid' | 'low' | 'dormeur'>,
-    starSources?: Record<number, 'high' | 'mid' | 'low' | 'dormeur'>,
-    category?: 'high' | 'mid' | 'low' | 'dormeur',
-    onToggle: (num: number, type: 'number' | 'star', category?: 'high' | 'mid' | 'low' | 'dormeur') => void,
+    numberSources?: Record<number, 'high' | 'dormeur'>,
+    starSources?: Record<number, 'high' | 'dormeur'>,
+    category?: 'high' | 'dormeur',
+    onToggle: (num: number, type: 'number' | 'star', category?: 'high' | 'dormeur') => void,
     className?: string,
-    resolveCategory?: (num: number, type: 'number' | 'star') => 'high' | 'mid' | 'low' | 'dormeur' | null
+    resolveCategory?: (num: number, type: 'number' | 'star') => 'high' | 'dormeur' | null
   }) => {
     // The user explicitly asked for the number of balls presented to be IDENTICAL to the countLimit (cursor value).
     const visibleStats = stats.slice(0, countLimit);
@@ -192,27 +198,9 @@ const BallGrid = ({
 
 // Type for storing preset configurations - COMPLET avec tous les paramètres
 type PresetConfig = {
-    // Number Config
-    highFreqCount: number;
-    midFreqCount: number;
-    lowFreqCount: number;
-    highFreqActive: boolean;
-    midFreqActive: boolean;
-    lowFreqActive: boolean;
-    
-    // Star Config
-    highStarCount: number;
-    midStarCount: number;
-    lowStarCount: number;
-    highStarActive: boolean;
-    midStarActive: boolean;
-    lowStarActive: boolean;
-    
     // Weights
     weightHigh: number;
-    weightMid: number;
-    weightLow: number;
-    weightDormeur: number;
+    // Dormeur is now percentage steppers (Boules/Étoiles)
     weightStarHigh: number;
     weightStarMid: number;
     weightStarLow: number;
@@ -230,6 +218,8 @@ type PresetConfig = {
     // NOUVEAUX PARAMÈTRES
     hazardLevel: number;        // Niveau de CHAOS (0-10)
     tendencyLevel: number;      // Niveau de TENDANCE (0-10)
+    dormeurBallLevel: number;   // Dormeur Boules (0-10) => 0%..100%
+    dormeurStarLevel: number;   // Dormeur Étoiles (0-10) => 0%..100%
     emailNotify: boolean;       // Email activé
     smsNotify: boolean;         // SMS activé
     numCount: number;           // Nombre de numéros (tarif)
@@ -254,8 +244,14 @@ interface PoolItem {
 
 export default function Console() {
   const { user } = useUser();
+  const [, setLocation] = useLocation();
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [showPrice, setShowPrice] = useState(false); // Fix for crash
+
+  // AUTO update status + wins (message à la connexion)
+  const [autoUpdateStatus, setAutoUpdateStatus] = useState<null | { success: boolean; drawDate?: string | null; message?: string | null; finishedAt?: string | null }>(null);
+  const [unseenWins, setUnseenWins] = useState<Array<{ id: number; targetDate: string; matchNum: number; matchStar: number; gainCents: number | null }>>([]);
+  const [winsAcking, setWinsAcking] = useState(false);
 
   // --- RESPONSIVE ZOOM (proportional scaling) ---
   const [windowWidth, setWindowWidth] = useState(typeof window !== 'undefined' ? window.innerWidth : 1920);
@@ -285,13 +281,82 @@ export default function Console() {
   const totalColumnsWidth = leftColumnWidth + centerWidth + rightColumnWidth + (2 * columnGap); // for header sync (includes gaps)
 
   // --- STATE ---
+  // Mode is always determined by user role: Admin/VIP/Abonné = 'manual', Invité = 'auto'
+  // Initialize to 'auto' (will be set correctly when user loads)
   const [mode, setMode] = useState<'manual' | 'auto'>('auto');
   
   // Real Data State
   const [stats, setStats] = useState<StatsNumeros | null>(null);
+  const [statsTrend, setStatsTrend] = useState<StatsNumeros | null>(null);
+  const [statsDormeur, setStatsDormeur] = useState<StatsNumeros | null>(null);
   const [dernierTirage, setDernierTirage] = useState<Tirage | null>(null);
   const [prochainTirage, setProchainTirage] = useState<{ date: Date, jour: string } | null>(null);
   const [updateNeeded, setUpdateNeeded] = useState(false);
+
+  useEffect(() => {
+    if (!user) return;
+    (async () => {
+      try {
+        const res = await fetch('/api/history/auto-update/status', { credentials: 'include' });
+        const data = await res.json().catch(() => ({} as any));
+        const st = data?.status;
+        if (st && typeof st === 'object') {
+          setAutoUpdateStatus({
+            success: !!st.success,
+            drawDate: st.drawDate ?? null,
+            message: st.message ?? null,
+            finishedAt: st.finishedAt ?? null,
+          });
+        } else {
+          setAutoUpdateStatus(null);
+        }
+      } catch {
+        setAutoUpdateStatus(null);
+      }
+    })();
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user) return;
+    (async () => {
+      try {
+        const res = await fetch('/api/wins/me?unseenOnly=true&limit=50', { credentials: 'include' });
+        const data = await res.json().catch(() => ({} as any));
+        const rows = Array.isArray(data?.rows) ? data.rows : [];
+        setUnseenWins(
+          rows
+            .map((r: any) => ({
+              id: Number(r.id),
+              targetDate: String(r.targetDate || ''),
+              matchNum: Number(r.matchNum || 0),
+              matchStar: Number(r.matchStar || 0),
+              gainCents: r.gainCents == null ? null : Number(r.gainCents),
+            }))
+            .filter((r: any) => Number.isFinite(r.id) && r.targetDate)
+        );
+      } catch {
+        setUnseenWins([]);
+      }
+    })();
+  }, [user?.id]);
+
+  const ackAllWins = async () => {
+    if (winsAcking) return;
+    setWinsAcking(true);
+    try {
+      await fetch('/api/wins/me/ack', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ ids: unseenWins.map((w) => w.id) }),
+      });
+      setUnseenWins([]);
+    } catch {
+      // ignore
+    } finally {
+      setWinsAcking(false);
+    }
+  };
   
   // Preset State
   const [selectedPreset, setSelectedPreset] = useState("0"); // 0 to 5 (0 = default/reset)
@@ -323,35 +388,15 @@ export default function Console() {
   // Manual Mode Selection State
   const [selectedNumbers, setSelectedNumbers] = useState<number[]>([]);
   const [selectedStars, setSelectedStars] = useState<number[]>([]);
-  const [numberSources, setNumberSources] = useState<Record<number, 'high' | 'mid' | 'low' | 'dormeur'>>({});
-  const [starSources, setStarSources] = useState<Record<number, 'high' | 'mid' | 'low' | 'dormeur'>>({});
+  const [numberSources, setNumberSources] = useState<Record<number, 'high' | 'dormeur'>>({});
+  const [starSources, setStarSources] = useState<Record<number, 'high' | 'dormeur'>>({});
   
   // NEW: Store selected tariff config directly for price display
   const [selectedTariff, setSelectedTariff] = useState<{nums: number, stars: number, price: number} | null>(null);
 
-  // Configuration (Auto/Manual filters)
-  const [highFreqCount, setHighFreqCount] = useState(4);
-  const [midFreqCount, setMidFreqCount] = useState(3);
-  const [lowFreqCount, setLowFreqCount] = useState(2);
-  const [highFreqActive, setHighFreqActive] = useState(true);
-  const [midFreqActive, setMidFreqActive] = useState(true);
-  const [lowFreqActive, setLowFreqActive] = useState(true);
-
-  // Stars Configuration
-  const [highStarCount, setHighStarCount] = useState(1);
-  const [midStarCount, setMidStarCount] = useState(1);
-  const [lowStarCount, setLowStarCount] = useState(1); 
-  
-  const [highStarActive, setHighStarActive] = useState(true);
-  const [midStarActive, setMidStarActive] = useState(true);
-  const [lowStarActive, setLowStarActive] = useState(true); 
-  const [dormeurStarActive, setDormeurStarActive] = useState(true); 
-
   // Weightings (Knobs)
   const [weightHigh, setWeightHigh] = useState(2);
-  const [weightMid, setWeightMid] = useState(2);
-  const [weightLow, setWeightLow] = useState(1);
-  const [weightDormeur, setWeightDormeur] = useState(0);
+  // weightDormeur removed - dormeur is now handled via steppers (Boules/Étoiles)
   
   // Simplified mode toggle for Pondération Boules
   const [isSimplifiedMode, setIsSimplifiedMode] = useState(true);
@@ -377,14 +422,24 @@ export default function Console() {
   const [emailNotify, setEmailNotify] = useState(true);
   const [smsNotify, setSmsNotify] = useState(false);
   const [hazardLevel, setHazardLevel] = useState(0); // 0 to 9
-  const [tendencyLevel, setTendencyLevel] = useState(10); // 0 to 10, défaut 10 = max tendance (bouton à gauche)
+  const [tendencyLevel, setTendencyLevel] = useState(0); // 0 to 10, 0 = aucune influence (stat pure)
+  const [dormeurBallLevel, setDormeurBallLevel] = useState(0); // 0..10 => 0%..100% de dormeurs (boules)
+  const [dormeurStarLevel, setDormeurStarLevel] = useState(0); // 0..10 => 0%..100% de dormeurs (étoiles)
   const [isWeightsEnabled, setIsWeightsEnabled] = useState(true);
+
+  type DormeurProof = {
+      at: number;
+      effectiveMode: 'manual' | 'auto';
+      nums?: { level: number; k: number; before: number[]; toReplace: number[]; injected: number[]; after: number[] };
+      stars?: { level: number; ks: number; before: number[]; toReplace: number[]; injected: number[]; after: number[] };
+  };
+  const [lastDormeurProof, setLastDormeurProof] = useState<DormeurProof | null>(null);
 
   // --- NEW: WEIGHT PRESET STATE ---
   const [selectedWeightPreset, setSelectedWeightPreset] = useState("0"); // "0" to "10"
   const [weightPresetsData, setWeightPresetsData] = useState<Record<string, {
-      weightHigh: number; weightMid: number; weightLow: number; weightDormeur: number;
-      weightStarHigh: number; weightStarMid: number; weightStarLow: number; weightStarDormeur: number;
+      weightHigh: number;
+      dormeurBallLevel: number;
       isSimplified?: boolean; // NEW: Track if preset was saved in simplified mode
   }>>({});
   const [isWeightDropdownOpen, setIsWeightDropdownOpen] = useState(false);
@@ -413,19 +468,162 @@ export default function Console() {
   const [sendingMessage, setSendingMessage] = useState("");
   const [isDebugOpen, setIsDebugOpen] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
-  
-  // CGU Modal State (pour les invités)
-  const [showCguModal, setShowCguModal] = useState(false);
-  const [cguAccepted, setCguAccepted] = useState(false);
 
   // Popup Gratitude State (VIP/Abonné uniquement)
   const [showGratitudePopup, setShowGratitudePopup] = useState(false);
   const [dontShowPopupAgain, setDontShowPopupAgain] = useState(false);
   const [popupChecked, setPopupChecked] = useState(false); // Pour éviter double appel API
+  const [popup1Html, setPopup1Html] = useState<string>(''); // HTML du template popup1 depuis la DB
+  const [popup2Html, setPopup2Html] = useState<string>(''); // HTML du template popup2 depuis la DB
+
+  // Email Mode & Invite Send Popup (pour invités uniquement)
+  const [emailModeEnabled, setEmailModeEnabled] = useState(false);
+  const [showInviteSendPopup, setShowInviteSendPopup] = useState(false);
+  const [inviteGratitudeAccepted, setInviteGratitudeAccepted] = useState(false);
+  
+  // Popup de consultation après envoi (invités uniquement)
+  const [showConsultationPopup, setShowConsultationPopup] = useState(false);
+
+  // (Gagnants) : supprimé — aucune notification/redirect "gagnant"
 
   // --- SETTINGS STATE ---
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [freqConfig, setFreqConfig] = useState<FrequencyConfig>({ type: 'all' });
+  const [freqConfig, setFreqConfig] = useState<FrequencyConfig>(() => {
+      try {
+          const raw = localStorage.getItem(LS_FREQ_CONFIG_KEY);
+          if (!raw) return { type: 'all' };
+          const parsed = JSON.parse(raw) as FrequencyConfig;
+          if (!parsed || typeof parsed !== 'object') return { type: 'all' };
+          if (parsed.type === 'custom') {
+              if (!parsed.customUnit || !parsed.customValue) return { type: 'all' };
+          }
+          return parsed;
+      } catch {
+          return { type: 'all' };
+      }
+  });
+
+  // --- POOL WINDOWS (High / Trend / Dormeur) ---
+  type PoolKey = "high" | "trend" | "dormeur";
+  type PoolWindowsConfig = Record<PoolKey, FrequencyConfig>;
+  const defaultPoolWindows: PoolWindowsConfig = {
+    high: { type: "custom", customUnit: "draws", customValue: 25 },
+    trend: { type: "custom", customUnit: "draws", customValue: 70 },
+    dormeur: { type: "custom", customUnit: "years", customValue: 3 },
+  };
+  const [poolWindows, setPoolWindows] = useState<PoolWindowsConfig>(() => {
+    try {
+      const raw = localStorage.getItem(LS_POOL_WINDOWS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<PoolWindowsConfig>;
+        if (parsed?.high && parsed?.trend && parsed?.dormeur) return parsed as PoolWindowsConfig;
+      }
+    } catch {}
+    return { ...defaultPoolWindows, high: freqConfig };
+  });
+
+  // --- POOL SIZE SETTINGS (Top N) ---
+  const LS_POOL_SIZES_KEY = "loto_poolSizes_v1";
+  const EVENT_POOL_SIZES_CHANGED = "loto:poolSizesChanged";
+  type PoolSizeConfig = {
+    balls: { high: number; trend: number; dormeur: number };
+    stars: { high: number; trend: number; dormeur: number };
+  };
+  const [poolSizes, setPoolSizes] = useState<PoolSizeConfig>(() => {
+    const fallback: PoolSizeConfig = {
+      balls: { high: 25, trend: 25, dormeur: 25 },
+      stars: { high: 8, trend: 8, dormeur: 8 },
+    };
+    try {
+      const raw = localStorage.getItem(LS_POOL_SIZES_KEY);
+      if (!raw) return fallback;
+      const parsed = JSON.parse(raw) as Partial<PoolSizeConfig>;
+      return {
+        balls: {
+          high: Math.min(50, Math.max(10, Number(parsed?.balls?.high ?? fallback.balls.high))),
+          trend: Math.min(50, Math.max(10, Number(parsed?.balls?.trend ?? fallback.balls.trend))),
+          dormeur: Math.min(50, Math.max(10, Number(parsed?.balls?.dormeur ?? fallback.balls.dormeur))),
+        },
+        stars: {
+          high: Math.min(12, Math.max(4, Number(parsed?.stars?.high ?? fallback.stars.high))),
+          trend: Math.min(12, Math.max(4, Number(parsed?.stars?.trend ?? fallback.stars.trend))),
+          dormeur: Math.min(12, Math.max(4, Number(parsed?.stars?.dormeur ?? fallback.stars.dormeur))),
+        },
+      };
+    } catch {
+      return fallback;
+    }
+  });
+
+  useEffect(() => {
+    const handler = () => {
+      try {
+        const raw = localStorage.getItem(LS_POOL_SIZES_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw) as PoolSizeConfig;
+        if (!parsed?.balls || !parsed?.stars) return;
+        setPoolSizes(parsed);
+      } catch {}
+    };
+    window.addEventListener(EVENT_POOL_SIZES_CHANGED, handler as EventListener);
+    return () => window.removeEventListener(EVENT_POOL_SIZES_CHANGED, handler as EventListener);
+  }, []);
+
+  useEffect(() => {
+    const handler = () => {
+      try {
+        const raw = localStorage.getItem(LS_POOL_WINDOWS_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw) as PoolWindowsConfig;
+        if (!parsed?.high || !parsed?.trend || !parsed?.dormeur) return;
+        setPoolWindows(parsed);
+        setFreqConfig(parsed.high); // compat: "fenêtre high" visible via l'ancien réglage
+      } catch {}
+    };
+    window.addEventListener(EVENT_POOL_WINDOWS_CHANGED, handler as EventListener);
+    return () => window.removeEventListener(EVENT_POOL_WINDOWS_CHANGED, handler as EventListener);
+  }, []);
+
+  // Listen for Settings changes (same-tab)
+  useEffect(() => {
+      const handler = () => {
+          try {
+              const raw = localStorage.getItem(LS_FREQ_CONFIG_KEY);
+              if (!raw) return;
+              const parsed = JSON.parse(raw) as FrequencyConfig;
+              if (parsed?.type === 'custom' && (!parsed.customUnit || !parsed.customValue)) return;
+              setFreqConfig(parsed);
+              setPoolWindows((prev) => ({ ...prev, high: parsed })); // compat: legacy => high
+          } catch {}
+      };
+      window.addEventListener(EVENT_FREQ_CONFIG_CHANGED, handler as EventListener);
+      return () => window.removeEventListener(EVENT_FREQ_CONFIG_CHANGED, handler as EventListener);
+  }, []);
+
+  // Debug (runtime evidence): generation tokens + mismatch detection
+  const genSeqRef = useRef(0);
+  const genTokenRef = useRef<string | null>(null);
+  const genAppliedTokenRef = useRef<string | null>(null);
+  const genTimeoutRef = useRef<number | null>(null);
+  const autoDrawsContainerRef = useRef<HTMLDivElement | null>(null);
+  const wasScrollableRef = useRef(false);
+
+  // Persist when changed from Console UI too
+  useEffect(() => {
+      try {
+          localStorage.setItem(LS_FREQ_CONFIG_KEY, JSON.stringify(freqConfig));
+          // Compat: si la fenêtre high est modifiée depuis la Console, on maintient aussi la config multi-fenêtres.
+          const raw = localStorage.getItem(LS_POOL_WINDOWS_KEY);
+          let next = { ...defaultPoolWindows, high: freqConfig } as PoolWindowsConfig;
+          if (raw) {
+            try {
+              const parsed = JSON.parse(raw) as Partial<PoolWindowsConfig>;
+              if (parsed?.high && parsed?.trend && parsed?.dormeur) next = { ...(parsed as PoolWindowsConfig), high: freqConfig };
+            } catch {}
+          }
+          localStorage.setItem(LS_POOL_WINDOWS_KEY, JSON.stringify(next));
+      } catch {}
+  }, [freqConfig]);
   const [fullHistory, setFullHistory] = useState<Tirage[]>([]);
 
   // PURE MODE STATE REMOVED
@@ -445,7 +643,14 @@ export default function Console() {
             const state = JSON.parse(saved);
             isRestoringRef.current = true; // MARK AS RESTORING
 
-            if (state.mode) setMode(state.mode);
+            // Mode is NOT loaded from localStorage - it's always based on user role
+            // Set mode based on user role (ignoring any saved value)
+            if (user?.role === 'admin' || user?.role === 'vip' || user?.role === 'abonne') {
+                setMode('manual');
+            } else {
+                setMode('auto'); // invite or unknown
+            }
+            
             if (state.autoDraws) setAutoDraws(state.autoDraws.map((d: any) => ({...d, date: new Date(d.date)})));
             if (state.generatedNumbers) setGeneratedNumbers(state.generatedNumbers);
             if (state.generatedStars) setGeneratedStars(state.generatedStars);
@@ -457,27 +662,8 @@ export default function Console() {
             if (state.selectedWeightPreset) setSelectedWeightPreset(state.selectedWeightPreset);
             if (state.weightPresetsData) setWeightPresetsData(state.weightPresetsData);
 
-            if (state.highFreqCount !== undefined) setHighFreqCount(state.highFreqCount);
-            if (state.midFreqCount !== undefined) setMidFreqCount(state.midFreqCount);
-            if (state.lowFreqCount !== undefined) setLowFreqCount(state.lowFreqCount);
-            
-            if (state.highFreqActive !== undefined) setHighFreqActive(state.highFreqActive);
-            if (state.midFreqActive !== undefined) setMidFreqActive(state.midFreqActive);
-            if (state.lowFreqActive !== undefined) setLowFreqActive(state.lowFreqActive);
-
-            if (state.highStarCount !== undefined) setHighStarCount(state.highStarCount);
-            if (state.midStarCount !== undefined) setMidStarCount(state.midStarCount);
-            if (state.lowStarCount !== undefined) setLowStarCount(state.lowStarCount);
-
-            if (state.highStarActive !== undefined) setHighStarActive(state.highStarActive);
-            if (state.midStarActive !== undefined) setMidStarActive(state.midStarActive);
-            if (state.lowStarActive !== undefined) setLowStarActive(state.lowStarActive);
-            if (state.dormeurStarActive !== undefined) setDormeurStarActive(state.dormeurStarActive);
-
             if (state.weightHigh !== undefined) setWeightHigh(state.weightHigh);
-            if (state.weightMid !== undefined) setWeightMid(state.weightMid);
-            if (state.weightLow !== undefined) setWeightLow(state.weightLow);
-            if (state.weightDormeur !== undefined) setWeightDormeur(state.weightDormeur);
+            // weightDormeur removed - dormeur is handled by steppers (Boules/Étoiles)
 
             if (state.weightStarHigh !== undefined) setWeightStarHigh(state.weightStarHigh);
             if (state.weightStarMid !== undefined) setWeightStarMid(state.weightStarMid);
@@ -487,55 +673,58 @@ export default function Console() {
             if (state.avoidPairExt !== undefined) setAvoidPairExt(state.avoidPairExt);
             if (state.balanceHighLow !== undefined) setBalanceHighLow(state.balanceHighLow);
             if (state.avoidPopSeq !== undefined) setAvoidPopSeq(state.avoidPopSeq);
-            if (state.hazardLevel !== undefined) setHazardLevel(state.hazardLevel);
-            if (state.tendencyLevel !== undefined) setTendencyLevel(state.tendencyLevel);
+            // IMPORTANT: Do NOT restore these 3 knobs from localStorage.
+            // Default must always be 0/0/0 unless user explicitly changes them.
             
             // Manual selection & SOURCES
             if (state.selectedNumbers) setSelectedNumbers(state.selectedNumbers);
             if (state.selectedStars) setSelectedStars(state.selectedStars);
             if (state.numberSources) setNumberSources(state.numberSources);
             if (state.starSources) setStarSources(state.starSources);
+            
+            // Restore simplified mode (default to true if not found)
+            if (state.isSimplifiedMode !== undefined) setIsSimplifiedMode(state.isSimplifiedMode);
+            else setIsSimplifiedMode(true); // Default to simplified mode
         }
     } catch (e) {
         console.error("Failed to load console state", e);
     }
-  }, []);
+    
+    // Always set mode based on user role (ignoring localStorage)
+    if (user?.role === 'admin' || user?.role === 'vip' || user?.role === 'abonne') {
+        setMode('manual');
+    } else {
+        setMode('auto'); // invite or unknown
+    }
+  }, [user]);
 
   useEffect(() => {
-    // SAVE STATE
+    // SAVE STATE (mode is NOT saved - it's always based on user role)
     const stateToSave = {
-        mode,
+        // mode removed - always determined by user role
         autoDraws,
         generatedNumbers,
         generatedStars,
         selectedPreset,
         selectedWeightPreset,
         weightPresetsData,
-        highFreqCount, midFreqCount, lowFreqCount,
-        highFreqActive, midFreqActive, lowFreqActive,
-        highStarCount, midStarCount, lowStarCount,
-        highStarActive, midStarActive, lowStarActive, dormeurStarActive,
-        weightHigh, weightMid, weightLow, weightDormeur,
+        weightHigh,
         weightStarHigh, weightStarMid, weightStarLow, weightStarDormeur,
         avoidPairExt, balanceHighLow, avoidPopSeq,
-        hazardLevel, tendencyLevel,
         selectedNumbers, selectedStars,
-        numberSources, starSources
+        numberSources, starSources,
+        isSimplifiedMode
     };
     localStorage.setItem('console_state', JSON.stringify(stateToSave));
   }, [
-    mode, autoDraws, generatedNumbers, generatedStars, selectedPreset,
+    autoDraws, generatedNumbers, generatedStars, selectedPreset,
     selectedWeightPreset, weightPresetsData,
-    highFreqCount, midFreqCount, lowFreqCount,
-    highFreqActive, midFreqActive, lowFreqActive,
-    highStarCount, midStarCount, lowStarCount,
-    highStarActive, midStarActive, lowStarActive, dormeurStarActive,
-    weightHigh, weightMid, weightLow, weightDormeur,
+    weightHigh,
     weightStarHigh, weightStarMid, weightStarLow, weightStarDormeur,
     avoidPairExt, balanceHighLow, avoidPopSeq,
-    hazardLevel, tendencyLevel,
     selectedNumbers, selectedStars,
-    numberSources, starSources
+    numberSources, starSources,
+    isSimplifiedMode
   ]);
 
   // --- WEIGHT PRESET LOGIC ---
@@ -547,7 +736,7 @@ export default function Console() {
       if (presetId === "0") {
           setIsWeightsEnabled(false);
           // Reset all knobs to 0
-          setWeightHigh(0); setWeightMid(0); setWeightLow(0); setWeightDormeur(0);
+          setWeightHigh(0);
           setWeightStarHigh(0); setWeightStarMid(0); setWeightStarLow(0); setWeightStarDormeur(0);
           toast.info("Pondérations DÉSACTIVÉES (Mode 0)");
       } else {
@@ -557,9 +746,8 @@ export default function Console() {
               // Load saved data (BALL weights only - star weights are neutralized)
               const data = weightPresetsData[presetId];
               setWeightHigh(data.weightHigh);
-              setWeightMid(data.weightMid);
-              setWeightLow(data.weightLow);
-              setWeightDormeur(data.weightDormeur);
+              setDormeurBallLevel(data.dormeurBallLevel);
+              setDormeurStarLevel(data.dormeurBallLevel);
               
               // NEUTRALIZED: Star weights are no longer loaded from presets
               // They are derived from ball weights proportions
@@ -591,8 +779,8 @@ export default function Console() {
       setWeightPresetsData(prev => ({
           ...prev,
           [selectedWeightPreset]: {
-              weightHigh, weightMid, weightLow, weightDormeur,
-              weightStarHigh, weightStarMid, weightStarLow, weightStarDormeur,
+              weightHigh,
+              dormeurBallLevel,
               isSimplified: isSimplifiedMode
           }
       }));
@@ -610,8 +798,8 @@ export default function Console() {
       setWeightPresetsData(prev => ({
           ...prev,
           [presetId]: {
-              weightHigh, weightMid, weightLow, weightDormeur,
-              weightStarHigh, weightStarMid, weightStarLow, weightStarDormeur,
+              weightHigh,
+              dormeurBallLevel,
               isSimplified: isSimplifiedMode
           }
       }));
@@ -642,15 +830,50 @@ export default function Console() {
   const isAdminOrVip = user?.role === 'admin' || user?.role === 'vip';
   const isInvite = user?.role === 'invite';
   const isAbonne = user?.role === 'abonne';
-  const isInviteOrAbonne = isInvite || isAbonne; // Ces utilisateurs ne voient jamais leurs numéros directement
-  const canUseManual = !isInvite && !isAbonne; // Mode manuel réservé aux VIP/Admin
+  const isInviteOrAbonne = isInvite || isAbonne; // Pour l'envoi par email uniquement
+  const canUseManual = !isInvite; // Mode manuel réservé aux VIP/Admin/Abonné (invité verrouillé en auto)
 
-  // --- FORCE AUTO MODE FOR INVITE/ABONNE ---
+  // Mode is now always set based on user role in the main useEffect - no need for this safety check
+
+  // (Gagnants) : supprimé — aucune notification/redirect "gagnant"
+
+  // Charger le template popup1 depuis la DB
   useEffect(() => {
-    if (isInviteOrAbonne && mode === 'manual') {
-      setMode('auto');
-    }
-  }, [isInviteOrAbonne, mode]);
+    const loadPopup1Template = async () => {
+      try {
+        const res = await fetch('/api/popup/template/popup1', { credentials: 'include' });
+        if (res.ok) {
+          const data = await res.json();
+          setPopup1Html(data.template || '');
+          console.log('[Console] Template popup1 chargé depuis la DB');
+        } else {
+          console.warn('[Console] Impossible de charger le template popup1');
+        }
+      } catch (err) {
+        console.error('[Console] Erreur chargement template popup1:', err);
+      }
+    };
+    loadPopup1Template();
+  }, []);
+
+  // Charger le template popup2 depuis la DB
+  useEffect(() => {
+    const loadPopup2Template = async () => {
+      try {
+        const res = await fetch('/api/popup/template/popup2', { credentials: 'include' });
+        if (res.ok) {
+          const data = await res.json();
+          setPopup2Html(data.template || '');
+          console.log('[Console] Template popup2 chargé depuis la DB');
+        } else {
+          console.warn('[Console] Impossible de charger le template popup2');
+        }
+      } catch (err) {
+        console.error('[Console] Erreur chargement template popup2:', err);
+      }
+    };
+    loadPopup2Template();
+  }, []);
 
   // --- POPUP GRATITUDE CHECK (VIP/Abonné uniquement) ---
   useEffect(() => {
@@ -709,6 +932,90 @@ export default function Console() {
     }
   };
 
+  // Gérer les interactions du popup1 (checkbox et bouton)
+  useEffect(() => {
+    if (!showGratitudePopup || !popup1Html) return;
+
+    const handleCheckboxChange = (e: Event) => {
+      const target = e.target as HTMLInputElement;
+      if (target.id === 'gratitude-checkbox') {
+        handleDontShowAgain(target.checked);
+      }
+    };
+
+    const handleButtonClick = (e: Event) => {
+      const target = e.target as HTMLButtonElement;
+      if (target.id === 'gratitude-validate-btn') {
+        handleClosePopup();
+      }
+    };
+
+    // Attacher les event listeners
+    document.addEventListener('change', handleCheckboxChange);
+    document.addEventListener('click', handleButtonClick);
+
+    // Nettoyer les event listeners au démontage
+    return () => {
+      document.removeEventListener('change', handleCheckboxChange);
+      document.removeEventListener('click', handleButtonClick);
+    };
+  }, [showGratitudePopup, popup1Html]);
+
+  // Gérer les interactions du popup1 pour showInviteSendPopup (checkbox et bouton)
+  useEffect(() => {
+    if (!showInviteSendPopup || !popup1Html) return;
+
+    // NOTE: On ne met PAS à jour l'état React dans handleCheckboxChange
+    // car cela déclencherait un re-render qui ré-injecterait le HTML via dangerouslySetInnerHTML
+    // et réinitialiserait la checkbox. On laisse le DOM gérer l'état de la checkbox.
+    // handleInviteGratitudeValidate lit directement depuis le DOM.
+
+    const handleButtonClick = (e: Event) => {
+      const target = e.target as HTMLElement;
+      // Chercher le bouton (peut être que le clic est sur un enfant comme le texte)
+      const button = target.closest('#gratitude-validate-btn') as HTMLButtonElement;
+      
+      if (button || target.id === 'gratitude-validate-btn') {
+        console.log('[Console] Bouton VALIDER popup1 (invité) cliqué');
+        e.preventDefault();
+        e.stopPropagation();
+        handleInviteGratitudeValidate();
+      }
+    };
+
+    document.addEventListener('click', handleButtonClick, true); // Utiliser capture phase
+
+    return () => {
+      document.removeEventListener('click', handleButtonClick, true);
+    };
+  }, [showInviteSendPopup, popup1Html]);
+
+  // Gérer les interactions du popup2 (boutons OUI/NON)
+  useEffect(() => {
+    if (!showConsultationPopup || !popup2Html) return;
+
+    const handleButtonClick = (e: Event) => {
+      const target = e.target as HTMLElement;
+      const buttonId = target.id || target.closest('button')?.id;
+      
+      if (buttonId === 'consultation-no-btn' || target.closest('#consultation-no-btn')) {
+        e.preventDefault();
+        e.stopPropagation();
+        handleConsultationNo();
+      } else if (buttonId === 'consultation-yes-btn' || target.closest('#consultation-yes-btn')) {
+        e.preventDefault();
+        e.stopPropagation();
+        handleConsultationYes();
+      }
+    };
+
+    document.addEventListener('click', handleButtonClick);
+
+    return () => {
+      document.removeEventListener('click', handleButtonClick);
+    };
+  }, [showConsultationPopup, popup2Html]);
+
   // --- SOUND HELPER ---
   const playSound = (type: keyof typeof sounds) => {
     if (soundEnabled) sounds[type].play();
@@ -733,6 +1040,8 @@ export default function Console() {
         // Vérifier si une mise à jour est nécessaire
         const verif = verifierMiseAJourNecessaire(dernierTirageData);
         setUpdateNeeded(verif.necessaire);
+
+        // (debug logging removed)
         
       } catch (err) {
         console.error("Failed to load EuroMillions data", err);
@@ -746,19 +1055,27 @@ export default function Console() {
   // --- RECALCULATE STATS ON CONFIG CHANGE ---
   useEffect(() => {
       if (fullHistory.length > 0) {
-          const filtered = filterTirages(fullHistory, freqConfig);
-          const newStats = computeStatsFromTirages(filtered);
-          setStats(newStats);
+          const filteredHigh = filterTirages(fullHistory, poolWindows.high);
+          const filteredTrend = filterTirages(fullHistory, poolWindows.trend);
+          const filteredDormeur = filterTirages(fullHistory, poolWindows.dormeur);
+
+          const newStatsHigh = computeStatsFromTirages(filteredHigh);
+          const newStatsTrend = computeStatsFromTirages(filteredTrend);
+          const newStatsDormeur = computeStatsFromTirages(filteredDormeur);
+
+          setStats(newStatsHigh);
+          setStatsTrend(newStatsTrend);
+          setStatsDormeur(newStatsDormeur);
           
           // Toast info
           let periodName = "Historique Complet";
-          if (freqConfig.type === 'last_year') periodName = "Dernière Année";
-          else if (freqConfig.type === 'last_20') periodName = "20 Derniers Tirages";
-          else if (freqConfig.type === 'custom') periodName = `Période Personnalisée`;
+          if (poolWindows.high.type === 'last_year') periodName = "Dernière Année";
+          else if (poolWindows.high.type === 'last_20') periodName = "20 Derniers Tirages";
+          else if (poolWindows.high.type === 'custom') periodName = `Période Personnalisée`;
           
-          toast.success(`Statistiques mises à jour : ${periodName} (${filtered.length} tirages)`);
+          toast.success(`Statistiques mises à jour : ${periodName} (${filteredHigh.length} tirages)`);
       }
-  }, [freqConfig, fullHistory]);
+  }, [poolWindows, fullHistory]);
 
   // --- PREPARE STATS FOR DISPLAY ---
   // Calculate min/max frequencies for percentage display
@@ -772,19 +1089,13 @@ export default function Console() {
           starMin: Math.min(...starFreqs),
           starMax: Math.max(...starFreqs)
       };
-  }, [stats]);
+  }, [stats, statsTrend, statsDormeur]);
   
   const mapToDisplayStat = (item: { numero: number, frequence: number }, type: 'number' | 'star', index: number): DisplayStat => {
     const defaultTrend = { direction: 'stable' as const, score: 5 };
     const trend = type === 'number' 
-        ? (stats?.tendancesNumeros[item.numero] || defaultTrend)
-        : (stats?.tendancesEtoiles ? stats.tendancesEtoiles[item.numero] : defaultTrend);
-    
-    // Calculate percentage
-    const min = type === 'number' ? freqBounds.numMin : freqBounds.starMin;
-    const max = type === 'number' ? freqBounds.numMax : freqBounds.starMax;
-    const range = max - min || 1;
-    const percent = Math.round(((item.frequence - min) / range) * 100);
+        ? (statsTrend?.tendancesNumeros[item.numero] || defaultTrend)
+        : (statsTrend?.tendancesEtoiles ? statsTrend.tendancesEtoiles[item.numero] : defaultTrend);
 
     return {
       number: item.numero,
@@ -792,7 +1103,8 @@ export default function Console() {
       trendScore: trend ? trend.score : 5,
       trendDirection: trend ? trend.direction : 'stable',
       rank: index + 1,
-      displayLabel: `${percent}%`
+      // Affichage demandé: nombre brut de sorties dans la fenêtre (pas un % qui écrase 0/1/2 en 0/50/100)
+      displayLabel: `${item.frequence}`
     };
   };
 
@@ -804,7 +1116,7 @@ export default function Console() {
   const midStarStats = stats?.categoriesEtoiles.moyenne.map((s, i) => mapToDisplayStat(s, 'star', i)) || [];
   const lowStarStats = stats?.categoriesEtoiles.basse.map((s, i) => mapToDisplayStat(s, 'star', i)) || [];
   
-  const dormeurStats = Object.entries(stats?.absenceNumeros || {})
+  const dormeurStats = Object.entries(statsDormeur?.absenceNumeros || {})
       .map(([num, absence]) => ({
           numero: parseInt(num),
           frequence: stats?.freqNumeros[parseInt(num)] || 0,
@@ -816,7 +1128,7 @@ export default function Console() {
           displayLabel: `${s.absence}`
       }));
 
-  const dormeurStarStats = Object.entries(stats?.absenceEtoiles || {})
+  const dormeurStarStats = Object.entries(statsDormeur?.absenceEtoiles || {})
       .map(([num, absence]) => ({
           numero: parseInt(num),
           frequence: stats?.freqEtoiles[parseInt(num)] || 0,
@@ -833,7 +1145,7 @@ export default function Console() {
   
   // Pre-calculated pools for BALLS (50 numbers)
   const ballPools = useMemo(() => {
-      if (!stats) return null;
+      if (!stats || !statsTrend || !statsDormeur) return null;
       
       // Create base array with all stats
       const frequencies = Object.values(stats.freqNumeros);
@@ -844,7 +1156,7 @@ export default function Console() {
       const allBalls: PoolItem[] = Array.from({ length: 50 }, (_, i) => {
           const num = i + 1;
           const defaultTrend = { direction: 'stable' as const, score: 5 };
-          const trend = stats.tendancesNumeros[num] || defaultTrend;
+          const trend = statsTrend.tendancesNumeros[num] || defaultTrend;
           const freq = stats.freqNumeros[num] || 0;
           // Calculate percentage: 0% = min, 100% = max
           const frequencyPercent = Math.round(((freq - minFreq) / freqRange) * 100);
@@ -853,22 +1165,24 @@ export default function Console() {
               frequency: freq,
               frequencyPercent,
               trend: trend.score,
-              absence: stats.absenceNumeros[num] || 0,
+              absence: statsDormeur.absenceNumeros[num] || 0,
               trendDirection: trend.direction
           };
       });
       
       return {
           byNumeric: [...allBalls].sort((a, b) => a.number - b.number),
-          byFrequency: [...allBalls].sort((a, b) => b.frequency - a.frequency),
-          byTrend: [...allBalls].sort((a, b) => b.trend - a.trend),
+          // Tie-break: à fréquence égale, la tendance départage (plus cohérent visuellement + pour les top N)
+          byFrequency: [...allBalls].sort((a, b) => (b.frequency - a.frequency) || (b.trend - a.trend) || (a.number - b.number)),
+          // Tie-break: à tendance égale, la fréquence départage
+          byTrend: [...allBalls].sort((a, b) => (b.trend - a.trend) || (b.frequency - a.frequency) || (a.number - b.number)),
           byDormeur: [...allBalls].sort((a, b) => b.absence - a.absence)
       };
-  }, [stats]);
+  }, [stats, statsTrend, statsDormeur]);
   
   // Pre-calculated pools for STARS (12 numbers)
   const starPools = useMemo(() => {
-      if (!stats) return null;
+      if (!stats || !statsTrend || !statsDormeur) return null;
       
       // Calculate min/max for stars
       const starFrequencies = Object.values(stats.freqEtoiles);
@@ -879,7 +1193,7 @@ export default function Console() {
       const allStars: PoolItem[] = Array.from({ length: 12 }, (_, i) => {
           const num = i + 1;
           const defaultTrend = { direction: 'stable' as const, score: 5 };
-          const trend = stats.tendancesEtoiles ? stats.tendancesEtoiles[num] : defaultTrend;
+          const trend = statsTrend.tendancesEtoiles ? statsTrend.tendancesEtoiles[num] : defaultTrend;
           const freq = stats.freqEtoiles[num] || 0;
           const frequencyPercent = Math.round(((freq - minStarFreq) / starFreqRange) * 100);
           return {
@@ -887,15 +1201,15 @@ export default function Console() {
               frequency: freq,
               frequencyPercent,
               trend: trend ? trend.score : 5,
-              absence: stats.absenceEtoiles[num] || 0,
+              absence: statsDormeur.absenceEtoiles[num] || 0,
               trendDirection: trend ? trend.direction : 'stable'
           };
       });
       
       return {
           byNumeric: [...allStars].sort((a, b) => a.number - b.number),
-          byFrequency: [...allStars].sort((a, b) => b.frequency - a.frequency),
-          byTrend: [...allStars].sort((a, b) => b.trend - a.trend),
+          byFrequency: [...allStars].sort((a, b) => (b.frequency - a.frequency) || (b.trend - a.trend) || (a.number - b.number)),
+          byTrend: [...allStars].sort((a, b) => (b.trend - a.trend) || (b.frequency - a.frequency) || (a.number - b.number)),
           byDormeur: [...allStars].sort((a, b) => b.absence - a.absence)
       };
   }, [stats]);
@@ -962,7 +1276,9 @@ export default function Console() {
           frequency: item.frequency,
           trendScore: item.trend,
           trendDirection: item.trendDirection,
-          displayLabel: sortMode === 'dormeur' ? `${item.absence}` : `${item.frequencyPercent}%`
+          // Affichage demandé: la fréquence brute au-dessus, et la tendance (déjà sous la boule).
+          // En mode dormeur, on garde l'absence comme indicateur principal.
+          displayLabel: sortMode === 'dormeur' ? `${item.absence}` : `${item.frequency}`
       }));
   };
   
@@ -1016,26 +1332,20 @@ export default function Console() {
           frequency: item.frequency,
           trendScore: item.trend,
           trendDirection: item.trendDirection,
-          displayLabel: sortMode === 'dormeur' ? `${item.absence}` : `${item.frequencyPercent}%`
+          // Affichage demandé: fréquence brute au-dessus, tendance sous la boule.
+          displayLabel: sortMode === 'dormeur' ? `${item.absence}` : `${item.frequency}`
       }));
   };
 
   // --- FORBO ALGORITHM: DYNAMIC CATEGORY RESOLUTION ---
-  const resolveCategory = (num: number, type: 'number' | 'star'): 'high' | 'mid' | 'low' | 'dormeur' | null => {
-      const candidates: { cat: 'high' | 'mid' | 'low' | 'dormeur', rank: number }[] = [];
+  // Mid/Low have been removed: only High + Dormeur remain.
+  const resolveCategory = (num: number, type: 'number' | 'star'): 'high' | 'dormeur' | null => {
+      const candidates: { cat: 'high' | 'dormeur', rank: number }[] = [];
 
       if (type === 'number') {
           // Check High
           const h = highFreqStats.find(s => s.number === num);
           if (h && h.rank) candidates.push({ cat: 'high', rank: h.rank });
-          
-          // Check Mid
-          const m = midFreqStats.find(s => s.number === num);
-          if (m && m.rank) candidates.push({ cat: 'mid', rank: m.rank });
-          
-          // Check Low
-          const l = lowFreqStats.find(s => s.number === num);
-          if (l && l.rank) candidates.push({ cat: 'low', rank: l.rank });
           
           // Check Dormeur
           const d = dormeurStats.find(s => s.number === num);
@@ -1044,14 +1354,6 @@ export default function Console() {
           // Check High Star
           const h = highStarStats.find(s => s.number === num);
           if (h && h.rank) candidates.push({ cat: 'high', rank: h.rank });
-          
-          // Check Mid Star
-          const m = midStarStats.find(s => s.number === num);
-          if (m && m.rank) candidates.push({ cat: 'mid', rank: m.rank });
-          
-          // Check Low Star
-          const l = lowStarStats.find(s => s.number === num);
-          if (l && l.rank) candidates.push({ cat: 'low', rank: l.rank });
           
           // Check Dormeur Star
           const d = dormeurStarStats.find(s => s.number === num);
@@ -1075,7 +1377,7 @@ export default function Console() {
 
   const getNumberCategory = (num: number) => {
     // STRICT VISIBILITY RULE: Only count if visible in the Pool (Top 10)
-    // Priority: Dormeur > High > Mid > Low
+    // Priority: Dormeur > High
     
     // 1. Check Dormeur (Top 10)
     const topDormeurs = dormeurStats.slice(0, NUMBER_POOL_LIMIT).map(s => s.number);
@@ -1085,21 +1387,13 @@ export default function Console() {
     const topHigh = highFreqStats.slice(0, NUMBER_POOL_LIMIT).map(s => s.number);
     if (topHigh.includes(num)) return 'high';
 
-    // 3. Check Mid (Top 10)
-    const topMid = midFreqStats.slice(0, NUMBER_POOL_LIMIT).map(s => s.number);
-    if (topMid.includes(num)) return 'mid';
-
-    // 4. Check Low (Top 10)
-    const topLow = lowFreqStats.slice(0, NUMBER_POOL_LIMIT).map(s => s.number);
-    if (topLow.includes(num)) return 'low';
-
     // 5. Hors Catégorie (Not visible in any pool)
     return null; 
   };
 
   const getStarCategory = (num: number) => {
     // STRICT VISIBILITY RULE: Only count if visible in the Pool (Top 12)
-    // Priority: Dormeur > High > Mid > Low
+    // Priority: Dormeur > High
 
     // 1. Check Dormeur (Top 12)
     const topStarDormeurs = dormeurStarStats.slice(0, STAR_POOL_LIMIT).map(s => s.number);
@@ -1109,26 +1403,17 @@ export default function Console() {
     const topHigh = highStarStats.slice(0, STAR_POOL_LIMIT).map(s => s.number);
     if (topHigh.includes(num)) return 'high';
 
-    // 3. Check Mid (Top 12)
-    const topMid = midStarStats.slice(0, STAR_POOL_LIMIT).map(s => s.number);
-    if (topMid.includes(num)) return 'mid';
-
-    // 4. Check Low (Top 12)
-    const topLow = lowStarStats.slice(0, STAR_POOL_LIMIT).map(s => s.number);
-    if (topLow.includes(num)) return 'low';
-
     return null;
   };
 
 
 
   const getStarSelectionCounts = () => {
-    const counts = { high: 0, mid: 0, low: 0 };
+    const counts = { high: 0, dormeur: 0 };
     selectedStars.forEach(n => {
         const cat = getStarCategory(n);
         if (cat === 'high') counts.high++;
-        else if (cat === 'mid') counts.mid++;
-        else if (cat === 'low') counts.low++;
+        else if (cat === 'dormeur') counts.dormeur++;
     });
     return counts;
   };
@@ -1179,7 +1464,7 @@ export default function Console() {
   useEffect(() => {
       if (mode === 'manual') return; // Only auto-adjust in Auto mode (pondérations)
 
-      const currentNumCount = weightHigh + weightMid + weightLow + weightDormeur;
+      const currentNumCount = selectedTariff ? selectedTariff.nums : weightHigh;
       const currentStarCount = weightStarHigh + weightStarMid + weightStarLow + weightStarDormeur;
       
       const maxEtoilesAutorise = getMaxEtoilesPourNumeros(currentNumCount);
@@ -1227,7 +1512,7 @@ export default function Console() {
           setMaxStarWeightLimit(maxEtoilesAutorise);
       }
 
-  }, [weightHigh, weightMid, weightLow, weightDormeur]); // Trigger on any number weight change
+  }, [weightHigh, selectedTariff]); // Trigger when tariff/weights change
 
 
   const checkWeightLimit = (newVal: number, oldVal: number, w1: number, w2: number, w3: number) => {
@@ -1266,7 +1551,7 @@ export default function Console() {
   };
 
   // --- MANUAL SELECTION LOGIC ---
-  const toggleSelection = (num: number, type: 'number' | 'star', category?: 'high' | 'mid' | 'low' | 'dormeur') => {
+  const toggleSelection = (num: number, type: 'number' | 'star', category?: 'high' | 'dormeur') => {
       // Mark as user modified
       userModifiedRef.current = true;
 
@@ -1335,17 +1620,14 @@ export default function Console() {
       // Price updates automatically via reactive currentPrice
   };
 
-    const currentNumCount = weightHigh + weightMid + weightLow + weightDormeur;
-    const currentStarCount = weightStarHigh + weightStarMid + weightStarLow + weightStarDormeur;
-
     // USE SELECTED TARIFF FOR PRICE DISPLAY
     const currentPrice = selectedTariff 
         ? selectedTariff.price 
         : 0;
     
     // For visual info only
-    const displayNumCount = selectedTariff ? selectedTariff.nums : currentNumCount;
-    const displayStarCount = selectedTariff ? selectedTariff.stars : currentStarCount;
+    const displayNumCount = selectedTariff ? selectedTariff.nums : 0;
+    const displayStarCount = selectedTariff ? selectedTariff.stars : 0;
     
     const isValide = isCombinaisonValide(displayNumCount, displayStarCount);
 
@@ -1353,28 +1635,10 @@ export default function Console() {
 
   // Reset all settings to default values (preset 0)
   const resetToDefault = () => {
-    // Reset counters
-    setHighFreqCount(0);
-    setMidFreqCount(0);
-    setLowFreqCount(0);
-    setHighStarCount(0);
-    setMidStarCount(0);
-    setLowStarCount(0);
-    
-    // Reset toggles
-    setHighFreqActive(false);
-    setMidFreqActive(false);
-    setLowFreqActive(false);
-    setHighStarActive(false);
-    setMidStarActive(false);
-    setLowStarActive(false);
-    setDormeurStarActive(false);
-    
     // Reset weights
     setWeightHigh(0);
-    setWeightMid(0);
-    setWeightLow(0);
-    setWeightDormeur(0);
+    setDormeurBallLevel(0);
+    setDormeurStarLevel(0);
     setWeightStarHigh(0);
     setWeightStarMid(0);
     setWeightStarLow(0);
@@ -1388,18 +1652,21 @@ export default function Console() {
     setEmailNotify(false);
     setSmsNotify(false);
     
-    // Reset hazard and tendency
+    // Reset hazard, tendency and dormeur
     setHazardLevel(0);
     setTendencyLevel(0);
+    setDormeurBallLevel(0);
+    setDormeurStarLevel(0);
     
-    // Reset mode to auto
-    setMode('auto');
+    // Mode is NOT reset - it's always based on user role
+    // If user is Admin/VIP/Abonné, mode stays 'manual'
+    // If user is Invité, mode stays 'auto'
     
     // Reset price/tariff
     setSelectedTariff(null);
     
-    // Reset simplified mode
-    setIsSimplifiedMode(false);
+    // Reset simplified mode (always true - classic mode removed)
+    setIsSimplifiedMode(true);
     
     // Reset priorities
     setSortPriority1('frequency');
@@ -1462,24 +1729,8 @@ export default function Console() {
             
             if (presetData) {
                 // Apply loaded settings
-                setHighFreqCount(presetData.highFreqCount);
-                setMidFreqCount(presetData.midFreqCount);
-                setLowFreqCount(presetData.lowFreqCount);
-                setHighFreqActive(presetData.highFreqActive);
-                setMidFreqActive(presetData.midFreqActive);
-                setLowFreqActive(presetData.lowFreqActive);
-                
-                setHighStarCount(presetData.highStarCount);
-                setMidStarCount(presetData.midStarCount);
-                setLowStarCount(presetData.lowStarCount);
-                setHighStarActive(presetData.highStarActive);
-                setMidStarActive(presetData.midStarActive);
-                setLowStarActive(presetData.lowStarActive);
-                
                 setWeightHigh(presetData.weightHigh);
-                setWeightMid(presetData.weightMid);
-                setWeightLow(presetData.weightLow);
-                setWeightDormeur(presetData.weightDormeur || 0);
+                // dormeur handled by steppers (Boules/Étoiles)
                 setWeightStarHigh(presetData.weightStarHigh);
                 setWeightStarMid(presetData.weightStarMid);
                 setWeightStarLow(presetData.weightStarLow);
@@ -1490,14 +1741,7 @@ export default function Console() {
                 setAvoidPopSeq(presetData.avoidPopSeq);
                 setAvoidFriday(presetData.avoidFriday);
 
-                // Restore Mode
-                if (presetData.mode) {
-                    if (presetData.mode === 'manual' && !canUseManual) {
-                        setMode('auto');
-                    } else {
-                        setMode(presetData.mode);
-                    }
-                }
+                // Mode is NOT restored from preset - it's always based on user role
                 
                 // Restore nouveaux paramètres (avec valeurs par défaut pour rétrocompatibilité)
                 if (presetData.hazardLevel !== undefined) setHazardLevel(presetData.hazardLevel);
@@ -1539,17 +1783,15 @@ export default function Console() {
 
       // Gather current state - TOUS les paramètres
       const currentConfig: PresetConfig = {
-        highFreqCount, midFreqCount, lowFreqCount,
-        highFreqActive, midFreqActive, lowFreqActive,
-        highStarCount, midStarCount, lowStarCount,
-        highStarActive, midStarActive, lowStarActive,
-        weightHigh, weightMid, weightLow, weightDormeur,
+        weightHigh,
         weightStarHigh, weightStarMid, weightStarLow, weightStarDormeur,
         avoidPairExt, balanceHighLow, avoidPopSeq, avoidFriday,
         mode,
         // Nouveaux paramètres
         hazardLevel,
         tendencyLevel,
+        dormeurBallLevel,
+        dormeurStarLevel,
         emailNotify,
         smsNotify,
         numCount: selectedTariff?.nums || 5,
@@ -1610,17 +1852,15 @@ export default function Console() {
 
       // Gather current state - TOUS les paramètres
       const currentConfig: PresetConfig = {
-        highFreqCount, midFreqCount, lowFreqCount,
-        highFreqActive, midFreqActive, lowFreqActive,
-        highStarCount, midStarCount, lowStarCount,
-        highStarActive, midStarActive, lowStarActive,
-        weightHigh, weightMid, weightLow, weightDormeur,
+        weightHigh,
         weightStarHigh, weightStarMid, weightStarLow, weightStarDormeur,
         avoidPairExt, balanceHighLow, avoidPopSeq, avoidFriday,
         mode,
         // Nouveaux paramètres
         hazardLevel,
         tendencyLevel,
+        dormeurBallLevel,
+        dormeurStarLevel,
         emailNotify,
         smsNotify,
         numCount: selectedTariff?.nums || 5,
@@ -1685,24 +1925,9 @@ export default function Console() {
               const config = presets[presetId] as PresetConfig;
               
               // Restore all settings
-              setHighFreqCount(config.highFreqCount);
-              setMidFreqCount(config.midFreqCount);
-              setLowFreqCount(config.lowFreqCount);
-              setHighFreqActive(config.highFreqActive);
-              setMidFreqActive(config.midFreqActive);
-              setLowFreqActive(config.lowFreqActive);
-              
-              setHighStarCount(config.highStarCount);
-              setMidStarCount(config.midStarCount);
-              setLowStarCount(config.lowStarCount);
-              setHighStarActive(config.highStarActive);
-              setMidStarActive(config.midStarActive);
-              setLowStarActive(config.lowStarActive);
-              
               setWeightHigh(config.weightHigh);
-              setWeightMid(config.weightMid);
-              setWeightLow(config.weightLow);
-              setWeightDormeur(config.weightDormeur);
+              if (config.dormeurBallLevel !== undefined) setDormeurBallLevel(config.dormeurBallLevel);
+              if (config.dormeurStarLevel !== undefined) setDormeurStarLevel(config.dormeurStarLevel);
               
               setWeightStarHigh(config.weightStarHigh);
               setWeightStarMid(config.weightStarMid);
@@ -1713,7 +1938,7 @@ export default function Console() {
               setBalanceHighLow(config.balanceHighLow);
               setAvoidPopSeq(config.avoidPopSeq);
               
-              if (config.mode) setMode(config.mode);
+              // Mode is NOT restored from config - it's always based on user role
               
               // Restore nouveaux paramètres (avec vérification pour rétrocompatibilité)
               if (config.hazardLevel !== undefined) setHazardLevel(config.hazardLevel);
@@ -1741,79 +1966,10 @@ export default function Console() {
       }
   };
 
-  // --- GENERATION LOGIC ---
-    // 1. Define Pools based on VISIBLE stats (Top 10/12)
-    const poolHigh = highFreqStats.slice(0, 10).map(s => s.number);
-    const poolMid = midFreqStats.slice(0, 10).map(s => s.number);
-    const poolLow = lowFreqStats.slice(0, 10).map(s => s.number);
-    const poolDormeur = dormeurStats.slice(0, 10).map(s => s.number);
-
-    // STRICT STAR PARTITIONING (4-4-4)
-    const poolStarHigh = highStarStats.slice(0, 4).map(s => s.number);
-    const poolStarMid = midStarStats.slice(0, 4).map(s => s.number);
-    const poolStarLow = lowStarStats.slice(0, 4).map(s => s.number);
-    const poolStarDormeur = dormeurStarStats.slice(0, 4).map(s => s.number);
-
-    // Helper to update selection when Knob changes in MANUAL mode
-    const updateCategorySelection = (
-        targetCount: number, 
-        category: 'high' | 'mid' | 'low' | 'dormeur', 
-        isStar: boolean
-    ) => {
-        // Only active in Manual Mode
-        if (mode !== 'manual') return;
-
-        const currentList = isStar ? selectedStars : selectedNumbers;
-        const setList = isStar ? setSelectedStars : setSelectedNumbers;
-        const sourceMap = isStar ? starSources : numberSources;
-        const setSourceMap = isStar ? setStarSources : setNumberSources;
-        
-        const pool = isStar 
-            ? (category === 'high' ? poolStarHigh : category === 'mid' ? poolStarMid : category === 'low' ? poolStarLow : poolStarDormeur)
-            : (category === 'high' ? poolHigh : category === 'mid' ? poolMid : category === 'low' ? poolLow : poolDormeur);
-
-        // Identify currently selected items belonging to this category
-        const currentInCategory = currentList.filter(n => pool.includes(n));
-        const otherItems = currentList.filter(n => !pool.includes(n));
-        
-        const currentCount = currentInCategory.length;
-
-        if (targetCount > currentCount) {
-            // ADD items
-            const needed = targetCount - currentCount;
-            const available = pool.filter(n => !currentList.includes(n));
-            
-            // Pick random 'needed' items from available
-            const toAdd = available.sort(() => 0.5 - Math.random()).slice(0, needed);
-            
-            const newList = [...currentList, ...toAdd];
-            setList(newList);
-            
-            // Update sources
-            const newSources = { ...sourceMap };
-            toAdd.forEach(n => newSources[n] = category);
-            setSourceMap(newSources);
-
-        } else if (targetCount < currentCount) {
-            // REMOVE items
-            const toKeepCount = targetCount;
-            // Prefer keeping items with lower index in pool (higher frequency) or random?
-            // Let's remove random ones for now
-            const toKeep = currentInCategory.sort(() => 0.5 - Math.random()).slice(0, toKeepCount);
-            
-            const newList = [...otherItems, ...toKeep];
-            setList(newList);
-            
-            // Update sources
-            const newSources = { ...sourceMap };
-            const removed = currentInCategory.filter(n => !toKeep.includes(n));
-            removed.forEach(n => delete newSources[n]);
-            setSourceMap(newSources);
-        }
-    };
-
   const handleGenerate = (modeOverride?: 'manual' | 'auto') => {
     const effectiveMode = typeof modeOverride === 'string' ? modeOverride : mode;
+    let tokenLocal: string | null = null;
+    let seqLocal = 0;
 
     setIsGenerating(true);
     setShowSuccessMessage(false);
@@ -1825,8 +1981,8 @@ export default function Console() {
     
     let calculatedNums: number[] = [];
     let calculatedStars: number[] = [];
-    let calcNumSources: Record<number, 'high' | 'mid' | 'low' | 'dormeur'> = {};
-    let calcStarSources: Record<number, 'high' | 'mid' | 'low' | 'dormeur'> = {};
+    let calcNumSources: Record<number, 'high' | 'dormeur'> = {};
+    let calcStarSources: Record<number, 'high' | 'dormeur'> = {};
     let calculationSuccess = false;
 
     try {
@@ -1861,13 +2017,13 @@ export default function Console() {
             }
 
             // Calculate effective ball weights (simplified mode ignores Mid/Low)
+            // DORMEUR is now handled as a post-processing replacement (percentage steppers),
+            // so it no longer participates in weight distribution.
             const effectiveWeightHigh = weightHigh;
-            const effectiveWeightMid = isSimplifiedMode ? 0 : weightMid;
-            const effectiveWeightLow = isSimplifiedMode ? 0 : weightLow;
-            const effectiveWeightDormeur = weightDormeur;
+            const effectiveWeightDormeur = 0;
             
             // Calculate total from effective weights
-            const weightTotalNums = effectiveWeightHigh + effectiveWeightMid + effectiveWeightLow + effectiveWeightDormeur;
+            const weightTotalNums = effectiveWeightHigh + effectiveWeightDormeur;
             // NEUTRALIZED: Star weights now derived from ball weights proportions
             // const weightTotalStars = weightStarHigh + weightStarMid + weightStarLow + weightStarDormeur;
 
@@ -1886,14 +2042,10 @@ export default function Console() {
             let effectiveStarHigh = 0, effectiveStarMid = 0, effectiveStarLow = 0, effectiveStarDormeur = 0;
             if (weightTotalNums > 0) {
                 const proportionHigh = effectiveWeightHigh / weightTotalNums;
-                const proportionMid = effectiveWeightMid / weightTotalNums;
-                const proportionLow = effectiveWeightLow / weightTotalNums;
                 const proportionDormeur = effectiveWeightDormeur / weightTotalNums;
                 
                 // Apply proportions to target stars (round, ensuring we don't exceed targetStars)
                 effectiveStarHigh = Math.round(proportionHigh * targetStars);
-                effectiveStarMid = Math.round(proportionMid * targetStars);
-                effectiveStarLow = Math.round(proportionLow * targetStars);
                 effectiveStarDormeur = Math.round(proportionDormeur * targetStars);
                 
                 // Adjust if rounding caused overflow
@@ -1916,34 +2068,44 @@ export default function Console() {
             const starFromWeights = Math.min(effectiveStarTotal, targetStars);
             const starToComplete = targetStars - starFromWeights;
 
-            // 1. Define Pools based on VISIBLE stats (Top 10/12)
-            // Ensure we handle potential empty stats gracefully by defaulting to empty array
+            // 1. Define Pools
+            // Before: based on visible categories (Top10 / Top4), which caps CHAOS exploration.
+            // Now: pools expand with CHAOS using full sorted lists (50 balls / 12 stars).
+            // Ensure we handle potential empty stats gracefully by defaulting to the previous visible pools.
             const safeHighStats = highFreqStats || [];
-            const safeMidStats = midFreqStats || [];
-            const safeLowStats = lowFreqStats || [];
             const safeDormeurStats = dormeurStats || [];
 
             const safeHighStarStats = highStarStats || [];
-            const safeMidStarStats = midStarStats || [];
-            const safeLowStarStats = lowStarStats || [];
             const safeDormeurStarStats = dormeurStarStats || [];
 
-            const poolHigh = safeHighStats.slice(0, 10).map(s => s.number);
-            const poolMid = safeMidStats.slice(0, 10).map(s => s.number);
-            const poolLow = safeLowStats.slice(0, 10).map(s => s.number);
-            const poolDormeur = safeDormeurStats.slice(0, 10).map(s => s.number);
+            const chaosCandidateRatio = Math.min(1, Math.max(0, hazardLevel / 10)); // 0..1
+            // The user can cap the max candidate pool size per pool in Settings (Top N).
+            // CHAOS then expands from a minimum baseline (10 balls / 4 stars) up to that max.
+            const highCountNums = Math.max(10, Math.min(50, Math.round(10 + chaosCandidateRatio * (poolSizes.balls.high - 10))));
+            const dormeurCountNums = Math.max(10, Math.min(50, Math.round(10 + chaosCandidateRatio * (poolSizes.balls.dormeur - 10))));
+            const trendCountNums = Math.max(10, Math.min(50, Math.round(10 + chaosCandidateRatio * (poolSizes.balls.trend - 10))));
 
-            const poolStarHigh = safeHighStarStats.slice(0, 4).map(s => s.number);
-            const poolStarMid = safeMidStarStats.slice(0, 4).map(s => s.number);
-            const poolStarLow = safeLowStarStats.slice(0, 4).map(s => s.number);
-            const poolStarDormeur = safeDormeurStarStats.slice(0, 4).map(s => s.number);
+            const highCountStars = Math.max(4, Math.min(12, Math.round(4 + chaosCandidateRatio * (poolSizes.stars.high - 4))));
+            const dormeurCountStars = Math.max(4, Math.min(12, Math.round(4 + chaosCandidateRatio * (poolSizes.stars.dormeur - 4))));
+            const trendCountStars = Math.max(4, Math.min(12, Math.round(4 + chaosCandidateRatio * (poolSizes.stars.trend - 4))));
+
+            const poolHigh = (ballPools?.byFrequency?.slice(0, highCountNums).map(s => s.number)) ?? safeHighStats.slice(0, 10).map(s => s.number);
+            const poolDormeur = (ballPools?.byDormeur?.slice(0, dormeurCountNums).map(s => s.number)) ?? safeDormeurStats.slice(0, 10).map(s => s.number);
+            const poolTrend = (ballPools?.byTrend?.slice(0, trendCountNums).map(s => s.number)) ?? [];
+
+            // Stars: expand using full 12-star pools when available
+            const poolStarHigh = (starPools?.byFrequency?.slice(0, highCountStars).map(s => s.number)) ?? safeHighStarStats.slice(0, 12).map(s => s.number);
+            const poolStarDormeur = (starPools?.byDormeur?.slice(0, dormeurCountStars).map(s => s.number)) ?? safeDormeurStarStats.slice(0, 4).map(s => s.number);
+            const poolStarTrend = (starPools?.byTrend?.slice(0, trendCountStars).map(s => s.number)) ?? [];
 
             // Safety check: If pools are empty (stats not loaded), we can't generate statistically
-            if (poolHigh.length === 0 && poolMid.length === 0) {
+            if (poolHigh.length === 0) {
                 console.error("CRITICAL: Stats appear empty during generation");
                 // We will NOT use random fallback as requested, but we must alert the user or retry logic
                 // For now, let's proceed, maybe lower pools have data?
             }
+
+            // (debug logging removed)
 
             // HAZARD SORT LOGIC
             const hazardMultipliers = [0, 5, 10, 20, 35, 50, 75, 100, 150, 250];
@@ -1952,42 +2114,93 @@ export default function Console() {
             // Leak Probability REMOVED
             // const leakProbability = hazardLevel * 0.1;
 
-            // Combined pools for stat-based selection
-                const combinedNumPool = [...poolHigh, ...poolMid, ...poolLow, ...poolDormeur];
-                const combinedStarPool = [...poolStarHigh, ...poolStarMid, ...poolStarLow, ...poolStarDormeur];
+            // Combined pools for stat-based selection:
+            // IMPORTANT (user rule): the base must always be FREQUENCY (High).
+            // TENDANCES must NOT mean "100% pool tendance". It only influences ordering/scoring inside the frequency pool.
+            // DORMEUR is a separate pool (exploration or post-processing replacement).
+            const includeTrend = tendencyLevel > 0; // used for scoring only
+            const includeDormeur = hazardLevel > 0 || dormeurBallLevel > 0 || dormeurStarLevel > 0;
+            const combinedNumPool = [
+              ...poolHigh,
+              ...(includeDormeur ? poolDormeur : []),
+            ];
+            const combinedStarPool = [
+              ...poolStarHigh,
+              ...(includeDormeur ? poolStarDormeur : []),
+            ];
                 
-            // Get all stats for scoring
-            const allNumStats = [...(highFreqStats || []), ...(midFreqStats || []), ...(lowFreqStats || []), ...(dormeurStats || [])];
-            const allStarStats = [...(highStarStats || []), ...(midStarStats || []), ...(lowStarStats || []), ...(dormeurStarStats || [])];
+            // Get full stats for scoring (so ANY candidate has real frequency/trend values)
+            const allNumStats: DisplayStat[] = (ballPools?.byNumeric || []).map(item => ({
+                number: item.number,
+                frequency: item.frequency,
+                trendScore: item.trend,
+                trendDirection: item.trendDirection
+            }));
+            const allStarStats: DisplayStat[] = (starPools?.byNumeric || []).map(item => ({
+                number: item.number,
+                frequency: item.frequency,
+                trendScore: item.trend,
+                trendDirection: item.trendDirection
+            }));
 
-            // Helper to pick based on CHAOS and TENDANCES
-            const pickWithStats = (pool: number[], stats: typeof allNumStats, count: number, exclude: number[] = []) => {
+            // Helper to pick based on CHAOS, TENDANCES and DORMEUR
+            let loggedPickNums = false;
+            let loggedPickStars = false;
+            // Track "selection score" (finalScore) used during picks for later dormeur replacement.
+            const selectionScoreNums: Record<number, number> = {};
+            const selectionScoreStars: Record<number, number> = {};
+            const pickWithStats = (pool: number[], stats: typeof allNumStats, count: number, exclude: number[] = [], dormeurPool: number[] = []) => {
                 const uniquePool = Array.from(new Set(pool)).filter(n => !exclude.includes(n));
                 
                 // Map pool numbers to their stats
                 const poolWithStats = uniquePool.map(num => {
                     const stat = stats.find(s => s.number === num);
+                    const isDormeur = dormeurPool.includes(num);
                     return {
                         num,
                         frequency: stat?.frequency || 0,
-                        trendScore: stat?.trendScore || 0
+                        trendScore: stat?.trendScore || 0,
+                        isDormeur
                     };
                 });
                     
                 // Sort based on CHAOS and TENDANCES
+                // - Base MUST remain frequency-first.
+                // - TENDANCES influences ordering inside close/identical frequencies (tie-break / bonus),
+                //   but must not replace frequency as the primary signal even at TENDANCES=10.
                 // Chaos réduit de moitié : max 0.5 à Chaos 10 (équilibre stats/hasard)
-                const chaosRatio = hazardLevel / 20;
-                const tendanceWeight = tendencyLevel / 10;
+                const chaosRatio = hazardLevel / 20; // 0..0.5
+                const tendanceWeight = tendencyLevel / 10; // 0..1
+
+                const poolFreqs = poolWithStats.map(it => it.frequency);
+                const poolMinFreq = poolFreqs.length ? Math.min(...poolFreqs) : 0;
+                const poolMaxFreq = poolFreqs.length ? Math.max(...poolFreqs) : 0;
+                const poolFreqRange = poolMaxFreq - poolMinFreq || 1;
 
                 const sorted = poolWithStats
                     .map(item => {
-                        const statScore = item.frequency * (1 - tendanceWeight) + item.trendScore * 10 * tendanceWeight;
-                        const randomFactor = Math.random() * 100 * chaosRatio;
-                        return { ...item, finalScore: statScore + randomFactor };
+                        // Trend bonus bounded to <= 0.5 * freqRange at TENDANCES=10
+                        const trendBonus = (tendanceWeight * (item.trendScore / 10)) * (poolFreqRange * 0.5);
+                        // Chaos noise bounded to <= 0.5 * freqRange at CHAOS=10 (since chaosRatio max 0.5)
+                        const randomFactor = Math.random() * poolFreqRange * chaosRatio;
+                        const finalScore = item.frequency + trendBonus + randomFactor;
+                        return { ...item, finalScore };
                     })
-                    .sort((a, b) => b.finalScore - a.finalScore);
+                    .sort((a, b) =>
+                        (b.finalScore - a.finalScore) ||
+                        // deterministic fallback to reduce flicker when scores are equal
+                        (b.frequency - a.frequency) ||
+                        (b.trendScore - a.trendScore) ||
+                        (a.num - b.num)
+                    );
 
-                return sorted.slice(0, count).map(s => s.num);
+                const pickedSlice = sorted.slice(0, count);
+                const isStarContext = stats === allStarStats;
+                pickedSlice.forEach(s => {
+                    if (isStarContext) selectionScoreStars[s.num] = s.finalScore;
+                    else selectionScoreNums[s.num] = s.finalScore;
+                });
+                return pickedSlice.map(s => s.num);
             };
 
             // Check if weights are all zero (pure stats mode)
@@ -1995,267 +2208,195 @@ export default function Console() {
             const weightsAreZero = weightTotalNums === 0;
 
             // Helper: Determine source category for a number based on which pool it came from
-            const getSourceCategory = (num: number, isStar: boolean): 'high' | 'mid' | 'low' | 'dormeur' => {
+            const getSourceCategory = (num: number, isStar: boolean): 'high' | 'dormeur' => {
                 if (isStar) {
                     if (poolStarHigh.includes(num)) return 'high';
-                    if (poolStarMid.includes(num)) return 'mid';
-                    if (poolStarLow.includes(num)) return 'low';
                     if (poolStarDormeur.includes(num)) return 'dormeur';
                 } else {
                     if (poolHigh.includes(num)) return 'high';
-                    if (poolMid.includes(num)) return 'mid';
-                    if (poolLow.includes(num)) return 'low';
                     if (poolDormeur.includes(num)) return 'dormeur';
                 }
-                return 'low'; // fallback
+                return 'high'; // fallback
             };
 
             if (!isWeightsEnabled || weightsAreZero) {
                 // --- PURE STATISTICS MODE ---
-                // Use TARIFF + CHAOS/TENDANCES, no category constraints
-                calculatedNums = pickWithStats(combinedNumPool, allNumStats, totalNums).sort((a, b) => a - b);
-                calculatedStars = pickWithStats(combinedStarPool, allStarStats, totalStars).sort((a, b) => a - b);
-                
-                // Populate sources based on which pool each number belongs to
+                calculatedNums = pickWithStats(combinedNumPool, allNumStats, totalNums, [], poolDormeur).sort((a, b) => a - b);
                 calculatedNums.forEach(num => {
                     calcNumSources[num] = getSourceCategory(num, false);
                 });
+                
+                // Stars: always pure stats (no dormeur forcing for stars)
+                calculatedStars = pickWithStats(combinedStarPool, allStarStats, totalStars, [], poolStarDormeur).sort((a, b) => a - b);
                 calculatedStars.forEach(num => {
                     calcStarSources[num] = getSourceCategory(num, true);
                 });
-                
-                calculationSuccess = true;
-
-            } else if (numToComplete > 0 || starToComplete > 0) {
-                // --- PARTIAL WEIGHTS MODE ---
-                // Use weights for defined categories, then complete with best stats
-                let numsFromCategories: number[] = [];
-                let starsFromCategories: number[] = [];
-
-                // Pick from each category based on EFFECTIVE weights AND record sources
-                if (effectiveWeightHigh > 0) {
-                    const picked = pickWithStats(poolHigh, allNumStats, effectiveWeightHigh, numsFromCategories);
-                    picked.forEach(num => calcNumSources[num] = 'high');
-                    numsFromCategories.push(...picked);
-                }
-                if (effectiveWeightMid > 0) {
-                    const picked = pickWithStats(poolMid, allNumStats, effectiveWeightMid, numsFromCategories);
-                    picked.forEach(num => calcNumSources[num] = 'mid');
-                    numsFromCategories.push(...picked);
-                }
-                if (effectiveWeightLow > 0) {
-                    const picked = pickWithStats(poolLow, allNumStats, effectiveWeightLow, numsFromCategories);
-                    picked.forEach(num => calcNumSources[num] = 'low');
-                    numsFromCategories.push(...picked);
-                }
-                if (effectiveWeightDormeur > 0) {
-                    const picked = pickWithStats(poolDormeur, allNumStats, effectiveWeightDormeur, numsFromCategories);
-                    picked.forEach(num => calcNumSources[num] = 'dormeur');
-                    numsFromCategories.push(...picked);
-                }
-
-                // STARS: Use EFFECTIVE weights derived from ball ponderation proportions
-                if (effectiveStarHigh > 0) {
-                    const picked = pickWithStats(poolStarHigh, allStarStats, effectiveStarHigh, starsFromCategories);
-                    picked.forEach(num => calcStarSources[num] = 'high');
-                    starsFromCategories.push(...picked);
-                }
-                if (effectiveStarMid > 0) {
-                    const picked = pickWithStats(poolStarMid, allStarStats, effectiveStarMid, starsFromCategories);
-                    picked.forEach(num => calcStarSources[num] = 'mid');
-                    starsFromCategories.push(...picked);
-                }
-                if (effectiveStarLow > 0) {
-                    const picked = pickWithStats(poolStarLow, allStarStats, effectiveStarLow, starsFromCategories);
-                    picked.forEach(num => calcStarSources[num] = 'low');
-                    starsFromCategories.push(...picked);
-                }
-                if (effectiveStarDormeur > 0) {
-                    const picked = pickWithStats(poolStarDormeur, allStarStats, effectiveStarDormeur, starsFromCategories);
-                    picked.forEach(num => calcStarSources[num] = 'dormeur');
-                    starsFromCategories.push(...picked);
-                }
-
-                // Complete with best stats from all pools (excluding already selected)
-                // For completion, use getSourceCategory to determine the source
-                if (numToComplete > 0) {
-                    const completion = pickWithStats(combinedNumPool, allNumStats, numToComplete, numsFromCategories);
-                    completion.forEach(num => calcNumSources[num] = getSourceCategory(num, false));
-                    numsFromCategories.push(...completion);
-                }
-                if (starToComplete > 0) {
-                    const completion = pickWithStats(combinedStarPool, allStarStats, starToComplete, starsFromCategories);
-                    completion.forEach(num => calcStarSources[num] = getSourceCategory(num, true));
-                    starsFromCategories.push(...completion);
-                }
-
-                calculatedNums = numsFromCategories.sort((a, b) => a - b);
-                calculatedStars = starsFromCategories.sort((a, b) => a - b);
-                calculationSuccess = true;
-
             } else {
-                // --- STANDARD LOGIC (EXISTING) WITH STRUCTURAL CHAOS ---
-                let attempts = 0;
-                let success = false;
-                
-                let allSelectedNums: number[] = [];
-                let allSelectedStars: number[] = [];
+                // --- WEIGHTED MODE (PONDÉRÉ) ---
+                // When pondérations are enabled and non-zero, we must generate a grid here.
 
-                // Combined pools for chaos leak fallback - RESTRICTED TO VISIBLE POOLS (Top 10 / Top 4)
-                // User requirement: Even in chaos, only pick from the "visible" numbers (Top 10 of each section).
-                const combinedNumPool = [...poolHigh, ...poolMid, ...poolLow, ...poolDormeur];
-                const combinedStarPool = [...poolStarHigh, ...poolStarMid, ...poolStarLow, ...poolStarDormeur];
+                // 1) Determine how many numbers to pick from each pool.
+                // We treat knob values as requested counts; clamp to tariff total.
+                let wantHigh = Math.max(0, Math.floor(effectiveWeightHigh));
+                let wantDormeur = Math.max(0, Math.floor(effectiveWeightDormeur));
 
-                while(attempts < 50 && !success) {
-                    attempts++;
-                    
-                    // Reset per attempt
-                    calcNumSources = {};
-                    calcStarSources = {};
-                    allSelectedNums = [];
-                    allSelectedStars = [];
-
-                    const selectUnique = (pool: number[], count: number, exclude: number[], category: 'high' | 'mid' | 'low' | 'dormeur', isStar: boolean) => {
-                        let selection: number[] = [];
-                        
-                        // Pools definition
-                        const availableStrict = pool.filter(n => !exclude.includes(n));
-                        const availableGlobal = (isStar ? combinedStarPool : combinedNumPool).filter(n => !exclude.includes(n));
-
-                        for(let i=0; i<count; i++) {
-                            // Decide source for this single pick: STRICT ONLY (Leak Removed)
-                            // const isLeaking = Math.random() < leakProbability;
-                            
-                            // Define Candidate Pool
-                            // ALWAYS STRICT
-                            let candidatePool = availableStrict;
-                            
-                            // Filter out duplicates within current batch selection
-                            candidatePool = candidatePool.filter(n => !selection.includes(n));
-                            
-                            // FALLBACKS:
-                            // If strict pool is empty:
-                            // - If Chaos > 0: FAIL (Strict obedience, no security).
-                            // - If Chaos == 0: FALLBACK allowed (Ensure grid completion for "safe" mode).
-                            if (candidatePool.length === 0) {
-                                if (hazardLevel === 0) {
-                                     // console.log("Chaos 0: Using fallback for empty strict pool");
-                                     candidatePool = availableGlobal.filter(n => !selection.includes(n));
-                                }
-                            }
-                            
-                            if (candidatePool.length === 0) break; // Should not happen if total counts are valid
-
-                            // Sort candidates with random noise (Fuzziness)
-                            const sorted = candidatePool
-                                .map((num, index) => ({
-                                    num,
-                                    sortScore: Math.random() // Pure random within the decided pool
-                                }))
-                                .sort((a, b) => b.sortScore - a.sortScore);
-                            
-                            const picked = sorted[0].num;
-                            selection.push(picked);
-                        }
-                        
-                        selection.forEach(num => {
-                            if (isStar) calcStarSources[num] = category;
-                            else calcNumSources[num] = category;
-                        });
-                        
-                        return selection;
-                    };
-                    // NUMBERS - Use EFFECTIVE weights (simplified mode ignores Mid/Low)
-                    allSelectedNums.push(...selectUnique(poolHigh, effectiveWeightHigh, allSelectedNums, 'high', false));
-                    allSelectedNums.push(...selectUnique(poolMid, effectiveWeightMid, allSelectedNums, 'mid', false));
-                    allSelectedNums.push(...selectUnique(poolLow, effectiveWeightLow, allSelectedNums, 'low', false));
-                    allSelectedNums.push(...selectUnique(poolDormeur, effectiveWeightDormeur, allSelectedNums, 'dormeur', false));
-
-                    // STARS - Use EFFECTIVE weights derived from ball ponderation proportions
-                    allSelectedStars.push(...selectUnique(poolStarHigh, effectiveStarHigh, allSelectedStars, 'high', true));
-                    allSelectedStars.push(...selectUnique(poolStarMid, effectiveStarMid, allSelectedStars, 'mid', true));
-                    allSelectedStars.push(...selectUnique(poolStarLow, effectiveStarLow, allSelectedStars, 'low', true));
-                    allSelectedStars.push(...selectUnique(poolStarDormeur, effectiveStarDormeur, allSelectedStars, 'dormeur', true));
-                    
-                    // --- CONSTRAINT CHECKS ---
-                    if (avoidPairExt && allSelectedNums.length > 0) {
-                        const allEven = allSelectedNums.every(n => n % 2 === 0);
-                        const allOdd = allSelectedNums.every(n => n % 2 !== 0);
-                        if (allEven || allOdd) continue;
-                    }
-
-                    if (balanceHighLow && allSelectedNums.length > 0) {
-                        const allHigh = allSelectedNums.every(n => n > 25);
-                        const allLow = allSelectedNums.every(n => n <= 25);
-                        if (allHigh || allLow) continue;
-                    }
-
-                    if (avoidPopSeq && allSelectedNums.length > 0) {
-                        const sortedCheck = [...allSelectedNums].sort((a, b) => a - b);
-                        let hasSequence = false;
-                        for (let i = 0; i < sortedCheck.length - 2; i++) {
-                             if (sortedCheck[i+1] === sortedCheck[i] + 1 && sortedCheck[i+2] === sortedCheck[i] + 2) {
-                                 hasSequence = true;
-                                 break;
-                             }
-                        }
-                        if (hasSequence) continue;
-                    }
-                    
-                    success = true;
+                // Clamp down if the sum exceeds the tariff total.
+                // Preference: keep Dormeur and High first, reduce Low -> Mid -> High -> Dormeur.
+                let sumWant = wantHigh + wantDormeur;
+                while (sumWant > totalNums) {
+                    if (wantHigh > 0) wantHigh--;
+                    else if (wantDormeur > 0) wantDormeur--;
+                    sumWant = wantHigh + wantDormeur;
                 }
 
-                if (!success) {
-                    console.warn("Could not satisfy all constraints strictly");
-                    toast.warning("Certaines contraintes (Pair/Impair, H/B, Séquences) n'ont pas pu être satisfaites strictement.");
-                }
-
-                // --- RECALCULATE SOURCES & UPDATE KNOBS (CHAOS FEEDBACK) ---
-                // DISABLED AS REQUESTED - KNOBS MUST REMAIN FIXED
-                
-                /*
-                // Since Chaos might have picked numbers from outside the requested category,
-                // we must re-evaluate the TRUE category of every selected number to update the knobs.
-                
-                const getTrueCategory = (n: number, isStar: boolean) => {
-                     let category: 'high' | 'mid' | 'low' | 'dormeur' = 'low'; // Default base
-                     
-                     if (isStar) {
-                         // Check Dormeur First (Top 4)
-                         if (safeDormeurStarStats.slice(0, 4).some(x => x.number === n)) category = 'dormeur';
-                         // Overwrite with Frequency (Mid/High take priority)
-                         if (safeMidStarStats.some(x => x.number === n)) category = 'mid';
-                         if (safeHighStarStats.some(x => x.number === n)) category = 'high';
-                     } else {
-                         // Check Dormeur First (Top 12)
-                         if (safeDormeurStats.slice(0, 12).some(x => x.number === n)) category = 'dormeur';
-                         // Overwrite with Frequency (Mid/High take priority)
-                         if (safeMidStats.some(x => x.number === n)) category = 'mid';
-                         if (safeHighStats.some(x => x.number === n)) category = 'high';
-                     }
-                     return category;
+                // 2) Pick numbers per category, ensuring uniqueness via exclude.
+                const pickedNums: number[] = [];
+                const pickCategory = (pool: number[], count: number) => {
+                    if (count <= 0) return;
+                    const chosen = pickWithStats(pool, allNumStats, count, pickedNums, poolDormeur);
+                    chosen.forEach(n => {
+                        if (!pickedNums.includes(n)) pickedNums.push(n);
+                    });
                 };
 
-                let h=0, m=0, l=0, d=0;
-                allSelectedNums.forEach(n => {
-                    const cat = getTrueCategory(n, false);
-                    calcNumSources[n] = cat;
-                    if(cat === 'high') h++; else if(cat === 'mid') m++; else if(cat === 'low') l++; else if(cat === 'dormeur') d++;
-                });
-                setWeightHigh(h); setWeightMid(m); setWeightLow(l); setWeightDormeur(d);
+                pickCategory(poolHigh, wantHigh);
+                pickCategory(poolDormeur, wantDormeur);
 
-                let sh=0, sm=0, sl=0, sd=0;
-                allSelectedStars.forEach(n => {
-                    const cat = getTrueCategory(n, true);
-                    calcStarSources[n] = cat;
-                    if(cat === 'high') sh++; else if(cat === 'mid') sm++; else if(cat === 'low') sl++; else if(cat === 'dormeur') sd++;
-                });
-                setWeightStarHigh(sh); setWeightStarMid(sm); setWeightStarLow(sl); setWeightStarDormeur(sd);
-                */
+                // 3) Complete remaining numbers with best overall weighted picks.
+                const remainingNumsCount = totalNums - pickedNums.length;
+                if (remainingNumsCount > 0) {
+                    const extra = pickWithStats(combinedNumPool, allNumStats, remainingNumsCount, pickedNums, poolDormeur);
+                    extra.forEach(n => {
+                        if (!pickedNums.includes(n)) pickedNums.push(n);
+                    });
+                }
 
-                calculatedNums = allSelectedNums.sort((a, b) => a - b);                calculatedStars = allSelectedStars.sort((a, b) => a - b);
+                calculatedNums = pickedNums.slice(0, totalNums).sort((a, b) => a - b);
+                calculatedNums.forEach(num => {
+                    calcNumSources[num] = getSourceCategory(num, false);
+                });
+
+                // 4) Stars: use the already computed effectiveStar* counts; clamp and pick similarly.
+                let wantStarHigh = Math.max(0, Math.floor(effectiveStarHigh));
+                let wantStarDormeur = Math.max(0, Math.floor(effectiveStarDormeur));
+
+                let sumStarWant = wantStarHigh + wantStarDormeur;
+                while (sumStarWant > totalStars) {
+                    if (wantStarDormeur > 0) wantStarDormeur--;
+                    else if (wantStarHigh > 0) wantStarHigh--;
+                    sumStarWant = wantStarHigh + wantStarDormeur;
+                }
+
+                const pickedStars: number[] = [];
+                const pickStarCategory = (pool: number[], count: number) => {
+                    if (count <= 0) return;
+                    const chosen = pickWithStats(pool, allStarStats, count, pickedStars, poolStarDormeur);
+                    chosen.forEach(n => {
+                        if (!pickedStars.includes(n)) pickedStars.push(n);
+                    });
+                };
+
+                pickStarCategory(poolStarHigh, wantStarHigh);
+                pickStarCategory(poolStarDormeur, wantStarDormeur);
+
+                const remainingStarsCount = totalStars - pickedStars.length;
+                if (remainingStarsCount > 0) {
+                    const extraStars = pickWithStats(combinedStarPool, allStarStats, remainingStarsCount, pickedStars, poolStarDormeur);
+                    extraStars.forEach(n => {
+                        if (!pickedStars.includes(n)) pickedStars.push(n);
+                    });
+                }
+
+                calculatedStars = pickedStars.slice(0, totalStars).sort((a, b) => a - b);
+                calculatedStars.forEach(num => {
+                    calcStarSources[num] = getSourceCategory(num, true);
+                });
             }
-            
+
+            // --- DORMEUR % REPLACEMENT (post-processing) ---
+            if (effectiveMode === 'auto' && (dormeurBallLevel > 0 || dormeurStarLevel > 0)) {
+                // For small totals (ex: 2 stars), floor can yield 0 even if user asked dormeurs > 0.
+                // Use rounded percentage with a minimum of 1 when level > 0.
+                const k = Math.min(
+                    totalNums,
+                    dormeurBallLevel > 0 ? Math.max(1, Math.round((totalNums * dormeurBallLevel) / 10)) : 0
+                );
+                const ks = Math.min(
+                    totalStars,
+                    dormeurStarLevel > 0 ? Math.max(1, Math.round((totalStars * dormeurStarLevel) / 10)) : 0
+                );
+
+                // 1) Numbers
+                if (k > 0) {
+                    const beforeNums = [...calculatedNums];
+                    const scored = calculatedNums.map(n => ({ n, score: selectionScoreNums[n] ?? Number.POSITIVE_INFINITY }));
+                    scored.sort((a, b) => a.score - b.score);
+                    const toReplace = scored.slice(0, k).map(x => x.n);
+                    const remaining = calculatedNums.filter(n => !toReplace.includes(n));
+                    const dormeurPoolFull = dormeurStats.map(s => s.number); // sorted by absence desc
+                    const injected: number[] = [];
+                    for (const cand of dormeurPoolFull) {
+                        if (injected.length >= k) break;
+                        if (remaining.includes(cand) || injected.includes(cand) || toReplace.includes(cand)) continue;
+                        injected.push(cand);
+                    }
+                    toReplace.forEach(n => { delete calcNumSources[n]; });
+                    injected.forEach(n => { calcNumSources[n] = 'dormeur'; });
+                    calculatedNums = [...remaining, ...injected].slice(0, totalNums).sort((a, b) => a - b);
+
+                    setLastDormeurProof(prev => ({
+                        at: Date.now(),
+                        effectiveMode,
+                        stars: prev?.stars,
+                        nums: {
+                            level: dormeurBallLevel,
+                            k,
+                            before: beforeNums.slice().sort((a, b) => a - b),
+                            toReplace,
+                            injected,
+                            after: calculatedNums,
+                        },
+                    }));
+
+                    // (debug logging removed)
+                }
+
+                // 2) Stars
+                if (ks > 0) {
+                    const beforeStars = [...calculatedStars];
+                    const scoredS = calculatedStars.map(n => ({ n, score: selectionScoreStars[n] ?? Number.POSITIVE_INFINITY }));
+                    scoredS.sort((a, b) => a.score - b.score);
+                    const toReplaceS = scoredS.slice(0, ks).map(x => x.n);
+                    const remainingS = calculatedStars.filter(n => !toReplaceS.includes(n));
+                    const dormeurPoolStarsFull = dormeurStarStats.map(s => s.number);
+                    const injectedS: number[] = [];
+                    for (const cand of dormeurPoolStarsFull) {
+                        if (injectedS.length >= ks) break;
+                        if (remainingS.includes(cand) || injectedS.includes(cand) || toReplaceS.includes(cand)) continue;
+                        injectedS.push(cand);
+                    }
+                    toReplaceS.forEach(n => { delete calcStarSources[n]; });
+                    injectedS.forEach(n => { calcStarSources[n] = 'dormeur'; });
+                    calculatedStars = [...remainingS, ...injectedS].slice(0, totalStars).sort((a, b) => a - b);
+
+                    setLastDormeurProof(prev => ({
+                        at: Date.now(),
+                        effectiveMode,
+                        nums: prev?.nums,
+                        stars: {
+                            level: dormeurStarLevel,
+                            ks,
+                            before: beforeStars.slice().sort((a, b) => a - b),
+                            toReplace: toReplaceS,
+                            injected: injectedS,
+                            after: calculatedStars,
+                        },
+                    }));
+
+                    // (debug logging removed)
+                }
+            }
+
             calculationSuccess = true;
         }
 
@@ -2269,7 +2410,7 @@ export default function Console() {
     // --- SYNCHRONOUS CALCULATION END ---
 
     // Simulate Calculation Delay then Display
-    setTimeout(() => {
+    const timeoutId = window.setTimeout(() => {
         if (!calculationSuccess) {
             setIsGenerating(false);
             return;
@@ -2282,8 +2423,8 @@ export default function Console() {
              setStarSources(calcStarSources);
              
              // STACK MODE for Auto: Add to history of current session
-             // VIP/Admin: visible immédiatement, Invite/Abonné: toujours masqué
-             const newDraw = { nums: calculatedNums, stars: calculatedStars, date: new Date(), revealed: isAdminOrVip };
+             // VIP/Admin/Abonné: visible immédiatement, Invite: toujours masqué
+             const newDraw = { nums: calculatedNums, stars: calculatedStars, date: new Date(), revealed: isAdminOrVip || isAbonne };
              setAutoDraws(prev => [newDraw, ...prev]);
         } else {
              // Manual Mode: Also stack results for visual consistency, but revealed immediately?
@@ -2302,6 +2443,7 @@ export default function Console() {
         setIsGenerating(false);
 
     }, 2000);
+    genTimeoutRef.current = timeoutId;
   };
 
   const handleReset = (e: React.MouseEvent) => {
@@ -2323,9 +2465,8 @@ export default function Console() {
       
       // 2. Reset Weights (Potards) - Numéros
       setWeightHigh(0);
-      setWeightMid(0);
-      setWeightLow(0);
-      setWeightDormeur(0);
+      setDormeurBallLevel(0);
+      setDormeurStarLevel(0);
       
       // Weights - Étoiles
       setWeightStarHigh(0);
@@ -2338,9 +2479,9 @@ export default function Console() {
       
       // 4. Reset Chaos et Tendance
       // Chaos à 0 = minimum de chaos (100% statistiques)
-      // Tendance à 10 = max influence tendance (bouton à gauche, affiche 10)
+      // Tendance à 0 = aucune influence tendance (stat pure)
       setHazardLevel(0);
-      setTendencyLevel(10);
+      setTendencyLevel(0);
       
       // 5. Reset Email/SMS
       setEmailNotify(false);
@@ -2356,18 +2497,8 @@ export default function Console() {
       setBalanceHighLow(false);
       setAvoidPopSeq(false);
       
-      // 8. Reset Toggle switches des pondérations
-      setHighActive(true);
-      setMidActive(true);
-      setLowActive(true);
-      setDormeurActive(true);
-      setHighStarActive(true);
-      setMidStarActive(true);
-      setLowStarActive(true);
-      setDormeurStarActive(true);
-      
       // 9. Reset preset sélectionné
-      setSelectedPreset(null);
+      setSelectedPreset("0");
       
       // NOTE: On NE réinitialise PAS les priorités de tri (sortPriority1, sortPriority2, sortPriority3)
       // ni le mode simplifié/classique (isSimplifiedMode) selon la demande de l'utilisateur
@@ -2387,8 +2518,21 @@ export default function Console() {
           return;
       }
 
-      // Pour les invités et abonnés : envoyer par email
-      if (isInviteOrAbonne) {
+      // Pour les invités uniquement : vérifier le mode
+      if (isInvite) {
+          if (emailModeEnabled) {
+              // Mode Email : envoyer par email (sans popup)
+              executeEmailSend();
+          } else {
+              // Mode Direct : afficher popup gratitude
+              setShowInviteSendPopup(true);
+              setInviteGratitudeAccepted(false);
+          }
+          return;
+      }
+
+      // Pour les abonnés : envoyer par email (comportement actuel)
+      if (isAbonne) {
           executeEmailSend();
           return;
       }
@@ -2402,11 +2546,15 @@ export default function Console() {
       setIsSending(true);
       
       try {
-          // Préparer les grilles à envoyer
-          const drawsToSend = autoDraws.length > 0 
-              ? autoDraws.map(d => ({ nums: d.nums, stars: d.stars }))
-              : [{ nums: generatedNumbers, stars: generatedStars }];
+          // Récupérer la date du prochain tirage (même logique que saveGridToDB)
+          const nextDraw = getProchainTirage();
+          const targetDateStr = nextDraw.date.toISOString().split('T')[0]; // Format YYYY-MM-DD
           
+          // Préparer les grilles à envoyer avec targetDate
+          const drawsToSend = autoDraws.length > 0 
+              ? autoDraws.map(d => ({ nums: d.nums, stars: d.stars, targetDate: targetDateStr }))
+              : [{ nums: generatedNumbers, stars: generatedStars, targetDate: targetDateStr }];
+
           // Appeler l'API pour envoyer l'email
           const response = await fetch('/api/draws/request', {
               method: 'POST',
@@ -2418,11 +2566,28 @@ export default function Console() {
           const data = await response.json();
           
           if (data.success) {
+              // Pour les invités : NE PAS sauvegarder en DB ici (sera fait après confirmation email)
+              // Pour les abonnés : sauvegarder directement
+              if (isAbonne && !isInvite) {
+                  for (const draw of drawsToSend) {
+                      if (draw.nums.length > 0 && draw.stars.length > 0) {
+                          await saveGridToDB(draw.nums, draw.stars);
+                      }
+                  }
+              }
+              
               playSound('bling');
               setSendingMessage(`📧 EMAIL ENVOYÉ !`);
-              toast.success(`Un email vous a été envoyé avec ${drawsToSend.length} grille(s). Vérifiez votre boîte mail !`, {
-                  duration: 8000,
-              });
+              
+              if (isInvite) {
+                  toast.success(`Un email de confirmation vous a été envoyé. Vérifiez votre boîte mail et confirmez pour recevoir vos numéros !`, {
+                      duration: 8000,
+                  });
+              } else {
+                  toast.success(`Un email vous a été envoyé avec ${drawsToSend.length} grille(s). Vérifiez votre boîte mail !`, {
+                      duration: 8000,
+                  });
+              }
               
               // Vider les autoDraws après l'envoi
               setAutoDraws([]);
@@ -2444,24 +2609,137 @@ export default function Console() {
       }
   };
 
+  // Fonction pour valider le popup gratitude invité et envoyer directement
+  const handleInviteGratitudeValidate = async () => {
+      // Lire directement la valeur de la checkbox au lieu de se fier à l'état (stale closure)
+      const checkbox = document.getElementById('gratitude-checkbox') as HTMLInputElement;
+      const isAccepted = checkbox?.checked || false;
+      
+      console.log('[Console] handleInviteGratitudeValidate appelée', { isAccepted, inviteGratitudeAccepted, showInviteSendPopup });
+      if (!isAccepted) {
+          console.log('[Console] Case non cochée, affichage erreur');
+          toast.error('Vous devez accepter en cochant la case');
+          return;
+      }
+      console.log('[Console] Validation OK, poursuite du traitement');
+
+      setShowInviteSendPopup(false);
+      
+      // Récupérer la date du prochain tirage (même logique que saveGridToDB)
+      const nextDraw = getProchainTirage();
+      const targetDateStr = nextDraw.date.toISOString().split('T')[0]; // Format YYYY-MM-DD
+      
+      // Préparer les grilles à sauvegarder et envoyer avec targetDate
+      const drawsToSave = autoDraws.length > 0 
+          ? autoDraws.map(d => ({ nums: d.nums, stars: d.stars, targetDate: targetDateStr }))
+          : [{ nums: generatedNumbers, stars: generatedStars, targetDate: targetDateStr }];
+      
+      // IMPORTANT: si le toggle EMAIL est OFF, on ne doit envoyer AUCUN email.
+      // On ne touche donc pas à /api/draws/send-direct : on sauvegarde seulement les grilles, puis popup2.
+      if (!emailModeEnabled) {
+          setIsSending(true);
+          try {
+              let savedCount = 0;
+              for (const draw of drawsToSave) {
+                  if ((draw.nums?.length || 0) > 0 && (draw.stars?.length || 0) > 0) {
+                      const saved = await saveGridToDB(draw.nums, draw.stars);
+                      if (saved) savedCount++;
+                  }
+              }
+
+              playSound('bling');
+              toast.success(`${savedCount} grille(s) sauvegardée(s). Aucun email n'a été envoyé.`);
+
+              // Vider les grilles et rester sur la console
+              setAutoDraws([]);
+              setGeneratedNumbers([]);
+              setGeneratedStars([]);
+              setSendCount(prev => prev + savedCount);
+
+              // Afficher le popup de consultation
+              setShowConsultationPopup(true);
+              return;
+          } catch (error: any) {
+              console.error('Erreur sauvegarde grilles (mode sans email):', error);
+              playSound('error');
+              toast.error(error?.message || "Erreur lors de la sauvegarde. Réessayez.");
+              return;
+          } finally {
+              setIsSending(false);
+          }
+      }
+
+      setIsSending(true);
+      try {
+          // Appeler l'API pour sauvegarder les grilles ET envoyer l'email 2 automatiquement
+          const response = await fetch('/api/draws/send-direct', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'include',
+              body: JSON.stringify({ draws: drawsToSave }),
+          });
+          
+          const data = await response.json();
+          
+          if (!response.ok || !data.success) {
+              throw new Error(data.error || 'Erreur lors de l\'envoi');
+          }
+          
+          playSound('bling');
+          toast.success(`${drawsToSave.length} grille(s) envoyée(s) ! L'email avec vos numéros vous a été envoyé.`);
+          
+          // Vider les grilles et rester sur la console
+          setAutoDraws([]);
+          setGeneratedNumbers([]);
+          setGeneratedStars([]);
+          setSendCount(prev => prev + drawsToSave.length);
+          
+          // Afficher le popup de consultation
+          setShowConsultationPopup(true);
+          
+          // Pas de redirection - l'utilisateur reste sur la console
+          // Il peut aller voir ses grilles manuellement via le menu "Mes Grilles Jouées" s'il le souhaite
+      } catch (error: any) {
+          console.error('Erreur sauvegarde grilles:', error);
+          playSound('error');
+          toast.error(error.message || "Erreur lors de la sauvegarde. Réessayez.");
+      } finally {
+          setIsSending(false);
+      }
+  };
+
+  // Fonction pour gérer la consultation des grilles (bouton Oui)
+  const handleConsultationYes = () => {
+      setShowConsultationPopup(false);
+      // Simuler l'action Menu : naviguer vers Mes grilles jouées
+      setLocation('/my-grids?highlight=1');
+      playSound('click');
+  };
+
+  // Fonction pour fermer le popup de consultation (bouton Non)
+  const handleConsultationNo = () => {
+      setShowConsultationPopup(false);
+      playSound('click');
+  };
+
   // Fonction d'exécution de l'envoi LOCAL (pour VIP/Admin)
-  const executeSend = () => {
+  const executeSend = async () => {
       // Set active sending state
       setIsSending(true);
       
       let grillesToSend = 0;
       
-      // Sauvegarder TOUTES les grilles de autoDraws
+      // Sauvegarder TOUTES les grilles de autoDraws dans la DB
       if (autoDraws.length > 0) {
-          autoDraws.forEach((draw) => {
+          for (const draw of autoDraws) {
               if (draw.nums.length > 0 && draw.stars.length > 0) {
-                  saveGridToHistory(draw.nums, draw.stars);
+                  await saveGridToDB(draw.nums, draw.stars);
                   grillesToSend++;
               }
-          });
+          }
       } else if (generatedNumbers.length > 0 && generatedStars.length > 0) {
           // Fallback: sauvegarder la grille actuelle si pas d'autoDraws
-          saveGridToHistory(generatedNumbers, generatedStars);
+          await saveGridToDB(generatedNumbers, generatedStars);
           grillesToSend = 1;
       }
       
@@ -2484,16 +2762,6 @@ export default function Console() {
           setIsSending(false);
           setSendingMessage("");
       }, 5000);
-  };
-
-  // Validation CGU et envoi pour les invités (plus utilisé, gardé pour compatibilité)
-  const handleCguValidate = () => {
-      if (!cguAccepted) {
-          playSound('error');
-          return;
-      }
-      setShowCguModal(false);
-      executeSend();
   };
 
   const resetSendCount = (e: React.MouseEvent) => {
@@ -2521,15 +2789,502 @@ export default function Console() {
     }
   }, [isGenerating]);
 
+  const ActionsControls = ({ variant = 'panel' }: { variant?: 'panel' | 'rack' }) => {
+    if (variant === 'rack') {
+      return (
+        <div className="w-full h-full flex flex-col items-center justify-evenly">
+          {/* Send / Trash / Envois (au-dessus des boutons Rechercher/Valider) */}
+          <div className="flex flex-col items-center gap-1">
+            <div className="flex items-center gap-2">
+            <div className="rounded-xl overflow-hidden">
+              <CasinoButton 
+                variant="primary"
+                size="md"
+                className={cn(
+                  // Calqué sur le format des boutons RECHERCHER / VALIDER
+                  "rounded-none text-sm px-4 py-[10px] w-[140px] flex items-center justify-center",
+                  // Couleur (bleu clair) à la place du jaune
+                  "bg-gradient-to-b from-sky-400 to-sky-600 text-white border-sky-300 shadow-[0_0_10px_rgba(56,189,248,0.35)] hover:shadow-[0_0_18px_rgba(56,189,248,0.6)]",
+                  autoDraws.length === 0 ? "opacity-50 cursor-not-allowed" : ""
+                )}
+                onClick={handleSend}
+                disabled={autoDraws.length === 0}
+              >
+                {isSending ? "..." : "ENVOYER"}
+              </CasinoButton>
+            </div>
+
+            <div className="flex items-center gap-2 ml-1 text-[22px] text-zinc-300 font-bold">
+              <span>Envois:</span>
+              <span className="text-casino-gold tabular-nums">{sendCount}</span>
+              {sendCount > 0 && (
+                <button
+                  onClick={resetSendCount}
+                  className="p-0.5 text-zinc-500 hover:text-white transition-colors"
+                  title="Remettre à zéro"
+                >
+                  <RotateCcw size={12} />
+                </button>
+              )}
+            </div>
+
+            {!showClearConfirm ? (
+              <button 
+                id="trash-actions-rack"
+                onClick={() => setShowClearConfirm(true)}
+                className="w-11 h-11 flex items-center justify-center bg-red-900/30 border border-red-500/50 rounded-lg text-red-500 hover:bg-red-900/50 hover:text-red-400 hover:border-red-400 transition-all"
+                title="Effacer l'historique"
+              >
+                <Trash2 size={18} />
+              </button>
+            ) : (
+              <div className="flex items-center gap-1 bg-black border border-red-500 rounded-lg p-1 animate-in fade-in duration-200">
+                <button 
+                  onClick={() => {
+                    setAutoDraws([]);
+                    setGeneratedNumbers([]);
+                    setGeneratedStars([]);
+                    setSelectedNumbers([]);
+                    setSelectedStars([]);
+                    setNumberSources({});
+                    setStarSources({});
+                    setShowClearConfirm(false);
+                    playSound('click');
+                    toast.success("Historique effacé");
+                  }}
+                  className="px-2 py-1 bg-red-600 hover:bg-red-500 text-white text-[10px] font-bold rounded"
+                >
+                  OK
+                </button>
+                <button 
+                  onClick={() => setShowClearConfirm(false)}
+                  className="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[10px] font-bold rounded"
+                >
+                  NON
+                </button>
+              </div>
+            )}
+            </div>
+          </div>
+
+          {/* Ligne du bas : dupliquée de la ligne du haut, puis adaptée (Rechercher / Email / Toggle) */}
+          <div className="flex flex-col items-center gap-1">
+            <div className="flex items-center gap-2">
+              <div className="rounded-xl overflow-hidden">
+                <CasinoButton
+                  variant="primary"
+                  size="md"
+                  className={cn(
+                    // Même gabarit que ENVOYER (ligne du haut)
+                    "rounded-none text-sm px-4 py-[10px] w-[140px] flex items-center justify-center",
+                    // Couleurs : rouge si pas de tarif, vert si OK (pas de shadow)
+                    !selectedTariff
+                      ? "bg-gradient-to-b from-red-600 to-red-900 text-white border-red-500 cursor-not-allowed"
+                      : "bg-gradient-to-b from-green-600 to-green-900 border-green-500 text-white hover:from-green-500 hover:to-green-800",
+                    isGenerating ? "opacity-60 cursor-not-allowed" : ""
+                  )}
+                  onClick={() => {
+                    if (!selectedTariff || isGenerating) {
+                      playSound('error');
+                      return;
+                    }
+                    // En manuel, on lance la recherche auto (même comportement qu'avant)
+                    handleGenerate(mode === 'manual' ? 'auto' : undefined);
+                  }}
+                  disabled={!selectedTariff || isGenerating}
+                >
+                  {isGenerating ? "..." : (
+                    (weightHigh > 0 || dormeurBallLevel > 0 || dormeurStarLevel > 0)
+                      ? <span className="text-red-500 font-bold text-center leading-tight text-[10px]">RECHERCHE<br/>PONDÉRÉE</span>
+                      : "RECHERCHER"
+                  )}
+                </CasinoButton>
+              </div>
+
+              {/* Invité uniquement : libellé "par Email" */}
+              {isInvite && (
+                <div className="flex items-center gap-2 ml-1 text-[22px] text-zinc-300 font-bold">
+                  <span className="whitespace-nowrap">par Email</span>
+                </div>
+              )}
+
+              {/* Remplace la corbeille par le toggle Email (invités uniquement) */}
+              {isInvite ? (
+                <div className="w-11 h-11 flex items-center justify-center ml-[10px]">
+                  <ToggleSwitch
+                    checked={emailModeEnabled}
+                    onChange={setEmailModeEnabled}
+                    className="scale-75 -rotate-90"
+                  />
+                </div>
+              ) : (
+                // Admin/VIP : on garde la logique "Valider" uniquement en manuel
+                mode === 'manual' && (
+                  <div className="rounded-xl overflow-hidden">
+                    <CasinoButton
+                      size="md"
+                      variant={(!selectedTariff || selectedNumbers.length !== selectedTariff?.nums || selectedStars.length !== selectedTariff?.stars) ? "danger" : "primary"}
+                      className={cn(
+                        "rounded-none text-sm px-4 py-[10px] w-[140px] flex items-center justify-center",
+                        (!selectedTariff || selectedNumbers.length !== selectedTariff?.nums || selectedStars.length !== selectedTariff?.stars)
+                          ? "bg-gradient-to-b from-red-600 to-red-900 border-red-500 cursor-not-allowed"
+                          : "bg-gradient-to-b from-green-600 to-green-900 border-green-500 text-white hover:from-green-500 hover:to-green-800"
+                      )}
+                      onClick={() => {
+                        if (!selectedTariff || selectedNumbers.length !== selectedTariff?.nums || selectedStars.length !== selectedTariff?.stars) {
+                          playSound('error');
+                          return;
+                        }
+                        handleGenerate('manual');
+                      }}
+                      disabled={isGenerating}
+                    >
+                      {isGenerating ? "..." : "VALIDER"}
+                    </CasinoButton>
+                  </div>
+                )
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    if (isSimplifiedMode && mode === 'manual') {
+      return (
+        /* Simplified mode: Actions panel with Search/Validate/Email/SMS */
+        <div
+          className="flex flex-col h-full p-3"
+          onClickCapture={(e) => {
+          }}
+        >
+          {/* Row 1: Bouton ENVOYER + Toggle Email (invités) - centered at top, 20px from title */}
+          <div className="flex flex-col items-center mt-5">
+            <div className="flex items-center gap-3">
+              <CasinoButton 
+                variant={autoDraws.length === 0 ? "danger" : "primary"}
+                size="lg"
+                className={cn(
+                  "px-8 py-3 text-lg font-bold min-w-[180px]",
+                  autoDraws.length === 0 
+                    ? "opacity-50 cursor-not-allowed" 
+                    : "animate-pulse bg-green-900 border-green-500 text-green-400 shadow-[0_0_20px_rgba(34,197,94,0.5)]"
+                )}
+                onClick={handleSend}
+                disabled={autoDraws.length === 0}
+              >
+                {isSending ? "..." : (
+                  <span className={autoDraws.length === 0 ? "text-red-500" : "text-green-400"}>
+                    ENVOYER
+                  </span>
+                )}
+              </CasinoButton>
+              
+              {/* Toggle Email (invités uniquement) */}
+              {isInvite && (
+                <div className="flex flex-col items-center gap-1">
+                  <span className={cn(
+                    "text-xs font-bold transition-colors",
+                    emailModeEnabled ? "text-cyan-400" : "text-zinc-600"
+                  )}>EMAIL</span>
+                  <ToggleSwitch
+                    checked={emailModeEnabled}
+                    onChange={setEmailModeEnabled}
+                    className="scale-75 -rotate-90"
+                  />
+                </div>
+              )}
+            </div>
+            
+            {/* Trash button - below Email/SMS/Send, 50px gap */}
+            {!showClearConfirm ? (
+              <button 
+                id="trash-actions-simplified"
+                onClick={() => {
+                  setShowClearConfirm(true);
+                }}
+                className="w-20 h-20 flex items-center justify-center bg-red-900/30 border border-red-500/50 rounded-xl text-red-500 hover:bg-red-900/50 hover:text-red-400 hover:border-red-400 transition-all mt-[50px]"
+                title="Effacer l'historique"
+              >
+                <Trash2 size={40} />
+              </button>
+            ) : (
+              <div className="flex items-center gap-4 bg-black border border-red-500 rounded-xl p-4 animate-in fade-in duration-200 mt-[50px]">
+                <button 
+                  onClick={() => {
+                    setAutoDraws([]);
+                    setGeneratedNumbers([]);
+                    setGeneratedStars([]);
+                    // IMPORTANT: also clear current selection so the 1–50 rack can't look "frozen" after a clear.
+                    setSelectedNumbers([]);
+                    setSelectedStars([]);
+                    setNumberSources({});
+                    setStarSources({});
+                    setShowClearConfirm(false);
+                    playSound('click');
+                    toast.success("Historique effacé");
+                  }}
+                  className="px-6 py-3 bg-red-600 hover:bg-red-500 text-white text-lg font-bold rounded-lg"
+                >
+                  OK
+                </button>
+                <button 
+                  onClick={() => setShowClearConfirm(false)}
+                  className="px-6 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-lg font-bold rounded-lg"
+                >
+                  NON
+                </button>
+              </div>
+            )}
+          </div>
+          
+          {/* Center group: ProchainTirageSimple + Buttons - moved up 40px toward trash */}
+          {/* IMPORTANT: this block was intercepting clicks over the trash icon (invisible overlay area). */}
+          <div className="flex-1 flex flex-col items-center justify-center gap-2 -mt-10 pointer-events-none">
+            <div className="pointer-events-auto flex flex-col items-center justify-center gap-2">
+              {/* ProchainTirageSimple as title for the buttons */}
+              <ProchainTirageSimple />
+              
+              {/* Search/Validate buttons */}
+              <div className="flex items-center justify-center">
+                <div className={cn(
+                  "flex items-center rounded-xl overflow-hidden",
+                  currentPrice === 0 
+                    ? "animate-pulse shadow-[0_0_18px_rgba(255,0,0,0.7)]" 
+                    : "shadow-[0_0_18px_rgba(255,215,0,0.4)]"
+                )}>
+                  <CasinoButton 
+                    size="lg" 
+                    variant={!selectedTariff ? "danger" : "primary"}
+                    className="text-base px-6 py-4 rounded-none border-r border-black/20 w-[170px] flex items-center justify-center"
+                    onClick={() => {
+                      if (!selectedTariff) {
+                        playSound('error');
+                        return;
+                      }
+                      handleGenerate('auto');
+                    }} 
+                    disabled={isGenerating}
+                  >
+                    {isGenerating ? "..." : (
+                      (weightHigh > 0 || dormeurBallLevel > 0 || dormeurStarLevel > 0)
+                        ? <span className="text-red-500 font-bold text-center leading-tight text-sm">RECHERCHE<br/>PONDÉRÉE</span>
+                        : "RECHERCHER"
+                    )}
+                  </CasinoButton>
+                  <CasinoButton 
+                    size="lg" 
+                    variant={(!selectedTariff || selectedNumbers.length !== selectedTariff?.nums || selectedStars.length !== selectedTariff?.stars) ? "danger" : "primary"}
+                    className={cn(
+                      "text-base px-6 py-4 rounded-none w-[170px] flex items-center justify-center",
+                      (!selectedTariff || selectedNumbers.length !== selectedTariff?.nums || selectedStars.length !== selectedTariff?.stars)
+                        ? "bg-gradient-to-b from-red-600 to-red-900 border-red-500 cursor-not-allowed"
+                        : "bg-gradient-to-b from-green-600 to-green-900 border-green-500 text-white hover:from-green-500 hover:to-green-800"
+                    )}
+                    onClick={() => {
+                      if (!selectedTariff || selectedNumbers.length !== selectedTariff?.nums || selectedStars.length !== selectedTariff?.stars) {
+                        playSound('error');
+                        return;
+                      }
+                      handleGenerate('manual');
+                    }}
+                    disabled={isGenerating}
+                  >
+                    {isGenerating ? "..." : "VALIDER"}
+                  </CasinoButton>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      /* Classic mode: Actions panel - Search/Validate left (stacked), Email/SMS/Send right - 20px above center */
+      <div className="flex items-center justify-center h-full px-3 py-2 gap-4 -mt-[20px]">
+        {/* Left: Search/Validate buttons - stacked vertically, fixed height container */}
+        <div className="flex flex-col gap-[10px] justify-center">
+          <CasinoButton 
+            size="md" 
+            variant={!selectedTariff ? "danger" : "primary"}
+            className={cn(
+              "text-sm px-4 py-[7px] w-[131px] flex items-center justify-center rounded-lg",
+              currentPrice === 0 
+                ? "animate-pulse shadow-[0_0_12px_rgba(255,0,0,0.5)]" 
+                : "shadow-[0_0_12px_rgba(255,215,0,0.2)]"
+            )}
+            onClick={() => {
+              if (!selectedTariff) {
+                playSound('error');
+                return;
+              }
+              handleGenerate(mode === 'manual' ? 'auto' : undefined);
+            }} 
+            disabled={isGenerating}
+          >
+            {isGenerating ? "..." : (
+              (weightHigh > 0 || dormeurBallLevel > 0 || dormeurStarLevel > 0)
+                ? <span className="text-red-500 font-bold text-center leading-tight text-[10px]">RECHERCHE<br/>PONDÉRÉE</span>
+                : "RECHERCHER"
+            )}
+          </CasinoButton>
+          {mode === 'manual' && (
+            <CasinoButton 
+              size="md" 
+              variant={(!selectedTariff || selectedNumbers.length !== selectedTariff?.nums || selectedStars.length !== selectedTariff?.stars) ? "danger" : "primary"}
+              className={cn(
+                "text-sm px-4 py-[7px] w-[131px] flex items-center justify-center rounded-lg",
+                (!selectedTariff || selectedNumbers.length !== selectedTariff?.nums || selectedStars.length !== selectedTariff?.stars)
+                  ? "bg-gradient-to-b from-red-600 to-red-900 border-red-500 cursor-not-allowed"
+                  : "bg-gradient-to-b from-green-600 to-green-900 border-green-500 text-white hover:from-green-500 hover:to-green-800"
+              )}
+              onClick={() => {
+                if (!selectedTariff || selectedNumbers.length !== selectedTariff?.nums || selectedStars.length !== selectedTariff?.stars) {
+                  playSound('error');
+                  return;
+                }
+                handleGenerate('manual');
+              }}
+              disabled={isGenerating}
+            >
+              {isGenerating ? "..." : "VALIDER"}
+            </CasinoButton>
+          )}
+        </div>
+        
+        {/* Right: Bouton ENVOYER + Toggle Email (invités) */}
+        <div className="flex items-center gap-2">
+          <CasinoButton 
+            variant={autoDraws.length === 0 ? "danger" : "primary"}
+            size="md"
+            className={cn(
+              "px-5 py-2 text-sm font-bold min-w-[120px]",
+              autoDraws.length === 0 
+                ? "opacity-50 cursor-not-allowed" 
+                : "animate-pulse bg-green-900 border-green-500 text-green-400 shadow-[0_0_15px_rgba(34,197,94,0.5)]"
+            )}
+            onClick={handleSend}
+            disabled={autoDraws.length === 0}
+          >
+            {isSending ? "..." : (
+              <span className={autoDraws.length === 0 ? "text-red-500" : "text-green-400"}>
+                ENVOYER
+              </span>
+            )}
+          </CasinoButton>
+          
+          {/* Toggle Email (invités uniquement) */}
+          {isInvite && (
+            <div className="flex flex-col items-center gap-1">
+              <span className={cn(
+                "text-[10px] font-bold transition-colors",
+                emailModeEnabled ? "text-cyan-400" : "text-zinc-600"
+              )}>EMAIL</span>
+              <ToggleSwitch
+                checked={emailModeEnabled}
+                onChange={setEmailModeEnabled}
+                className="scale-75 -rotate-90"
+              />
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <CasinoLayout>
-      {/* Popup Gratitude (VIP/Abonné uniquement) */}
-      <GratitudePopup
-        isOpen={showGratitudePopup}
-        onOpenConsole={handleClosePopup}
-        onDontShowAgain={handleDontShowAgain}
-        dontShowAgainChecked={dontShowPopupAgain}
-      />
+      {/* Plus de pop-up gagnant: redirection vers "Mes grilles jouées" */}
+
+      {/* Popup Gratitude (VIP/Abonné uniquement) - Depuis la DB */}
+      {showGratitudePopup && popup1Html ? (
+        <div dangerouslySetInnerHTML={{ __html: popup1Html }} />
+      ) : showGratitudePopup ? (
+        <GratitudePopup
+          isOpen={showGratitudePopup}
+          onOpenConsole={handleClosePopup}
+          onDontShowAgain={handleDontShowAgain}
+          dontShowAgainChecked={dontShowPopupAgain}
+          mode="welcome"
+        />
+      ) : null}
+
+      {/* Popup Gratitude Invité pour envoi direct - Depuis la DB */}
+      {showInviteSendPopup && popup1Html ? (
+        <div dangerouslySetInnerHTML={{ __html: popup1Html }} />
+      ) : showInviteSendPopup ? (
+        <GratitudePopup
+          isOpen={showInviteSendPopup}
+          mode="invite-send"
+          onValidate={handleInviteGratitudeValidate}
+          checkboxRequired={true}
+          accepted={inviteGratitudeAccepted}
+          onAcceptedChange={setInviteGratitudeAccepted}
+        />
+      ) : null}
+
+      {/* Popup de consultation après envoi (invités uniquement) - Depuis la DB */}
+      {showConsultationPopup && popup2Html ? (
+        <div dangerouslySetInnerHTML={{ __html: popup2Html }} />
+      ) : showConsultationPopup ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          {/* Overlay grisé */}
+          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+          
+          {/* Popup */}
+          <div className="relative bg-gradient-to-b from-[#1a1a1a] to-[#0a0a0a] border-2 border-casino-gold rounded-xl p-9 max-w-lg mx-4 shadow-2xl shadow-casino-gold/20" style={{ transform: 'scale(1.5)', transformOrigin: 'center' }}>
+            {/* Décoration coin */}
+            <div className="absolute top-0 left-0 w-12 h-12 border-t-2 border-l-2 border-casino-gold rounded-tl-xl" />
+            <div className="absolute top-0 right-0 w-12 h-12 border-t-2 border-r-2 border-casino-gold rounded-tr-xl" />
+            <div className="absolute bottom-0 left-0 w-12 h-12 border-b-2 border-l-2 border-casino-gold rounded-bl-xl" />
+            <div className="absolute bottom-0 right-0 w-12 h-12 border-b-2 border-r-2 border-casino-gold rounded-br-xl" />
+
+            {/* Titre */}
+            <h2 className="text-center font-orbitron text-2xl text-casino-gold mb-6 tracking-widest">
+              💬 CONSULTATION
+            </h2>
+
+            {/* Message */}
+            <div className="bg-black/50 border border-zinc-700 rounded-lg p-6 mb-6">
+              <p className="text-zinc-300 text-lg leading-relaxed text-center">
+                Voulez-vous consulter vos numéros ?
+              </p>
+            </div>
+
+            {/* Boutons */}
+            <div className="flex gap-4">
+              {/* Bouton Non */}
+              <button
+                onClick={handleConsultationNo}
+                className={cn(
+                  "flex-1 py-4 px-6 rounded-lg font-orbitron font-bold text-lg tracking-wider transition-all duration-200",
+                  "bg-gradient-to-r from-zinc-700 to-zinc-600 text-white",
+                  "border-2 border-zinc-500 shadow-lg shadow-zinc-500/30",
+                  "hover:from-zinc-600 hover:to-zinc-500 hover:shadow-zinc-500/50",
+                  "active:scale-95"
+                )}
+              >
+                NON
+              </button>
+
+              {/* Bouton Oui */}
+              <button
+                onClick={handleConsultationYes}
+                className={cn(
+                  "flex-1 py-4 px-6 rounded-lg font-orbitron font-bold text-lg tracking-wider transition-all duration-200",
+                  "bg-gradient-to-r from-green-600 to-green-500 text-white",
+                  "border-2 border-green-400 shadow-lg shadow-green-500/30",
+                  "hover:from-green-500 hover:to-green-400 hover:shadow-green-500/50",
+                  "active:scale-95 animate-pulse hover:animate-none"
+                )}
+              >
+                OUI
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {/* Wrapper for perfect centering */}
       <div className="w-full flex justify-center">
@@ -2572,73 +3327,6 @@ export default function Console() {
             </div>
         )}
 
-        {/* MODALE CGU - Pour les invités avant l'envoi */}
-        {showCguModal && (
-            <div 
-                className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
-                onClick={() => setShowCguModal(false)}
-            >
-                <div 
-                    className="bg-gradient-to-br from-zinc-900 via-zinc-800 to-zinc-900 border-2 border-casino-gold rounded-2xl p-6 max-w-md w-full shadow-[0_0_50px_rgba(255,215,0,0.3)]"
-                    onClick={(e) => e.stopPropagation()}
-                >
-                    {/* Titre */}
-                    <h2 className="font-orbitron text-2xl text-casino-gold text-center mb-4 tracking-wider">
-                        CONDITIONS D'UTILISATION
-                    </h2>
-                    
-                    {/* Message */}
-                    <p className="text-zinc-300 text-center mb-6 font-rajdhani text-lg">
-                        Pour envoyer vos grilles, vous devez accepter les Conditions Générales d'Utilisation.
-                    </p>
-                    
-                    {/* Case à cocher CGU */}
-                    <div className="bg-black/40 rounded-xl p-4 mb-6 border border-zinc-700">
-                        <label className="flex items-start gap-3 cursor-pointer group">
-                            <input 
-                                type="checkbox"
-                                checked={cguAccepted}
-                                onChange={(e) => setCguAccepted(e.target.checked)}
-                                className="w-6 h-6 mt-1 accent-casino-gold cursor-pointer"
-                            />
-                            <span className="text-zinc-300 font-rajdhani text-base group-hover:text-white transition-colors">
-                                J'ai lu et j'accepte les{' '}
-                                <a 
-                                    href="/cgu" 
-                                    target="_blank"
-                                    className="text-casino-gold underline hover:text-yellow-400"
-                                    onClick={(e) => e.stopPropagation()}
-                                >
-                                    Conditions Générales d'Utilisation
-                                </a>
-                            </span>
-                        </label>
-                    </div>
-                    
-                    {/* Boutons */}
-                    <div className="flex gap-4 justify-center">
-                        <button
-                            onClick={() => setShowCguModal(false)}
-                            className="px-6 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white border border-zinc-600 rounded-lg font-rajdhani font-bold transition-all"
-                        >
-                            ANNULER
-                        </button>
-                        <button
-                            onClick={handleCguValidate}
-                            disabled={!cguAccepted}
-                            className={cn(
-                                "px-6 py-3 rounded-lg font-rajdhani font-bold transition-all",
-                                cguAccepted 
-                                    ? "bg-casino-gold hover:bg-yellow-500 text-black shadow-[0_0_20px_rgba(255,215,0,0.5)] hover:scale-105"
-                                    : "bg-zinc-700 text-zinc-500 cursor-not-allowed opacity-50"
-                            )}
-                        >
-                            VALIDER ET ENVOYER
-                        </button>
-                    </div>
-                </div>
-            </div>
-        )}
 
         {/* TOP BAR: CONTROL CENTER */}
         <div className="bg-zinc-900 border-b-4 border-casino-gold rounded-t-xl p-2 shadow-2xl relative z-50 mx-auto" style={{ width: `${totalColumnsWidth}px` }}>
@@ -2659,6 +3347,36 @@ export default function Console() {
                                 {user?.role.toUpperCase()}
                              </span>
                          </div>
+
+                         {/* Alerte AUTO update (si échec) */}
+                         {autoUpdateStatus && autoUpdateStatus.success === false && (
+                           <div className="mt-1 text-sm font-rajdhani text-red-300 bg-red-950/40 border border-red-700/50 rounded px-2 py-1 max-w-[720px]">
+                             <span className="font-bold uppercase tracking-wider">ALERTE MAJ AUTO :</span>{" "}
+                             {autoUpdateStatus.drawDate ? <span className="font-mono">{String(autoUpdateStatus.drawDate)}</span> : null}{" "}
+                             {autoUpdateStatus.message ? <span className="text-zinc-200">{String(autoUpdateStatus.message).slice(0, 220)}</span> : null}
+                           </div>
+                         )}
+
+                         {/* Message gagnants à la connexion (sans popup) */}
+                         {unseenWins.length > 0 && (
+                           <div className="mt-1 text-sm font-rajdhani text-emerald-200 bg-emerald-950/30 border border-emerald-700/50 rounded px-2 py-1 max-w-[720px] flex items-center gap-3">
+                             <span className="font-bold uppercase tracking-wider">GAGNÉ :</span>
+                             <span className="text-zinc-200">
+                               {unseenWins.length} grille{unseenWins.length > 1 ? 's' : ''} gagnante{unseenWins.length > 1 ? 's' : ''} non vue{unseenWins.length > 1 ? 's' : ''}.
+                             </span>
+                             <button
+                               className={cn(
+                                 "ml-auto px-3 py-1 rounded-md font-orbitron text-xs tracking-widest border",
+                                 winsAcking ? "opacity-50 cursor-not-allowed border-zinc-700 text-zinc-400" : "border-casino-gold/60 text-casino-gold hover:bg-black/40"
+                               )}
+                               onClick={ackAllWins}
+                               disabled={winsAcking}
+                               title="Marquer comme vu"
+                             >
+                               OK
+                             </button>
+                           </div>
+                         )}
                          
                          {dernierTirage && (
                             <div 
@@ -2729,7 +3447,8 @@ export default function Console() {
                                                 setSelectedTariff({ nums, stars, price: item.price });
 
                                                 // RESET ALL WEIGHT KNOBS TO 0 when tariff changes
-                                                setWeightHigh(0); setWeightMid(0); setWeightLow(0); setWeightDormeur(0);
+                                                // IMPORTANT: Do NOT reset DORMEURS here (it's a Statistique control).
+                                                setWeightHigh(0);
                                                 setWeightStarHigh(0); setWeightStarMid(0); setWeightStarLow(0); setWeightStarDormeur(0);
 
                                                 setIsPriceGridOpen(false);
@@ -2753,156 +3472,8 @@ export default function Console() {
                      </div>
                  </div>
                  
-                 {/* CENTER: MODE ONLY + SOUND */}
+                 {/* CENTER: SOUND */}
                  <div className="flex items-center justify-center gap-[20px] h-full pt-[24px]">
-                     
-                     {/* WEIGHT PRESET DROPDOWN (TEAL) */}
-                     <div className="flex flex-col items-center">
-                         <div className="relative flex items-center bg-black border border-teal-700 rounded h-[38px] w-[220px] shadow-[0_0_10px_rgba(20,184,166,0.2)]">
-                           {/* Preset Name Display */}
-                           <div 
-                                className={cn(
-                                    "flex-1 px-3 text-2xl font-rajdhani cursor-pointer select-none truncate h-full flex items-center transition-colors",
-                                    selectedWeightPreset === "0" ? "text-zinc-500 italic" : "text-teal-400 font-bold"
-                                )}
-                                onDoubleClick={handleWeightPresetDoubleClick}
-                                title={selectedWeightPreset === "0" ? "Pondérations Désactivées" : "Double-clic pour sauver la configuration actuelle"}
-                            >
-                                {selectedWeightPreset === "0" 
-                                    ? "Pondération 0" 
-                                    : (weightPresetsData[selectedWeightPreset]?.isSimplified ?? isSimplifiedMode)
-                                        ? `Simplifié ${selectedWeightPreset}`
-                                        : `Pondération ${selectedWeightPreset}`
-                                }
-                            </div>
-                            
-                            {/* Arrow Trigger */}
-                            <button 
-                                className="h-full px-2 border-l border-teal-900 hover:bg-teal-900/30 text-teal-600 hover:text-teal-400 transition-colors flex items-center justify-center"
-                                onClick={(e) => { e.stopPropagation(); setIsWeightDropdownOpen(!isWeightDropdownOpen); }}
-                            >
-                                <ChevronDown size={18} />
-                            </button>
-
-                            {/* Dropdown Menu */}
-                            {isWeightDropdownOpen && (
-                                <div className="absolute top-full left-0 right-0 mt-1 bg-black border border-teal-700 rounded shadow-[0_0_20px_rgba(20,184,166,0.3)] z-[100] max-h-[300px] overflow-y-auto custom-scrollbar">
-                                    {/* Option 0 - Disabled */}
-                                    <div 
-                                        className={cn(
-                                            "px-4 py-2 text-xl font-rajdhani cursor-pointer hover:bg-zinc-900 transition-colors flex justify-between items-center border-b border-zinc-800",
-                                            selectedWeightPreset === "0" && "bg-zinc-900 text-zinc-400 italic"
-                                        )}
-                                        onClick={() => handleWeightPresetSelect("0")}
-                                    >
-                                        <span className="text-zinc-500">Pondération 0</span>
-                                    </div>
-                                    
-                                    {/* Options 1-10 */}
-                                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(num => {
-                                        const presetId = num.toString();
-                                        const isSaved = !!weightPresetsData[presetId];
-                                        const presetData = weightPresetsData[presetId];
-                                        
-                                        // Check compatibility with current tariff
-                                        let isCompatible = true;
-                                        if (isSaved && selectedTariff && presetData) {
-                                            const totalNums = presetData.weightHigh + presetData.weightMid + presetData.weightLow + presetData.weightDormeur;
-                                            const totalStars = presetData.weightStarHigh + presetData.weightStarMid + presetData.weightStarLow + presetData.weightStarDormeur;
-                                            // Compatible if total ≤ tariff (Forbo can complete if less)
-                                            isCompatible = totalNums <= selectedTariff.nums && totalStars <= selectedTariff.stars;
-                                        }
-                                        
-                                        const isDisabled = isSaved && !isCompatible;
-                                        
-                                        return (
-                                        <div 
-                                            key={num}
-                                            className={cn(
-                                                    "px-4 py-2 text-xl font-rajdhani transition-colors flex justify-between items-center",
-                                                    isDisabled 
-                                                        ? "opacity-40 cursor-not-allowed" 
-                                                        : "cursor-pointer hover:bg-teal-900/20",
-                                                    selectedWeightPreset === presetId && !isDisabled && "bg-teal-900/40 text-teal-400"
-                                            )}
-                                                onClick={() => !isDisabled && handleWeightPresetSelect(presetId)}
-                                                title={isDisabled ? "Incompatible avec le tarif actuel" : ""}
-                                        >
-                                                <span className={cn(
-                                                    isSaved 
-                                                        ? (isDisabled ? "text-zinc-600" : "text-teal-400 font-bold") 
-                                                        : "text-zinc-400"
-                                                )}>
-                                                {isSaved && presetData?.isSimplified ? `Simplifié ${num}` : `Pondération ${num}`}
-                                            </span>
-                                                
-                                                <div className="flex items-center gap-2">
-                                                    {isSaved ? (
-                                                        <>
-                                                            {/* Delete button - Red square (always visible to allow deletion) */}
-                                                            <button
-                                                                onClick={(e) => handleDeleteWeightPreset(presetId, e)}
-                                                                className="w-5 h-5 bg-red-600 hover:bg-red-500 rounded flex items-center justify-center transition-colors"
-                                                                title="Effacer cette pondération"
-                                                            >
-                                                                <span className="text-white text-xs font-bold">✕</span>
-                                                            </button>
-                                                            {/* Saved indicator - Blue or dimmed if incompatible */}
-                                                            <span className={cn(
-                                                                "text-sm font-bold",
-                                                                isDisabled ? "text-zinc-600" : "text-teal-400"
-                                                            )}>
-                                                                Enregistré
-                                                            </span>
-                                                        </>
-                                                    ) : (
-                                                        /* Save button - White */
-                                                        <button
-                                                            onClick={(e) => handleSaveWeightPreset(presetId, e)}
-                                                            className="text-sm text-zinc-400 hover:text-white transition-colors"
-                                                        >
-                                                            Enregistrer
-                                                        </button>
-                                                    )}
-                                        </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            )}
-                         </div>
-                     </div>
-
-                     <div className="flex items-center gap-2 bg-black px-3 py-1.5 rounded border-0 border-zinc-700 ring-[0.5px] ring-zinc-800/50">
-                         <span className={cn(
-                             "px-2 py-0.5 rounded text-sm font-bold transition-colors",
-                             mode === 'auto' ? "bg-cyan-900/50 text-cyan-400 border border-cyan-400/50" : "text-zinc-600"
-                         )}>AUTO</span>
-                         
-                         <ToggleSwitch 
-                             checked={mode === 'manual'} 
-                             onChange={(v) => { 
-                                 if (v === true && !canUseManual) {
-                                     // Prevent manual if not allowed
-                                     toast.error("Mode Manuel réservé aux membres VIP");
-                                     return;
-                                 }
-                                 
-                                 if (false) {
-                                    // Handle Pure mode
-                                 }
-                                 
-                                 setMode(v ? 'manual' : 'auto'); 
-                                 playSound('toggle'); 
-                             }} 
-                             className="scale-75 -rotate-90 mx-2"
-                         />
-                         
-                         <span className={cn(
-                             "px-2 py-0.5 rounded text-lg font-bold transition-colors",
-                             mode === 'manual' ? "bg-amber-900/50 text-amber-500 border border-amber-500/50" : "text-zinc-600"
-                         )}>MANUEL</span>
-                     </div>
 
                      {/* SOUND TOGGLE MOVED HERE */}
                      <button 
@@ -3070,22 +3641,13 @@ export default function Console() {
                             ) : "CONFIGURATION BOULES (1-50)"
                         }
                         disabled={!canUseManual} 
-                        className="flex flex-col p-[10px]" 
-                        ledActive={highFreqActive || midFreqActive || lowFreqActive}
+                    className="flex flex-col p-[10px]" 
+                    ledActive={true}
                     >
                         <div className="flex-1 flex flex-col justify-start">
                         {/* Row 1: High Freq (classic) or Balls 1-13 (simplified) */}
                         <div className="bg-black/30 p-1.5 rounded border border-zinc-800 flex items-center transition-all duration-300 mb-[6px]">
-                            {!isSimplifiedMode && (
-                                <>
-                                    <ToggleSwitch checked={highFreqActive} onChange={v => { setHighFreqActive(v); playSound('toggle'); }} className="scale-75 origin-left flex-shrink-0 mr-4" />
-                                    <div className="flex-shrink-0 w-48">
-                                        <div className="text-lg font-bold text-white mb-0.5">FRÉQUENCE ÉLEVÉE</div>
-                                        <div className="text-sm text-casino-gold">TOP 10 • Tendance ↑</div>
-                                    </div>
-                                </>
-                            )}
-                            {mode === 'manual' && (isSimplifiedMode || highFreqActive) && (
+                            {mode === 'manual' && (
                                 <div className={cn("flex-1 flex justify-start", !isSimplifiedMode && "ml-2")}>
                                     <BallGrid 
                                         stats={isSimplifiedMode ? getSimplifiedBallStats(simplifiedSortOrder).slice(0, 13) : highFreqStats} 
@@ -3105,16 +3667,7 @@ export default function Console() {
 
                         {/* Row 2: Mid Freq (classic) or Balls 14-26 (simplified) */}
                         <div className="bg-black/30 p-1.5 rounded border border-zinc-800 flex items-center transition-all duration-300 mb-[6px]">
-                            {!isSimplifiedMode && (
-                                <>
-                                    <ToggleSwitch checked={midFreqActive} onChange={v => { setMidFreqActive(v); playSound('toggle'); }} activeColor="bg-yellow-500" className="scale-75 origin-left flex-shrink-0 mr-4" />
-                                    <div className="flex-shrink-0 w-48">
-                                        <div className="text-lg font-bold text-white mb-0.5">FRÉQUENCE MOYENNE</div>
-                                        <div className="text-sm text-yellow-500">MOYENNE 10 • Stable →</div>
-                                    </div>
-                                </>
-                            )}
-                            {mode === 'manual' && (isSimplifiedMode || midFreqActive) && (
+                            {mode === 'manual' && (
                                 <div className={cn("flex-1 flex justify-start", !isSimplifiedMode && "ml-2")}>
                                     <BallGrid 
                                         stats={isSimplifiedMode ? getSimplifiedBallStats(simplifiedSortOrder).slice(13, 26) : midFreqStats} 
@@ -3123,10 +3676,10 @@ export default function Console() {
                                         selectedStars={selectedStars}
                                         numberSources={numberSources}
                                         starSources={starSources}
-                                        category={isSimplifiedMode ? undefined : "mid"}
+                                        category={undefined}
                                         onToggle={toggleSelection}
                                         className={isSimplifiedMode ? "py-0 justify-between w-full" : "py-0 justify-start gap-[4px]"}
-                                        resolveCategory={isSimplifiedMode ? undefined : resolveCategory}
+                                        resolveCategory={undefined}
                                     />
                                 </div>
                             )}
@@ -3134,16 +3687,7 @@ export default function Console() {
 
                         {/* Row 3: Low Freq (classic) or Balls 27-39 (simplified) */}
                         <div className="bg-black/30 p-1.5 rounded border border-zinc-800 flex items-center transition-all duration-300 mb-[6px]">
-                            {!isSimplifiedMode && (
-                                <>
-                                    <ToggleSwitch checked={lowFreqActive} onChange={v => { setLowFreqActive(v); playSound('toggle'); }} activeColor="bg-blue-500" className="scale-75 origin-left flex-shrink-0 mr-4" />
-                                    <div className="flex-shrink-0 w-48">
-                                        <div className="text-lg font-bold text-white mb-0.5">FRÉQUENCE BASSE</div>
-                                        <div className="text-sm text-blue-500">BASSE 10 • Dette Max</div>
-                                    </div>
-                                </>
-                            )}
-                            {mode === 'manual' && (isSimplifiedMode || lowFreqActive) && (
+                            {mode === 'manual' && (
                                 <div className={cn("flex-1 flex justify-start", !isSimplifiedMode && "ml-2")}>
                                     <BallGrid 
                                         stats={isSimplifiedMode ? getSimplifiedBallStats(simplifiedSortOrder).slice(26, 39) : lowFreqStats} 
@@ -3152,10 +3696,10 @@ export default function Console() {
                                         selectedStars={selectedStars}
                                         numberSources={numberSources}
                                         starSources={starSources}
-                                        category={isSimplifiedMode ? undefined : "low"}
+                                        category={undefined}
                                         onToggle={toggleSelection}
                                         className={isSimplifiedMode ? "py-0 justify-between w-full" : "py-0 justify-start gap-[4px]"}
-                                        resolveCategory={isSimplifiedMode ? undefined : resolveCategory}
+                                        resolveCategory={undefined}
                                     />
                                 </div>
                             )}
@@ -3163,15 +3707,6 @@ export default function Console() {
 
                         {/* Row 4: Dormeur (classic) or Balls 40-50 (simplified) */}
                         <div className="bg-black/30 p-1.5 rounded border border-zinc-800 flex items-center transition-all duration-300 mb-[6px]">
-                            {!isSimplifiedMode && (
-                                <>
-                                    <ToggleSwitch checked={true} onChange={v => { playSound('toggle'); }} activeColor="bg-zinc-400" className="scale-75 origin-left flex-shrink-0 mr-4" />
-                                    <div className="flex-shrink-0 w-48">
-                                        <div className="text-lg font-bold text-white mb-0.5">DORMEUR</div>
-                                        <div className="text-sm text-zinc-400">TOP 10 • Absence</div>
-                                    </div>
-                                </>
-                            )}
                             {mode === 'manual' && (
                                 <div className={cn("flex-1 flex justify-start", !isSimplifiedMode && "ml-2")}>
                                     <BallGrid 
@@ -3203,29 +3738,25 @@ export default function Console() {
 
                 <SectionPanel 
                     title={
-                        <span className="flex items-center gap-4">
-                            <span>{isSimplifiedMode ? "Pondérations Boules et Étoiles" : "Pondération Boules"} / <span className={isSimplifiedMode ? "font-bold text-teal-400" : "text-zinc-500 font-normal"}>Simplifié</span></span>
-                            <div 
-                                className="w-10 h-5 bg-zinc-800 rounded-full cursor-pointer relative border border-zinc-600 flex-shrink-0"
-                                onClick={() => { setIsSimplifiedMode(!isSimplifiedMode); playSound('toggle'); }}
-                            >
-                                <div className={cn(
-                                    "absolute top-0.5 w-4 h-4 rounded-full transition-all duration-200 shadow",
-                                    isSimplifiedMode 
-                                        ? "left-5 bg-teal-400 shadow-[0_0_6px_rgba(45,212,191,0.6)]" 
-                                        : "left-0.5 bg-zinc-500"
-                                )} />
-                            </div>
-                        </span>
+                        <span>REALISER LES TIRAGES</span>
                     }
                     disabled={!isWeightsEnabled}
-                    className="h-[200px]"
+                    headerAction={
+                        <div className="flex items-center gap-3 pr-2">
+                            <div className="scale-[0.85] origin-right">
+                                <ProchainTirageSimple />
+                            </div>
+                            <LEDIndicator active={true} color="green" />
+                        </div>
+                    }
+                    className="h-[200px] flex flex-col"
                 >
                     {isSimplifiedMode ? (
-                        /* Mode simplifié : Priorités + Boutons rotatifs avec espacement égal */
-                        <div className="flex items-center justify-evenly py-2">
-                            {/* Cadre Priorités de tri */}
-                            <div className="w-64 bg-black/30 rounded-lg border border-zinc-700 p-4">
+                        /* Mode simplifié : Priorités de tri uniquement */
+                        <div className="flex-1 min-h-0 flex items-stretch justify-evenly py-1">
+                            {/* Bloc 1: Priorités de tri (centré verticalement, sans étirer le cadre) */}
+                            <div className="w-64 h-full flex items-center justify-center">
+                              <div className="w-full bg-black/30 rounded-lg border border-zinc-700 p-4">
                                 <div className="text-sm font-bold text-zinc-400 mb-3 text-center">PRIORITÉS DE TRI</div>
                                 <div className="flex flex-col gap-2">
                                     {/* Ligne Fréquence - VERT */}
@@ -3355,20 +3886,16 @@ export default function Console() {
                                     </div>
                                 </div>
                             </div>
-                            
-                            {/* Bouton rotatif ÉLEVÉE - bloqué à 0 si CHAOS = 0 */}
-                            <RotaryKnob label="ÉLEVÉE" value={hazardLevel === 0 ? 0 : weightHigh} onChange={(v) => { userModifiedRef.current = true; if(checkWeightLimit(v, weightHigh, weightMid, weightLow, weightDormeur)) setWeightHigh(v); }} max={10} labelClassName="text-xs font-bold" size="xl" disabled={hazardLevel === 0} />
-                            
-                            {/* Bouton rotatif DORMEUR - bloqué à 0 si CHAOS = 0 */}
-                            <RotaryKnob label="DORMEUR" value={hazardLevel === 0 ? 0 : weightDormeur} onChange={(v) => { userModifiedRef.current = true; if(checkWeightLimit(v, weightDormeur, weightHigh, weightMid, weightLow)) setWeightDormeur(v); }} max={10} labelClassName="text-xs font-bold" size="xl" disabled={hazardLevel === 0} />
+                            </div>
+
+                            {/* Bloc 2: Actions (bloc ENVOYER RECHERCHER VALIDER) */}
+                            <div className="w-64 h-full flex items-center justify-center">
+                                <ActionsControls variant="rack" />
+                            </div>
                         </div>
                     ) : (
-                        /* Mode classique : 4 boutons rotatifs - 15px above center */
-                        <div className="flex justify-between items-center py-2 px-8 h-full -mt-[15px]">
-                            <RotaryKnob label="ÉLEVÉE" value={hazardLevel === 0 ? 0 : weightHigh} onChange={(v) => { userModifiedRef.current = true; if(checkWeightLimit(v, weightHigh, weightMid, weightLow, weightDormeur)) setWeightHigh(v); }} max={10} labelClassName="text-xs font-bold" size="xl" disabled={hazardLevel === 0} />
-                            <RotaryKnob label="MOYENNE" value={weightMid} onChange={(v) => { userModifiedRef.current = true; if(checkWeightLimit(v, weightMid, weightHigh, weightLow, weightDormeur)) setWeightMid(v); }} max={10} labelClassName="text-xs font-bold" size="xl" />
-                            <RotaryKnob label="BASSE" value={weightLow} onChange={(v) => { userModifiedRef.current = true; if(checkWeightLimit(v, weightLow, weightHigh, weightMid, weightDormeur)) setWeightLow(v); }} max={10} labelClassName="text-xs font-bold" size="xl" />
-                            <RotaryKnob label="DORMEUR" value={hazardLevel === 0 ? 0 : weightDormeur} onChange={(v) => { userModifiedRef.current = true; if(checkWeightLimit(v, weightDormeur, weightHigh, weightMid, weightLow)) setWeightDormeur(v); }} max={10} labelClassName="text-xs font-bold" size="xl" disabled={hazardLevel === 0} />
+                        <div className="flex-1 min-h-0 flex items-center justify-center">
+                          <ActionsControls variant="rack" />
                         </div>
                     )}
                 </SectionPanel>
@@ -3421,8 +3948,8 @@ export default function Console() {
                             <div className="w-full h-px bg-zinc-800 absolute bottom-2" />
                         </div>
                         
-                        <div className="flex items-start justify-center gap-2 mt-4 w-full px-2">
-                            {/* CHAOS Knob (Moved to Left) */}
+                        <div className="flex items-start justify-center gap-1 mt-4 w-full px-1">
+                            {/* CHAOS Knob (Left) */}
                             <div className="flex flex-col items-center gap-4 w-[110px]">
                                 <div className="h-6 flex items-center justify-center w-full text-center relative">
                                      <span className="text-white font-rajdhani font-bold text-lg uppercase tracking-wider">
@@ -3430,7 +3957,7 @@ export default function Console() {
                                     </span>
                                 </div>
                                 
-                                <div className="h-[60px] flex items-center justify-center">
+                                    <div className="h-[60px] flex items-center justify-center">
                                     <RotaryKnob 
                                         label="" 
                                         value={hazardLevel} 
@@ -3445,7 +3972,7 @@ export default function Console() {
                                 </div>
                             </div>
 
-                            {/* TENDENCES Knob (New on Right) */}
+                            {/* TENDENCES Knob (Middle) */}
                             <div className="flex flex-col items-center gap-4 w-[110px]">
                                 <div className="h-6 flex items-center justify-center w-full text-center relative">
                                      <span className="text-white font-rajdhani font-bold text-lg uppercase tracking-wider">
@@ -3456,15 +3983,41 @@ export default function Console() {
                                 <div className="h-[60px] flex items-center justify-center">
                                     <RotaryKnob 
                                         label="" 
-                                        value={10 - tendencyLevel} 
-                                        onChange={(v) => { setTendencyLevel(10 - v); playSound('knob'); }} 
+                                        value={tendencyLevel} 
+                                        onChange={(v) => { setTendencyLevel(v); playSound('knob'); }} 
                                         max={10} 
                                         size="xl"
                                         knobColor="border-red-700 shadow-[0_0_15px_rgba(220,38,38,0.3)] bg-zinc-900"
                                         indicatorColor="bg-red-600"
                                         labelClassName="hidden"
                                         valueClassName="text-red-500"
-                                        displayTransformer={(v) => 10 - v}
+                                    />
+                                </div>
+                            </div>
+
+                            {/* DORMEURS Knob (Right) — 1 bouton, applique Boules + Étoiles */}
+                            <div className="flex flex-col items-center gap-4 w-[110px]">
+                                <div className="h-6 flex items-center justify-center w-full text-center relative">
+                                     <span className="text-white font-rajdhani font-bold text-lg uppercase tracking-wider">
+                                        DORMEURS
+                                    </span>
+                                </div>
+                                
+                                <div className="h-[60px] flex items-center justify-center">
+                                    <RotaryKnob 
+                                        label="" 
+                                        value={dormeurBallLevel} 
+                                        onChange={(v) => { 
+                                            setDormeurBallLevel(v);
+                                            setDormeurStarLevel(v);
+                                            playSound('knob');
+                                        }} 
+                                        max={10} 
+                                        size="xl"
+                                        knobColor="border-blue-700 shadow-[0_0_15px_rgba(37,99,235,0.3)] bg-zinc-900"
+                                        indicatorColor="bg-blue-600"
+                                        labelClassName="hidden"
+                                        valueClassName="text-blue-500"
                                     />
                                 </div>
                             </div>
@@ -3516,21 +4069,12 @@ export default function Console() {
                     }
                     disabled={!canUseManual} 
                     className="flex flex-col p-[10px]" 
-                    ledActive={highStarActive || midStarActive || lowStarActive || dormeurStarActive}
+                    ledActive={true}
                 >
                      <div className="flex flex-col justify-start">
                         {/* Row 1: High Star (classic) or Stars 1-6 (simplified) */}
                         <div className="bg-black/30 p-1.5 rounded border border-zinc-800 flex items-center transition-all duration-300 mb-[6px]">
-                            {!isSimplifiedMode && (
-                                <>
-                                    <ToggleSwitch checked={highStarActive} onChange={v => { setHighStarActive(v); playSound('toggle'); }} activeColor="bg-purple-500" className="scale-75 origin-left flex-shrink-0 mr-4" />
-                                    <div className="flex-shrink-0 w-48">
-                                        <div className="text-lg font-bold text-white mb-0.5">FRÉQUENCE ÉLEVÉE</div>
-                                        <div className="text-sm text-purple-400">TOP 12</div>
-                                    </div>
-                                </>
-                            )}
-                            {mode === 'manual' && (isSimplifiedMode || highStarActive) && (
+                            {mode === 'manual' && (
                                 <div className={cn("flex-1 flex justify-start", !isSimplifiedMode && "ml-2")}>
                                     <BallGrid 
                                         stats={isSimplifiedMode ? getSimplifiedStarStats(simplifiedSortOrder).slice(0, 6) : highStarStats} 
@@ -3551,16 +4095,7 @@ export default function Console() {
 
                         {/* Row 2: Mid Star (classic) or Stars 7-12 (simplified) */}
                         <div className="bg-black/30 p-1.5 rounded border border-zinc-800 flex items-center transition-all duration-300 mb-[6px]">
-                            {!isSimplifiedMode && (
-                                <>
-                                    <ToggleSwitch checked={midStarActive} onChange={v => { setMidStarActive(v); playSound('toggle'); }} activeColor="bg-pink-500" className="scale-75 origin-left flex-shrink-0 mr-4" />
-                                    <div className="flex-shrink-0 w-48">
-                                        <div className="text-lg font-bold text-white mb-0.5">FRÉQUENCE MOYENNE</div>
-                                        <div className="text-sm text-pink-400">MOYENNE 12</div>
-                                    </div>
-                                </>
-                            )}
-                            {mode === 'manual' && (isSimplifiedMode || midStarActive) && (
+                            {mode === 'manual' && (
                                 <div className={cn("flex-1 flex justify-start", !isSimplifiedMode && "ml-2")}>
                                     <BallGrid 
                                         stats={isSimplifiedMode ? getSimplifiedStarStats(simplifiedSortOrder).slice(6, 12) : midStarStats} 
@@ -3570,335 +4105,25 @@ export default function Console() {
                                         selectedStars={selectedStars}
                                         numberSources={numberSources}
                                         starSources={starSources}
-                                        category={isSimplifiedMode ? undefined : "mid"}
+                                        category={undefined}
                                         onToggle={toggleSelection}
                                         className={isSimplifiedMode ? "py-0 justify-evenly w-full" : "py-0 justify-start gap-[4px]"}
-                                        resolveCategory={isSimplifiedMode ? undefined : resolveCategory}
+                                        resolveCategory={undefined}
                                     />
                                 </div>
                             )}
                         </div>
-
-                        {/* Row 3: Low Star (classic only - hidden in simplified) */}
-                        {!isSimplifiedMode && (
-                        <div className="bg-black/30 p-1.5 rounded border border-zinc-800 flex items-center transition-all duration-300 mb-[6px]">
-                            <ToggleSwitch checked={lowStarActive} onChange={v => { setLowStarActive(v); playSound('toggle'); }} activeColor="bg-blue-400" className="scale-75 origin-left flex-shrink-0 mr-4" />
-                            <div className="flex-shrink-0 w-48">
-                                <div className="text-lg font-bold text-white mb-0.5">FRÉQUENCE BASSE</div>
-                                <div className="text-sm text-blue-400">BASSE 12</div>
-                            </div>
-                            {mode === 'manual' && lowStarActive && (
-                                <div className="flex-1 flex justify-start ml-2">
-                                    <BallGrid 
-                                        stats={lowStarStats} 
-                                        countLimit={12} 
-                                        type="star"
-                                        selectedNumbers={selectedNumbers}
-                                        selectedStars={selectedStars}
-                                        numberSources={numberSources}
-                                        starSources={starSources}
-                                        category="low"
-                                        onToggle={toggleSelection}
-                                        className="py-0 justify-start gap-[4px]"
-                                        resolveCategory={resolveCategory}
-                                    />
-                                </div>
-                            )}
-                        </div>
-                        )}
-
-                        {/* Row 4: Dormeur Star (classic only - hidden in simplified) */}
-                        {!isSimplifiedMode && (
-                        <div className="bg-black/30 p-1.5 rounded border border-zinc-800 flex items-center transition-all duration-300 mb-[6px]">
-                            <ToggleSwitch checked={dormeurStarActive} onChange={v => { setDormeurStarActive(v); playSound('toggle'); }} activeColor="bg-zinc-400" className="scale-75 origin-left flex-shrink-0 mr-4" />
-                            <div className="flex-shrink-0 w-48">
-                                <div className="text-lg font-bold text-white mb-0.5">DORMEUR</div>
-                                <div className="text-sm text-zinc-400">TOP 12 • Absence</div>
-                            </div>
-                            {mode === 'manual' && dormeurStarActive && (
-                                <div className="flex-1 flex justify-start ml-2">
-                                    <BallGrid 
-                                        stats={dormeurStarStats} 
-                                        countLimit={4} 
-                                        type="star"
-                                        selectedNumbers={selectedNumbers}
-                                        selectedStars={selectedStars}
-                                        numberSources={numberSources}
-                                        starSources={starSources}
-                                        category="dormeur"
-                                        onToggle={toggleSelection}
-                                        className="py-0 justify-start gap-[4px]"
-                                        resolveCategory={resolveCategory}
-                                    />
-                                </div>
-                            )}
-                        </div>
-                        )}
                      </div>
                 </SectionPanel>
                 )}
 
                 <SectionPanel 
-                    title={isSimplifiedMode && mode === 'manual' ? "ACTIONS" : <ProchainTirageSimple />}
+                    title="ACTIONS"
                     disabled={false}
                     showLed={false}
-                    headerAction={(isSimplifiedMode && mode === 'manual') ? (
-                        /* Envois counter in header for simplified mode */
-                        <div className="flex items-center gap-1 mr-5">
-                            <span className="text-zinc-400 text-lg font-semibold">Envois:</span>
-                            <span className="text-casino-gold font-bold text-xl font-mono">{sendCount}</span>
-                            {sendCount > 0 && (
-                                <button 
-                                    onClick={resetSendCount}
-                                    className="p-0.5 text-zinc-500 hover:text-white transition-colors"
-                                    title="Remettre à zéro"
-                                >
-                                    <RotateCcw size={12} />
-                                </button>
-                            )}
-                        </div>
-                    ) : !(isSimplifiedMode && mode === 'manual') ? (
-                        <div className="flex items-center mr-5">
-                            {/* Trash - 60px gap to Envois, 1.2x size */}
-                            <div className="mr-[60px]">
-                                {!showClearConfirm ? (
-                                    <button 
-                                        onClick={() => setShowClearConfirm(true)}
-                                        className="w-6 h-6 flex items-center justify-center bg-red-900/30 border border-red-500/50 rounded text-red-500 hover:bg-red-900/50 hover:text-red-400 transition-all"
-                                        title="Effacer l'historique"
-                                    >
-                                        <Trash2 size={12} />
-                                    </button>
-                                ) : (
-                                    <div className="flex items-center gap-1 bg-black border border-red-500 rounded p-0.5 animate-in fade-in duration-200">
-                                        <button 
-                                            onClick={() => {
-                                                setAutoDraws([]);
-                                                setGeneratedNumbers([]);
-                                                setGeneratedStars([]);
-                                                setShowClearConfirm(false);
-                                                playSound('click');
-                                                toast.success("Historique effacé");
-                                            }}
-                                            className="px-1 py-0.5 bg-red-600 hover:bg-red-500 text-white text-[8px] font-bold rounded"
-                                        >
-                                            OK
-                                        </button>
-                                        <button 
-                                            onClick={() => setShowClearConfirm(false)}
-                                            className="px-1 py-0.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-[8px] font-bold rounded"
-                                        >
-                                            NON
-                                        </button>
-                                    </div>
-                                )}
-                            </div>
-                            {/* Envois counter - enlarged */}
-                            <div className="flex items-center gap-1">
-                                <span className="text-zinc-400 text-lg font-semibold">Envois:</span>
-                                <span className="text-casino-gold font-bold text-xl font-mono">{sendCount}</span>
-                                {sendCount > 0 && (
-                                    <button 
-                                        onClick={resetSendCount}
-                                        className="p-0.5 text-zinc-500 hover:text-white transition-colors"
-                                        title="Remettre à zéro"
-                                    >
-                                        <RotateCcw size={10} />
-                                    </button>
-                                )}
-                            </div>
-                        </div>
-                    ) : undefined}
-                    className={isSimplifiedMode && mode === 'manual' ? "h-[395px]" : "h-[200px]"}
+                    className="h-[395px]"
                 >
-                    {isSimplifiedMode && mode === 'manual' ? (
-                        /* Simplified mode: Actions panel with Search/Validate/Email/SMS */
-                        <div className="flex flex-col h-full p-3">
-                            {/* Row 1: Bouton ENVOYER - centered at top, 20px from title */}
-                            <div className="flex flex-col items-center mt-5">
-                                <CasinoButton 
-                                    variant={autoDraws.length === 0 ? "danger" : "primary"}
-                                    size="lg"
-                                    className={cn(
-                                        "px-8 py-3 text-lg font-bold min-w-[180px]",
-                                        autoDraws.length === 0 
-                                            ? "opacity-50 cursor-not-allowed" 
-                                            : "animate-pulse bg-green-900 border-green-500 text-green-400 shadow-[0_0_20px_rgba(34,197,94,0.5)]"
-                                    )}
-                                    onClick={handleSend}
-                                    disabled={autoDraws.length === 0}
-                                >
-                                    {isSending ? "..." : (
-                                        <span className={autoDraws.length === 0 ? "text-red-500" : "text-green-400"}>
-                                            ENVOYER
-                                        </span>
-                                    )}
-                                </CasinoButton>
-                                
-                                {/* Trash button - below Email/SMS/Send, 50px gap */}
-                                {!showClearConfirm ? (
-                                    <button 
-                                        onClick={() => setShowClearConfirm(true)}
-                                        className="w-10 h-10 flex items-center justify-center bg-red-900/30 border border-red-500/50 rounded-lg text-red-500 hover:bg-red-900/50 hover:text-red-400 hover:border-red-400 transition-all mt-[50px]"
-                                        title="Effacer l'historique"
-                                    >
-                                        <Trash2 size={20} />
-                                    </button>
-                                ) : (
-                                    <div className="flex items-center gap-2 bg-black border border-red-500 rounded-lg p-2 animate-in fade-in duration-200 mt-[50px]">
-                                        <button 
-                                            onClick={() => {
-                                                setAutoDraws([]);
-                                                setGeneratedNumbers([]);
-                                                setGeneratedStars([]);
-                                                setShowClearConfirm(false);
-                                                playSound('click');
-                                                toast.success("Historique effacé");
-                                            }}
-                                            className="px-3 py-1.5 bg-red-600 hover:bg-red-500 text-white text-sm font-bold rounded"
-                                        >
-                                            OK
-                                        </button>
-                                        <button 
-                                            onClick={() => setShowClearConfirm(false)}
-                                            className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-sm font-bold rounded"
-                                        >
-                                            NON
-                                        </button>
-                                    </div>
-                                )}
-                            </div>
-                            
-                            {/* Center group: ProchainTirageSimple + Buttons - moved up 40px toward trash */}
-                            <div className="flex-1 flex flex-col items-center justify-center gap-2 -mt-10">
-                                {/* ProchainTirageSimple as title for the buttons */}
-                                <ProchainTirageSimple />
-                                
-                                {/* Search/Validate buttons */}
-                                <div className="flex items-center justify-center">
-                                <div className={cn(
-                                    "flex items-center rounded-xl overflow-hidden",
-                                    currentPrice === 0 
-                                        ? "animate-pulse shadow-[0_0_18px_rgba(255,0,0,0.7)]" 
-                                        : "shadow-[0_0_18px_rgba(255,215,0,0.4)]"
-                                )}>
-                                    <CasinoButton 
-                                        size="lg" 
-                                        variant={!selectedTariff ? "danger" : "primary"}
-                                        className="text-base px-6 py-4 rounded-none border-r border-black/20 w-[170px] flex items-center justify-center"
-                                        onClick={() => {
-                                            if (!selectedTariff) {
-                                                playSound('error');
-                                                return;
-                                            }
-                                            handleGenerate('auto');
-                                        }} 
-                                        disabled={isGenerating}
-                                    >
-                                        {isGenerating ? "..." : (
-                                            (weightHigh > 0 || weightMid > 0 || weightLow > 0 || weightDormeur > 0)
-                                                ? <span className="text-red-500 font-bold text-center leading-tight text-sm">RECHERCHE<br/>PONDÉRÉE</span>
-                                                : "RECHERCHER"
-                                        )}
-                                    </CasinoButton>
-                                    <CasinoButton 
-                                        size="lg" 
-                                        variant={(!selectedTariff || selectedNumbers.length !== selectedTariff?.nums || selectedStars.length !== selectedTariff?.stars) ? "danger" : "primary"}
-                                        className={cn(
-                                            "text-base px-6 py-4 rounded-none w-[170px] flex items-center justify-center",
-                                            (!selectedTariff || selectedNumbers.length !== selectedTariff?.nums || selectedStars.length !== selectedTariff?.stars)
-                                                ? "bg-gradient-to-b from-red-600 to-red-900 border-red-500 cursor-not-allowed"
-                                                : "bg-gradient-to-b from-green-600 to-green-900 border-green-500 text-white hover:from-green-500 hover:to-green-800"
-                                        )}
-                                        onClick={() => {
-                                            if (!selectedTariff || selectedNumbers.length !== selectedTariff?.nums || selectedStars.length !== selectedTariff?.stars) {
-                                                playSound('error');
-                                                return;
-                                            }
-                                            handleGenerate('manual');
-                                        }}
-                                        disabled={isGenerating}
-                                    >
-                                        {isGenerating ? "..." : "VALIDER"}
-                                    </CasinoButton>
-                                </div>
-                                </div>
-                            </div>
-                        </div>
-                    ) : (
-                        /* Classic mode: Actions panel - Search/Validate left (stacked), Email/SMS/Send right - 20px above center */
-                        <div className="flex items-center justify-center h-full px-3 py-2 gap-4 -mt-[20px]">
-                            {/* Left: Search/Validate buttons - stacked vertically, fixed height container */}
-                            <div className="flex flex-col gap-[10px] justify-center">
-                                <CasinoButton 
-                                    size="md" 
-                                    variant={!selectedTariff ? "danger" : "primary"}
-                                    className={cn(
-                                        "text-sm px-4 py-[7px] w-[131px] flex items-center justify-center rounded-lg",
-                                        currentPrice === 0 
-                                            ? "animate-pulse shadow-[0_0_12px_rgba(255,0,0,0.5)]" 
-                                            : "shadow-[0_0_12px_rgba(255,215,0,0.2)]"
-                                    )}
-                                    onClick={() => {
-                                        if (!selectedTariff) {
-                                            playSound('error');
-                                            return;
-                                        }
-                                        handleGenerate(mode === 'manual' ? 'auto' : undefined);
-                                    }} 
-                                    disabled={isGenerating}
-                                >
-                                    {isGenerating ? "..." : (
-                                        (weightHigh > 0 || weightMid > 0 || weightLow > 0 || weightDormeur > 0)
-                                            ? <span className="text-red-500 font-bold text-center leading-tight text-[10px]">RECHERCHE<br/>PONDÉRÉE</span>
-                                            : "RECHERCHER"
-                                    )}
-                                </CasinoButton>
-                                {mode === 'manual' && (
-                                    <CasinoButton 
-                                        size="md" 
-                                        variant={(!selectedTariff || selectedNumbers.length !== selectedTariff?.nums || selectedStars.length !== selectedTariff?.stars) ? "danger" : "primary"}
-                                        className={cn(
-                                            "text-sm px-4 py-[7px] w-[131px] flex items-center justify-center rounded-lg",
-                                            (!selectedTariff || selectedNumbers.length !== selectedTariff?.nums || selectedStars.length !== selectedTariff?.stars)
-                                                ? "bg-gradient-to-b from-red-600 to-red-900 border-red-500 cursor-not-allowed"
-                                                : "bg-gradient-to-b from-green-600 to-green-900 border-green-500 text-white hover:from-green-500 hover:to-green-800"
-                                        )}
-                                        onClick={() => {
-                                            if (!selectedTariff || selectedNumbers.length !== selectedTariff?.nums || selectedStars.length !== selectedTariff?.stars) {
-                                                playSound('error');
-                                                return;
-                                            }
-                                            handleGenerate('manual');
-                                        }}
-                                        disabled={isGenerating}
-                                    >
-                                        {isGenerating ? "..." : "VALIDER"}
-                                    </CasinoButton>
-                                )}
-                            </div>
-                            
-                            {/* Right: Bouton ENVOYER */}
-                            <CasinoButton 
-                                variant={autoDraws.length === 0 ? "danger" : "primary"}
-                                size="md"
-                                className={cn(
-                                    "px-5 py-2 text-sm font-bold min-w-[120px]",
-                                    autoDraws.length === 0 
-                                        ? "opacity-50 cursor-not-allowed" 
-                                        : "animate-pulse bg-green-900 border-green-500 text-green-400 shadow-[0_0_15px_rgba(34,197,94,0.5)]"
-                                )}
-                                onClick={handleSend}
-                                disabled={autoDraws.length === 0}
-                            >
-                                {isSending ? "..." : (
-                                    <span className={autoDraws.length === 0 ? "text-red-500" : "text-green-400"}>
-                                        ENVOYER
-                                    </span>
-                                )}
-                            </CasinoButton>
-                        </div>
-                    )}
+                    <div className="h-full" />
                 </SectionPanel>
             </div>
 
@@ -3941,7 +4166,7 @@ export default function Console() {
                                     disabled={isGenerating}
                                  >
                                     {isGenerating ? "..." : (
-                                        (weightHigh > 0 || weightMid > 0 || weightLow > 0 || weightDormeur > 0 ||
+                                        (weightHigh > 0 || dormeurBallLevel > 0 || dormeurStarLevel > 0 ||
                                          weightStarHigh > 0 || weightStarMid > 0 || weightStarLow > 0 || weightStarDormeur > 0)
                                             ? <span className="text-red-500 font-bold text-center leading-tight">RECHERCHE<br/>PONDÉRÉE</span>
                                             : "RECHERCHER"
@@ -3973,7 +4198,9 @@ export default function Console() {
                             <div className="absolute left-full ml-[30px] top-1/2 -translate-y-1/2 z-50">
                                 {!showClearConfirm ? (
                                     <button 
-                                        onClick={() => setShowClearConfirm(true)}
+                                        onClick={() => {
+                                          setShowClearConfirm(true);
+                                        }}
                                         className="w-12 h-12 flex items-center justify-center bg-red-900/30 border border-red-500/50 rounded-lg text-red-500 hover:bg-red-900/50 hover:text-red-400 hover:border-red-400 transition-all"
                                         title="Effacer tout l'historique"
                                     >
@@ -4086,25 +4313,26 @@ export default function Console() {
                      )}
                  </div>
              ) : (
-                 <div className="w-full flex flex-col gap-2 mt-2 max-h-[400px] overflow-y-auto custom-scrollbar">
+                <div ref={autoDrawsContainerRef} className="w-full flex flex-col gap-2 mt-2 max-h-[400px] overflow-y-auto custom-scrollbar">
                     {autoDraws.length > 0 ? (
                         autoDraws.map((draw, idx) => {
-                            // Pour Invite/Abonné : TOUJOURS masqué (jamais révélable)
-                            // Pour VIP/Admin : comportement normal
-                            const isRevealed = isInviteOrAbonne ? false : (mode === 'manual' ? true : (draw.revealed !== undefined ? draw.revealed : true));
+                            // Logique de visibilité :
+                            // - Mode manuel : toujours visible (Admin/VIP/Abonné ont le mode manuel)
+                            // - Mode auto : Invite masqué, Admin/VIP/Abonné visibles
+                            const isRevealed = mode === 'manual' ? true : (isInvite ? false : (draw.revealed !== undefined ? draw.revealed : true));
                             const shouldBlur = !isRevealed;
-                            const shouldHideNumbers = isInviteOrAbonne; // Masquer complètement les vrais numéros
+                            const shouldHideNumbers = isInvite; // Masquer uniquement pour les invités
                             
                             return (
                             <div 
                                key={`draw-${idx}`}
                                className={cn(
                                    "w-full bg-black/50 p-2 rounded-2xl border shadow-[inset_0_0_20px_rgba(0,0,0,0.8)] min-h-[60px] flex items-center justify-center relative z-10 animate-in slide-in-from-top-4 duration-500 fade-in",
-                                   isInviteOrAbonne ? "border-zinc-700 opacity-60" : "border-zinc-800 cursor-pointer"
+                                   isInvite ? "border-zinc-700 opacity-60" : "border-zinc-800 cursor-pointer"
                                )}
                                onClick={() => { 
-                                   // Invite/Abonné ne peuvent pas révéler
-                                   if (shouldBlur && !isInviteOrAbonne) {
+                                   // Seuls les invités ne peuvent pas révéler (en mode auto)
+                                   if (shouldBlur && !isInvite) {
                                        const newDraws = [...autoDraws];
                                        newDraws[idx].revealed = true;
                                        setAutoDraws(newDraws);
@@ -4114,7 +4342,7 @@ export default function Console() {
                                 <div className="absolute left-4 text-xs text-zinc-600 font-mono">
                                     #{autoDraws.length - idx} {draw.revealed === true && mode === 'manual' && idx === 0 ? '(MANUEL)' : ''}
                                 </div>
-                               {mode === 'manual' && !isInviteOrAbonne && (
+                               {mode === 'manual' && !isInvite && (
                                    <button 
                                        onClick={(e) => {
                                            e.stopPropagation();
@@ -4144,7 +4372,7 @@ export default function Console() {
                                     "flex flex-wrap justify-center items-center gap-x-4 gap-y-2 text-2xl md:text-3xl font-black font-mono tracking-wider transition-all duration-700",
                                     shouldBlur && !shouldHideNumbers ? "blur-sm" : ""
                                 )}>
-                                   {/* NUMBERS - Masqués pour Invite/Abonné */}
+                                   {/* NUMBERS - Masqués uniquement pour Invités */}
                                    <div className="flex flex-wrap justify-center gap-2">
                                        {draw.nums.map((n, i) => (
                                            <div key={`n-${i}`} className={cn(
@@ -4161,7 +4389,7 @@ export default function Console() {
                                    {/* SEPARATOR */}
                                    <div className="text-zinc-600 hidden md:flex items-center mx-2 text-4xl">|</div>
                                    
-                                   {/* STARS - Masquées pour Invite/Abonné */}
+                                   {/* STARS - Masquées uniquement pour Invités */}
                                    <div className="flex flex-wrap justify-center gap-2">
                                        {draw.stars.map((n, i) => (
                                            <div key={`s-${i}`} className={cn(
@@ -4176,8 +4404,8 @@ export default function Console() {
                                    </div>
                                 </div>
                                 
-                                {/* Message pour VIP/Admin qui peuvent révéler */}
-                                {shouldBlur && !isInviteOrAbonne && (
+                                {/* Message pour Admin/VIP/Abonné qui peuvent révéler */}
+                                {shouldBlur && !isInvite && (
                                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
                                        <div className="bg-black/60 backdrop-blur-sm px-4 py-2 rounded-full border border-white/20 text-white font-rajdhani uppercase tracking-widest text-sm animate-pulse">
                                            Cliquez pour révéler
@@ -4203,12 +4431,16 @@ export default function Console() {
             stats={stats}
             mode={mode}
             config={{
-                highFreqCount, midFreqCount, lowFreqCount,
-                highStarCount, midStarCount, lowStarCount,
-                weightHigh, weightMid, weightLow, weightDormeur,
+                highFreqCount: 0, midFreqCount: 0, lowFreqCount: 0,
+                highStarCount: 0, midStarCount: 0, lowStarCount: 0,
+                weightHigh, weightMid: 0, weightLow: 0,
+                weightDormeur: dormeurBallLevel, // compat debug panel
                 weightStarHigh, weightStarMid, weightStarLow, weightStarDormeur,
                 avoidPairExt, balanceHighLow
             }}
+            numberSources={numberSources}
+            starSources={starSources}
+            dormeurProof={lastDormeurProof}
             selectedNumbers={selectedNumbers}
             selectedStars={selectedStars}
             generatedNumbers={generatedNumbers}

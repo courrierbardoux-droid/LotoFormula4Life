@@ -59,29 +59,49 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   // Vérifier la session au chargement
   useEffect(() => {
     async function checkSession() {
+      console.log('[UserContext] ÉTAPE A: Début de checkSession - setIsLoading(true)');
       setIsLoading(true);
       
+      // Pause pour observer
+      await new Promise(resolve => setTimeout(resolve, 200));
+      console.log('[UserContext] ÉTAPE B: Après pause initiale, vérification de l\'API...');
+      
       // Vérifier si l'API est disponible
+      console.log('[UserContext] ÉTAPE C: Appel isApiAvailable()...');
       const apiAvailable = await isApiAvailable();
+      console.log('[UserContext] ÉTAPE D: isApiAvailable() retourné:', apiAvailable);
       setUseApi(apiAvailable);
       
+      // Pause pour observer
+      await new Promise(resolve => setTimeout(resolve, 200));
+      
       if (apiAvailable) {
+        console.log('[UserContext] ÉTAPE E: API disponible, appel /api/auth/me...');
         try {
           const response = await fetch('/api/auth/me', { credentials: 'include' });
+          console.log('[UserContext] ÉTAPE F: Réponse /api/auth/me reçue, status:', response.status);
           const data = await response.json();
+          console.log('[UserContext] ÉTAPE G: Données reçues:', data);
           if (data.user) {
+            console.log('[UserContext] ÉTAPE H: Utilisateur trouvé dans la session:', data.user.username, 'role:', data.user.role);
             setUser(data.user);
+          } else {
+            console.log('[UserContext] ÉTAPE H: Aucun utilisateur dans la session (non connecté)');
           }
         } catch (error) {
-          console.log('[UserContext] API check failed, using mock mode');
+          console.log('[UserContext] ÉTAPE E (ERREUR): API check failed, using mock mode', error);
           setUseApi(false);
         }
       } else {
-        console.log('[UserContext] Backend not available, using mock mode');
+        console.log('[UserContext] ÉTAPE E: Backend not available, using mock mode');
         setAllUsers(mockUsers);
       }
       
+      // Pause avant de terminer le chargement
+      await new Promise(resolve => setTimeout(resolve, 200));
+      console.log('[UserContext] ÉTAPE I: Fin de checkSession - setIsLoading(false)');
       setIsLoading(false);
+      console.log('[UserContext] ÉTAPE J: Chargement terminé, setIsLoading(false) exécuté');
     }
     
     checkSession();
@@ -108,7 +128,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   // Nettoyer les données utilisateur du localStorage
   const clearUserData = () => {
     const keysToRemove = [
-      'loto_played_grids',      // Grilles jouées (clé principale)
+      // 'loto_played_grids' retiré - les grilles sont maintenant uniquement en DB
       'console_state',          // État de la console (tirages affichés)
       'lf4l-grilles-jouees',
       'lf4l-grilles-gagnantes', 

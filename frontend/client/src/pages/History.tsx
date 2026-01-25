@@ -1,22 +1,24 @@
 
 import React, { useEffect, useState, useRef } from 'react';
-import { useLocation, useSearch } from 'wouter';
+import { Link, useLocation, useSearch } from 'wouter';
 import { CasinoLayout } from '@/components/layout/CasinoLayout';
-import { chargerHistorique, Tirage, mettreAJourCache, getGridHistory, checkGridResult, getDernierTirage, PlayedGrid, verifierMiseAJourNecessaire } from '@/lib/lotoService';
+import { chargerHistorique, Tirage, mettreAJourCache, getDernierTirage, verifierMiseAJourNecessaire, viderCache } from '@/lib/lotoService';
 import { useUser } from '@/lib/UserContext';
-import { Download, Upload, AlertTriangle, RefreshCw, FileText, CheckCircle, Trophy, PartyPopper } from 'lucide-react';
+import { Download, Upload, AlertTriangle, RefreshCw, FileText, CheckCircle, Trash2, Lock, Unlock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { LottoBall } from '@/components/casino/LottoBall';
+import { Switch } from '@/components/ui/switch';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 
 export default function History() {
   const { user } = useUser();
   const [, setLocation] = useLocation();
+  const search = useSearch();
   const [history, setHistory] = useState<Tirage[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isBlinking, setIsBlinking] = useState(false);
@@ -25,10 +27,40 @@ export default function History() {
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const autoUpdateTriggered = useRef(false);
-  
-  // État pour la modal de victoire
-  const [showWinModal, setShowWinModal] = useState(false);
-  const [winningGrids, setWinningGrids] = useState<{grid: PlayedGrid, result: {status: string, gain: number, matchNum: number, matchStar: number}}[]>([]);
+
+  // Mode de mise à jour (AUTO / MANUEL) — stocké côté serveur (pas dans le navigateur)
+  const [historyUpdateMode, setHistoryUpdateMode] = useState<'auto' | 'manual'>('auto');
+  const [isAutoUpdating, setIsAutoUpdating] = useState(false);
+  const [autoUpdateTime, setAutoUpdateTime] = useState<string>('22:00');
+  const [isSavingAutoUpdateTime, setIsSavingAutoUpdateTime] = useState(false);
+
+  useEffect(() => {
+    if (user?.role !== 'admin') return;
+    (async () => {
+      try {
+        const res = await fetch('/api/history/update-mode', { credentials: 'include' });
+        const data = await res.json().catch(() => ({} as any));
+        if (data?.mode === 'manual' || data?.mode === 'auto') setHistoryUpdateMode(data.mode);
+      } catch {
+        // ignore (fallback auto)
+      }
+    })();
+  }, [user?.role]);
+
+  useEffect(() => {
+    if (user?.role !== 'admin') return;
+    (async () => {
+      try {
+        const res = await fetch('/api/history/auto-update/schedule', { credentials: 'include' });
+        const data = await res.json().catch(() => ({} as any));
+        if (typeof data?.time === 'string' && /^\d{2}:\d{2}$/.test(data.time)) {
+          setAutoUpdateTime(data.time);
+        }
+      } catch {
+        // ignore (fallback 22:00)
+      }
+    })();
+  }, [user?.role]);
   
   // État pour le filtre de dates CSV
   const [dateFrom, setDateFrom] = useState<string>('');
@@ -92,6 +124,76 @@ export default function History() {
     }
   };
 
+  const setUpdateMode = async (mode: 'auto' | 'manual') => {
+    setHistoryUpdateMode(mode);
+    try {
+      await fetch('/api/history/update-mode', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ mode }),
+      });
+    } catch {
+      // ignore
+    }
+  };
+
+  const saveAutoUpdateTime = async (time: string) => {
+    if (user?.role !== 'admin') return;
+    setAutoUpdateTime(time);
+    setIsSavingAutoUpdateTime(true);
+    try {
+      const res = await fetch('/api/history/auto-update/schedule', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ time }),
+      });
+      const data = await res.json().catch(() => ({} as any));
+      if (!res.ok || !data?.success) {
+        toast.error(String(data?.error || 'Heure invalide'));
+        return;
+      }
+      toast.success(`Heure de mise à jour enregistrée : ${time}`);
+    } catch {
+      toast.error('Erreur sauvegarde heure de mise à jour');
+    } finally {
+      setIsSavingAutoUpdateTime(false);
+    }
+  };
+
+  const handleAdminRefreshClick = async () => {
+    if (historyUpdateMode === 'manual') {
+      handleUpdateAction(true);
+      return;
+    }
+    try {
+      setIsAutoUpdating(true);
+      setIsBlinking(true);
+      const res = await fetch('/api/history/auto-update/run', { method: 'POST', credentials: 'include' });
+      const dataText = await res.text().catch(() => '');
+      const data = (() => { try { return JSON.parse(dataText || '{}'); } catch { return {} as any; } })();
+      if (!res.ok || !data?.success) {
+        const msg = String(data?.error || 'Échec mise à jour automatique');
+        toast.error(msg);
+        return;
+      }
+      toast.success('Mise à jour automatique effectuée');
+      // Recharger l'historique depuis la source habituelle
+      const refreshed = await chargerHistorique();
+      setHistory(refreshed);
+      mettreAJourCache(refreshed);
+      const dernierTirage = getDernierTirage(refreshed);
+      const verif = verifierMiseAJourNecessaire(dernierTirage);
+      setUpdateNeeded(verif.necessaire);
+    } catch (e) {
+      toast.error("Échec mise à jour automatique");
+    } finally {
+      setIsAutoUpdating(false);
+      setIsBlinking(false);
+    }
+  };
+
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -131,94 +233,114 @@ export default function History() {
       const text = e.target?.result;
       if (typeof text === 'string') {
         try {
+          const normalizeDate = (raw: string): string => {
+            const s = (raw || '').trim();
+            const base = s.includes('T') ? s.split('T')[0] : s.includes(' ') ? s.split(' ')[0] : s;
+            // YYYY-MM-DD
+            if (/^\d{4}-\d{2}-\d{2}$/.test(base)) return base;
+            // DD/MM/YYYY or DD-MM-YYYY -> YYYY-MM-DD
+            const m = base.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+            if (m) {
+              const dd = m[1].padStart(2, '0');
+              const mm = m[2].padStart(2, '0');
+              const yyyy = m[3];
+              return `${yyyy}-${mm}-${dd}`;
+            }
+            return base;
+          };
+
           // Parse CSV simply to update state
           const lines = text.trim().split('\n');
           const newTirages: Tirage[] = [];
+          let badRows = 0;
+          let nanValues = 0;
           
           // Skip header
           for (let i = 1; i < lines.length; i++) {
             const line = lines[i].trim();
             if (!line) continue;
             const cols = line.split(';');
-            if (cols.length < 8) continue;
+            if (cols.length < 8) { badRows++; continue; }
             
             // Flexible date parsing attempt
-            let dateStr = cols[0];
+            const dateStr = normalizeDate(cols[0]);
             // If date contains full timestamp, keep it or clean it? keeping it simple for now
             
+            const nums = [
+              parseInt(cols[1]), parseInt(cols[2]), parseInt(cols[3]), parseInt(cols[4]), parseInt(cols[5])
+            ];
+            const stars = [parseInt(cols[6]), parseInt(cols[7])];
+            if (nums.some(n => Number.isNaN(n)) || stars.some(n => Number.isNaN(n))) nanValues++;
+
             newTirages.push({
               date: dateStr,
-              numeros: [
-                parseInt(cols[1]), parseInt(cols[2]), parseInt(cols[3]), parseInt(cols[4]), parseInt(cols[5])
-              ].sort((a, b) => a - b),
-              etoiles: [
-                parseInt(cols[6]), parseInt(cols[7])
-              ].sort((a, b) => a - b)
+              numeros: nums.sort((a, b) => a - b),
+              etoiles: stars.sort((a, b) => a - b)
             });
           }
           
           // Sort descending
           newTirages.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-          
-          mettreAJourCache(newTirages); // Mise à jour globale pour que les stats (Console) en profitent aussi
-          setHistory(newTirages);
+
+          // Merge: le CSV uploadé peut être partiel (ex: uniquement l'année en cours).
+          // On fusionne avec l'historique existant (en mémoire) pour éviter de "réduire" l'historique à 5 lignes.
+          const baseHistory = history.length > 0 ? history : await chargerHistorique();
+          const baseByDate = new Map<string, Tirage>();
+          baseHistory.forEach(t => baseByDate.set(normalizeDate(t.date), { ...t, date: normalizeDate(t.date) }));
+          const beforeLen = baseByDate.size;
+          newTirages.forEach(t => baseByDate.set(normalizeDate(t.date), { ...t, date: normalizeDate(t.date) }));
+          const mergedTirages = Array.from(baseByDate.values()).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+          const mergedLen = mergedTirages.length;
+          const addedCount = Math.max(0, mergedLen - beforeLen);
+
+          mettreAJourCache(mergedTirages); // Mise à jour globale pour que les stats (Console) en profitent aussi
+          setHistory(mergedTirages);
           setUpdateNeeded(false); // Réinitialiser l'état de mise à jour
           
-          // Vérifier les grilles jouées locales pour détecter les gains
-          const dernierTirage = getDernierTirage(newTirages);
-          const grillesJouees = getGridHistory();
-          
-          if (dernierTirage && grillesJouees.length > 0) {
-            const grillesGagnantes: {grid: PlayedGrid, result: {status: string, gain: number, matchNum: number, matchStar: number}}[] = [];
-            
-            grillesJouees.forEach(grille => {
-              const result = checkGridResult(grille, dernierTirage);
-              if (result.gain > 0) {
-                grillesGagnantes.push({ grid: grille, result });
-              }
-            });
-            
-            if (grillesGagnantes.length > 0) {
-              setWinningGrids(grillesGagnantes);
-              setShowWinModal(true);
-            }
-          }
+          // Déterminer le dernier tirage (pour validation / synchro DB)
+          const dernierTirage = getDernierTirage(mergedTirages);
           
           // ===== SYNC AVEC BASE DE DONNÉES (Admin uniquement) =====
           if (user?.role === 'admin') {
             try {
               // 1. Mettre à jour la base de données avec les nouveaux tirages
+              const baseHistory = history.length > 0 ? history : await chargerHistorique();
+              const normalizeDateForDiff = (raw: string) => normalizeDate(raw);
+              const baseByDate = new Map<string, { numeros: number[]; etoiles: number[] }>();
+              baseHistory.forEach((t) => {
+                baseByDate.set(normalizeDateForDiff(t.date), {
+                  numeros: Array.isArray((t as any).numeros) ? (t as any).numeros : [],
+                  etoiles: Array.isArray((t as any).etoiles) ? (t as any).etoiles : [],
+                });
+              });
+
+              const sameArr = (a: number[], b: number[]) =>
+                a.length === b.length && a.every((v, i) => v === b[i]);
+
+              // IMPORTANT: envoyer aussi les dates existantes si numéros/étoiles changent
+              const toSend = newTirages.filter((t) => {
+                const key = normalizeDateForDiff(t.date);
+                const base = baseByDate.get(key);
+                if (!base) return true;
+                const nums = Array.isArray((t as any).numeros) ? (t as any).numeros : [];
+                const stars = Array.isArray((t as any).etoiles) ? (t as any).etoiles : [];
+                return !sameArr(base.numeros, nums) || !sameArr(base.etoiles, stars);
+              });
+
+              if (toSend.length === 0) {
+                toast.warning("Aucun tirage nouveau/modifié dans ce fichier (rien à écrire en base).");
+              }
+
               const syncRes = await fetch('/api/history', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'include',
-                body: JSON.stringify({ tirages: newTirages }),
+                body: JSON.stringify({ tirages: toSend }),
               });
               const syncData = await syncRes.json();
               
               if (syncData.success) {
-                console.log(`[History] DB sync: ${syncData.inserted} insérés, ${syncData.skipped} ignorés`);
-              }
-              
-              // 2. Vérifier les grilles gagnantes de TOUS les utilisateurs
-              if (dernierTirage) {
-                const checkRes = await fetch('/api/history/check-winners', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  credentials: 'include',
-                  body: JSON.stringify({
-                    lastDrawDate: dernierTirage.date.split('T')[0], // Format YYYY-MM-DD
-                    lastDrawNumbers: dernierTirage.numeros,
-                    lastDrawStars: dernierTirage.etoiles,
-                  }),
-                });
-                const checkData = await checkRes.json();
-                
-                if (checkData.winnersCount > 0) {
-                  toast.success(`🏆 ${checkData.winnersCount} gagnant(s) détecté(s) ! Email envoyé.`, {
-                    duration: 10000,
-                  });
-                }
+                console.log(`[History] DB sync: ${syncData.processed ?? syncData.inserted ?? 0} traités`);
               }
               
               // Recharger les données depuis la DB pour être sûr d'avoir les dernières
@@ -240,10 +362,8 @@ export default function History() {
           
           setShowUpdateModal(false);
           
-          // Forcer le rafraîchissement de la page pour mettre à jour tous les composants
-          setTimeout(() => {
-            window.location.reload();
-          }, 500);
+          // IMPORTANT: ne pas recharger la page automatiquement.
+          // La validation/fermeture de la modal de victoire doit être manuelle.
         } catch (err) {
             console.error(err);
             toast.error("Erreur lors de l'analyse du fichier CSV");
@@ -331,6 +451,21 @@ export default function History() {
       downloadFromLocalData();
     }
   };
+
+  // Téléchargement explicite "complet" (sans filtre) pour vérification / sauvegarde
+  const handleDownloadCSVFull = async () => {
+    const prevFrom = dateFrom;
+    const prevTo = dateTo;
+    try {
+      setDateFrom('');
+      setDateTo('');
+      await handleDownloadCSV();
+    } finally {
+      // Restaurer l'UI (ne pas forcer l'utilisateur à perdre ses filtres)
+      setDateFrom(prevFrom);
+      setDateTo(prevTo);
+    }
+  };
   
   // Fallback: téléchargement depuis les données en mémoire
   const downloadFromLocalData = () => {
@@ -387,6 +522,39 @@ export default function History() {
 
   // Obtenir le dernier tirage pour l'affichage
   const lastDraw = history.length > 0 ? history[0] : null;
+  const oldestDraw = history.length > 0 ? history[history.length - 1] : null;
+
+  // Verrou de sécurité pour éviter les suppressions accidentelles
+  const [isDeleteUnlocked, setIsDeleteUnlocked] = useState(false);
+
+  const handleDeleteDraw = async (rawDate: string) => {
+    if (user?.role !== 'admin') return;
+    if (!isDeleteUnlocked) {
+      toast.error("Suppression verrouillée. Déverrouillez le cadenas d'abord.");
+      return;
+    }
+    const dateIso = String(rawDate).split('T')[0].split(' ')[0];
+    const ok = window.confirm(`Supprimer définitivement le tirage du ${dateIso} ?\n\nCette action retire le tirage de la base (et ses gains/infos associées).`);
+    if (!ok) return;
+    try {
+      const res = await fetch(`/api/history/${encodeURIComponent(dateIso)}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      const data = await res.json().catch(() => ({} as any));
+      if (!res.ok || !data?.success) {
+        toast.error(String(data?.error || 'Suppression impossible'));
+        return;
+      }
+      toast.success(`Tirage ${dateIso} supprimé`);
+      viderCache();
+      const refreshed = await chargerHistorique();
+      setHistory(refreshed);
+      mettreAJourCache(refreshed);
+    } catch (e: any) {
+      toast.error(String(e?.message || e || 'Erreur suppression'));
+    }
+  };
 
   return (
     <CasinoLayout>
@@ -457,125 +625,136 @@ export default function History() {
                 </DialogFooter>
             </DialogContent>
         </Dialog>
-
-        {/* MODAL DE VICTOIRE - Grand écran GAGNÉ */}
-        <Dialog open={showWinModal} onOpenChange={setShowWinModal}>
-            <DialogContent className="bg-gradient-to-br from-yellow-900 via-amber-900 to-yellow-800 border-4 border-casino-gold text-white sm:max-w-2xl shadow-[0_0_100px_rgba(255,215,0,0.5)]">
-                <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_rgba(255,215,0,0.2)_0%,_transparent_70%)] pointer-events-none" />
-                
-                <div className="relative z-10 text-center py-8">
-                    {/* Icône trophée animée */}
-                    <div className="flex justify-center mb-6">
-                        <Trophy className="w-24 h-24 text-casino-gold animate-bounce drop-shadow-[0_0_30px_rgba(255,215,0,0.8)]" />
-                    </div>
-                    
-                    {/* Grand titre GAGNÉ */}
-                    <h1 className="text-6xl md:text-8xl font-black font-orbitron text-casino-gold mb-4 animate-pulse drop-shadow-[0_0_20px_rgba(255,215,0,1)]">
-                        GAGNÉ !
-                    </h1>
-                    
-                    <p className="text-2xl text-yellow-200 mb-8 font-rajdhani">
-                        🎉 Félicitations ! Vous avez des grilles gagnantes ! 🎉
-                    </p>
-                    
-                    {/* Liste des grilles gagnantes */}
-                    <div className="space-y-4 max-h-[300px] overflow-y-auto px-4">
-                        {winningGrids.map((item, index) => (
-                            <div key={index} className="bg-black/40 rounded-xl p-4 border border-casino-gold/50">
-                                <div className="flex justify-between items-center mb-2">
-                                    <span className="text-lg font-bold text-white">{item.result.status}</span>
-                                    <span className="text-2xl font-black text-casino-gold">
-                                        {item.result.gain.toLocaleString()} €
-                                    </span>
-                                </div>
-                                <div className="flex justify-center gap-2">
-                                    {item.grid.numeros.map(n => (
-                                        <LottoBall key={`win-n-${n}`} number={n} size="sm" />
-                                    ))}
-                                    <div className="w-px bg-zinc-600 mx-1" />
-                                    {item.grid.etoiles.map(n => (
-                                        <LottoBall key={`win-s-${n}`} number={n} isStar size="sm" />
-                                    ))}
-                                </div>
-                                <div className="mt-2 text-sm text-yellow-300">
-                                    {item.result.matchNum} numéros + {item.result.matchStar} étoiles
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-                    
-                    {/* Total des gains */}
-                    {winningGrids.length > 1 && (
-                        <div className="mt-6 pt-4 border-t border-casino-gold/50">
-                            <span className="text-xl text-yellow-200">Total des gains : </span>
-                            <span className="text-3xl font-black text-casino-gold">
-                                {winningGrids.reduce((sum, item) => sum + item.result.gain, 0).toLocaleString()} €
-                            </span>
-                        </div>
-                    )}
-                    
-                    <Button 
-                        onClick={() => setShowWinModal(false)}
-                        className="mt-8 bg-casino-gold hover:bg-yellow-500 text-black font-bold text-xl px-8 py-6"
-                    >
-                        🎊 SUPER ! 🎊
-                    </Button>
-                </div>
-            </DialogContent>
-        </Dialog>
+        {/* (Gagnants) : toutes les modales/notifications "gagnant" sont supprimées */}
 
         {/* TABLEAU AVEC STYLE "MES GRILLES JOUÉES" */}
         <div className="w-full mb-16">
             
-            {/* BARRE D'OUTILS : Filtre à gauche, Actualiser à droite - Même largeur que DERNIER TIRAGE */}
-            <div className="flex flex-col md:flex-row justify-between items-center gap-4 bg-zinc-900/50 border border-zinc-700 rounded-xl p-4 mb-6">
-                
-                {/* FILTRE DE DATES + CSV - À gauche */}
-                <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-zinc-400 text-sm font-rajdhani font-bold">PÉRIODE :</span>
-                    <input 
-                        type="date"
-                        value={dateFrom}
-                        onChange={(e) => setDateFrom(e.target.value)}
-                        className="bg-zinc-800 border border-zinc-600 rounded px-2 py-1.5 text-white text-sm font-mono focus:outline-none focus:border-casino-gold"
-                    />
-                    <span className="text-zinc-500 text-sm">→</span>
-                    <input 
-                        type="date"
-                        value={dateTo}
-                        onChange={(e) => setDateTo(e.target.value)}
-                        className="bg-zinc-800 border border-zinc-600 rounded px-2 py-1.5 text-white text-sm font-mono focus:outline-none focus:border-casino-gold"
-                    />
-                    {/* Bouton Télécharger CSV */}
-                    <button 
-                        onClick={handleDownloadCSV}
-                        className="bg-green-900/80 hover:bg-green-700 text-green-200 border border-green-500 rounded-lg px-4 py-1.5 shadow-[0_0_10px_rgba(34,197,94,0.3)] transition-all hover:scale-105 flex items-center gap-2 group ml-2"
-                        title="Télécharger l'historique filtré en CSV"
-                    >
-                        <Download size={18} className="group-hover:animate-bounce" />
-                        <span className="font-bold font-rajdhani text-sm">
-                            TÉLÉCHARGER CSV
-                        </span>
-                    </button>
+            {/* BARRE D'OUTILS — 2 lignes pour éviter la largeur inutile */}
+            <div className="bg-zinc-900/50 border border-zinc-700 rounded-xl p-4 mb-6">
+                {/* LIGNE 1 : période + export */}
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-zinc-400 text-sm font-rajdhani font-bold">PÉRIODE :</span>
+                        <input
+                            type="date"
+                            value={dateFrom}
+                            onChange={(e) => setDateFrom(e.target.value)}
+                            className="bg-zinc-800 border border-zinc-600 rounded px-2 py-1.5 text-white text-sm font-mono focus:outline-none focus:border-casino-gold"
+                        />
+                        <span className="text-zinc-500 text-sm">→</span>
+                        <input
+                            type="date"
+                            value={dateTo}
+                            onChange={(e) => setDateTo(e.target.value)}
+                            className="bg-zinc-800 border border-zinc-600 rounded px-2 py-1.5 text-white text-sm font-mono focus:outline-none focus:border-casino-gold"
+                        />
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                        <button
+                            onClick={handleDownloadCSVFull}
+                            className="bg-emerald-900/80 hover:bg-emerald-700 text-emerald-100 border border-emerald-500 rounded-lg px-4 py-1.5 shadow-[0_0_10px_rgba(16,185,129,0.3)] transition-all hover:scale-105 flex items-center gap-2 group"
+                            title="Télécharger l'historique COMPLET en CSV (sauvegarde)"
+                        >
+                            <Download size={18} className="group-hover:animate-bounce" />
+                            <span className="font-bold font-rajdhani text-sm">CSV COMPLET</span>
+                        </button>
+                        <button
+                            onClick={handleDownloadCSV}
+                            className="bg-green-900/80 hover:bg-green-700 text-green-200 border border-green-500 rounded-lg px-4 py-1.5 shadow-[0_0_10px_rgba(34,197,94,0.3)] transition-all hover:scale-105 flex items-center gap-2 group"
+                            title="Télécharger l'historique filtré (dates) en CSV"
+                        >
+                            <Download size={18} className="group-hover:animate-bounce" />
+                            <span className="font-bold font-rajdhani text-sm">CSV FILTRÉ</span>
+                        </button>
+                    </div>
                 </div>
-                
-                {/* BOUTON ACTUALISER - À droite */}
-                {user?.role === 'admin' && (
-                    <button 
-                        onClick={() => handleUpdateAction(true)}
-                        className={cn(
-                            "border rounded-lg px-5 py-2 shadow-[0_0_15px_rgba(0,0,0,0.5)] transition-all hover:scale-105 flex items-center gap-2",
-                            (isBlinking || updateNeeded)
-                                ? "bg-red-600 hover:bg-red-500 border-red-400 text-white animate-pulse shadow-[0_0_20px_rgba(220,38,38,0.7)]" 
-                                : "bg-zinc-800/80 hover:bg-zinc-700 border-zinc-600 text-zinc-300"
+
+                {/* LIGNE 2 : résumé + actualiser */}
+                <div className="mt-3 pt-3 border-t border-zinc-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <div className="text-zinc-400 text-sm font-rajdhani flex flex-wrap items-center gap-3">
+                        <span className="font-bold text-zinc-300">TIRAGES :</span>
+                        <span className="font-mono text-zinc-200">{history.length}</span>
+                        {oldestDraw?.date && lastDraw?.date && (
+                            <span className="text-zinc-500">
+                                (de <span className="font-mono text-zinc-300">{String(oldestDraw.date).split('T')[0].split(' ')[0]}</span> à{' '}
+                                <span className="font-mono text-zinc-300">{String(lastDraw.date).split('T')[0].split(' ')[0]}</span>)
+                            </span>
                         )}
-                        title={updateNeeded ? "Mise à jour requise - Cliquez pour mettre à jour" : "Mettre à jour l'historique"}
-                    >
-                        <RefreshCw className={cn("h-5 w-5", (isBlinking || updateNeeded) && "animate-spin")} />
-                        <span className="font-bold font-rajdhani">
-                            {updateNeeded ? "MISE À JOUR REQUISE" : "ACTUALISER"}
+                    </div>
+                </div>
+
+                {/* LIGNE 3 : planification + switch + actualiser */}
+                {user?.role === 'admin' && (
+                  <div className="mt-2 pt-2 border-t border-zinc-800 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                    <div className="flex flex-wrap items-center gap-2 text-zinc-300 font-rajdhani">
+                      <span className="text-zinc-400 text-sm font-bold">Mise à jour mardi et vendredi à :</span>
+                      <input
+                        type="time"
+                        value={autoUpdateTime}
+                        onChange={(e) => setAutoUpdateTime(e.target.value)}
+                        onBlur={() => saveAutoUpdateTime(autoUpdateTime)}
+                        className={cn(
+                          "bg-zinc-800 border border-zinc-600 rounded px-2 py-1.5 text-white text-sm font-mono focus:outline-none focus:border-casino-gold",
+                          isSavingAutoUpdateTime && "opacity-70"
+                        )}
+                        title="Heure de démarrage AUTO (fenêtre de retry ~90 minutes)"
+                      />
+                      <span className="text-zinc-500 text-xs">
+                        (retry ~90 min)
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      {/* Toggle AUTO / MANUEL (à gauche de ACTUALISER) */}
+                      <div className="flex items-center gap-2 select-none">
+                        <span className={cn(
+                          "text-xs font-orbitron tracking-widest",
+                          historyUpdateMode === 'manual' ? "text-red-400" : "text-white/40"
+                        )}>
+                          MANUEL
                         </span>
-                    </button>
+                        <Switch
+                          checked={historyUpdateMode === 'auto'}
+                          onCheckedChange={(checked) => setUpdateMode(checked ? 'auto' : 'manual')}
+                          className={cn(
+                            "data-[state=checked]:bg-green-600 data-[state=unchecked]:bg-red-600/60"
+                          )}
+                          aria-label="Mode mise à jour historique (AUTO/MANUEL)"
+                        />
+                        <span className={cn(
+                          "text-xs font-orbitron tracking-widest",
+                          historyUpdateMode === 'auto' ? "text-green-400" : "text-white/40"
+                        )}>
+                          AUTO
+                        </span>
+                      </div>
+
+                      <button
+                        onClick={handleAdminRefreshClick}
+                        className={cn(
+                          "border rounded-lg px-5 py-2 shadow-[0_0_15px_rgba(0,0,0,0.5)] transition-all hover:scale-105 flex items-center gap-2",
+                          (historyUpdateMode === 'manual' && (isBlinking || updateNeeded))
+                            ? "bg-red-600 hover:bg-red-500 border-red-400 text-white animate-pulse shadow-[0_0_20px_rgba(220,38,38,0.7)]"
+                            : (historyUpdateMode === 'auto' && isAutoUpdating)
+                              ? "bg-green-600 hover:bg-green-500 border-green-400 text-white animate-pulse shadow-[0_0_20px_rgba(34,197,94,0.7)]"
+                              : "bg-zinc-800/80 hover:bg-zinc-700 border-zinc-600 text-zinc-300"
+                        )}
+                        disabled={historyUpdateMode === 'auto' && isAutoUpdating}
+                        title={
+                          historyUpdateMode === 'manual'
+                            ? (updateNeeded ? "Mise à jour requise - Cliquez pour mettre à jour (mode MANUEL)" : "Mettre à jour l'historique (mode MANUEL)")
+                            : (isAutoUpdating ? "Mise à jour automatique en cours..." : "Mode AUTO (sans pop-up)")
+                        }
+                      >
+                        <RefreshCw className={cn("h-5 w-5", ((historyUpdateMode === 'manual' && (isBlinking || updateNeeded)) || (historyUpdateMode === 'auto' && isAutoUpdating)) && "animate-spin")} />
+                        <span className="font-bold font-rajdhani">
+                          {updateNeeded ? "MISE À JOUR REQUISE" : "ACTUALISER"}
+                        </span>
+                      </button>
+                    </div>
+                  </div>
                 )}
             </div>
             
@@ -612,6 +791,23 @@ export default function History() {
                                 <th className="p-3">Date</th>
                                 <th className="p-3 text-center">Numéros</th>
                                 <th className="p-3 text-center">Étoiles</th>
+                                {user?.role === 'admin' && (
+                                  <th className="p-3 text-right">
+                                    <button
+                                      type="button"
+                                      onClick={() => setIsDeleteUnlocked((v) => !v)}
+                                      className={cn(
+                                        "inline-flex items-center justify-center px-2 py-1 rounded-md border transition-colors",
+                                        isDeleteUnlocked
+                                          ? "bg-emerald-950/30 border-emerald-700 text-emerald-200 hover:bg-emerald-900/40"
+                                          : "bg-zinc-900/40 border-zinc-700 text-zinc-300 hover:bg-zinc-800/50"
+                                      )}
+                                      title={isDeleteUnlocked ? "Suppression déverrouillée (cliquer pour verrouiller)" : "Suppression verrouillée (cliquer pour déverrouiller)"}
+                                    >
+                                      {isDeleteUnlocked ? <Unlock className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
+                                    </button>
+                                  </th>
+                                )}
                             </tr>
                         </thead>
                         <tbody className="font-rajdhani text-base md:text-lg">
@@ -655,6 +851,24 @@ export default function History() {
                                                 ))}
                                             </div>
                                         </td>
+                                        {user?.role === 'admin' && (
+                                          <td className="p-3 text-right">
+                                            <button
+                                              onClick={() => handleDeleteDraw(draw.date)}
+                                              disabled={!isDeleteUnlocked}
+                                              className={cn(
+                                                "inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border transition-all",
+                                                isDeleteUnlocked
+                                                  ? "bg-red-950/40 hover:bg-red-900/50 border-red-800 text-red-200"
+                                                  : "bg-zinc-900/30 border-zinc-800 text-zinc-600 opacity-60 cursor-not-allowed"
+                                              )}
+                                              title={isDeleteUnlocked ? "Supprimer ce tirage (test)" : "Déverrouillez le cadenas pour activer la suppression"}
+                                            >
+                                              <Trash2 className="h-4 w-4" />
+                                              <span className="font-bold text-sm">Supprimer</span>
+                                            </button>
+                                          </td>
+                                        )}
                                     </tr>
                                 ))
                             )}

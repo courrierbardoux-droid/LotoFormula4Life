@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 import { fr as frLocale } from 'date-fns/locale';
-import { ArrowLeft, Clock, Grid, Trophy, User, Mail, Calendar, Shield, Edit2, Check, X } from 'lucide-react';
+import { ArrowLeft, Clock, Grid, User, Mail, Calendar, Shield, Edit2, Check, Lock, Eye, EyeOff } from 'lucide-react';
 
 interface UserData {
   id: number;
@@ -41,28 +41,56 @@ export default function UserDetails() {
   const [userData, setUserData] = useState<UserData | null>(null);
   const [connections, setConnections] = useState<Connection[]>([]);
   const [playedGrids, setPlayedGrids] = useState<PlayedGrid[]>([]);
-  const [wonGrids, setWonGrids] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  // (Gagnants) : supprimé — aucun calcul/affichage "gagnant" ici.
   
   // Tri
   const [connectionSort, setConnectionSort] = useState<'date' | 'alpha'>('date');
   const [gridSort, setGridSort] = useState<'date' | 'alpha'>('date');
   
   // États pour l'édition
-  const [editingField, setEditingField] = useState<'username' | 'email' | null>(null);
+  const [editingField, setEditingField] = useState<'username' | 'email' | 'password' | null>(null);
   const [editValue, setEditValue] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [saving, setSaving] = useState(false);
+  const editInputRef = React.useRef<HTMLDivElement>(null);
+  
+  // Gestionnaire de clic en dehors pour annuler l'édition
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (editingField && editInputRef.current && !editInputRef.current.contains(event.target as Node)) {
+        // Vérifier si le clic n'est pas sur le bouton vert
+        const target = event.target as HTMLElement;
+        if (!target.closest('button[class*="bg-green-600"]')) {
+          cancelEdit();
+        }
+      }
+    };
+
+    if (editingField) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [editingField]);
   
   useEffect(() => {
     const loadUserDetails = async () => {
       try {
+        const urlParams = new URLSearchParams(window.location.search);
+        const backParam = urlParams.get('back');
+
         const res = await fetch(`/api/admin/user/${params.userId}/details`, {
           credentials: 'include',
         });
         
         if (!res.ok) {
           toast.error('Utilisateur non trouvé');
-          setLocation('/subscribers');
+          setLocation(backParam ? decodeURIComponent(backParam) : '/settings/users');
           return;
         }
         
@@ -70,7 +98,6 @@ export default function UserDetails() {
         setUserData(data.user);
         setConnections(data.connections);
         setPlayedGrids(data.playedGrids);
-        setWonGrids(data.wonGrids);
       } catch (err) {
         toast.error('Erreur de chargement');
         console.error(err);
@@ -81,6 +108,8 @@ export default function UserDetails() {
     
     loadUserDetails();
   }, [params.userId]);
+
+  // (Gagnants) : supprimé — aucun chargement du dernier tirage / calcul de gains / logs associés.
   
   const handleTogglePopup = async () => {
     if (!userData) return;
@@ -107,35 +136,63 @@ export default function UserDetails() {
     }
   };
   
-  // Fonctions d'édition email/login
-  const startEdit = (field: 'username' | 'email') => {
+  // Fonctions d'édition email/login/password
+  const startEdit = (field: 'username' | 'email' | 'password') => {
     if (!userData) return;
     setEditingField(field);
-    setEditValue(field === 'username' ? userData.username : userData.email);
+    if (field === 'password') {
+      setNewPassword('');
+      setConfirmPassword('');
+    } else {
+      setEditValue(field === 'username' ? userData.username : userData.email);
+    }
   };
   
   const cancelEdit = () => {
     setEditingField(null);
     setEditValue('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setShowPassword(false);
   };
   
   const saveEdit = async () => {
     if (!userData || !editingField) return;
     
-    if (!editValue.trim()) {
-      toast.error('La valeur ne peut pas être vide');
-      return;
-    }
-    
-    if (editingField === 'email' && !editValue.includes('@')) {
-      toast.error('Email invalide');
-      return;
+    if (editingField === 'password') {
+      if (!newPassword.trim()) {
+        toast.error('Le mot de passe ne peut pas être vide');
+        return;
+      }
+      if (newPassword.length < 6) {
+        toast.error('Le mot de passe doit contenir au moins 6 caractères');
+        return;
+      }
+      if (newPassword !== confirmPassword) {
+        toast.error('Les mots de passe ne correspondent pas');
+        return;
+      }
+    } else {
+      if (!editValue.trim()) {
+        toast.error('La valeur ne peut pas être vide');
+        return;
+      }
+      if (editingField === 'email' && !editValue.includes('@')) {
+        toast.error('Email invalide');
+        return;
+      }
     }
     
     setSaving(true);
     try {
       const body: any = {};
-      body[editingField] = editValue.trim();
+      if (editingField === 'password') {
+        body.password = newPassword.trim();
+      } else {
+        body[editingField] = editValue.trim();
+      }
+      
+      console.log('[Frontend] Sending update request:', { userId: userData.id, field: editingField, body });
       
       const res = await fetch(`/api/admin/user/${userData.id}/update`, {
         method: 'PATCH',
@@ -145,15 +202,39 @@ export default function UserDetails() {
       });
       
       const data = await res.json();
+      console.log('[Frontend] Update response:', { status: res.status, ok: res.ok, data });
       
       if (res.ok && data.success) {
-        setUserData(prev => prev ? { ...prev, [editingField]: editValue.trim() } : null);
-        toast.success(`${editingField === 'username' ? 'Identifiant' : 'Email'} mis à jour !`);
+        // Recharger les données utilisateur depuis le serveur pour avoir les valeurs à jour
+        try {
+          const detailsRes = await fetch(`/api/admin/user/${userData.id}/details`, {
+            credentials: 'include',
+          });
+          if (detailsRes.ok) {
+            const detailsData = await detailsRes.json();
+            setUserData(detailsData.user);
+          } else {
+            // Fallback : mettre à jour localement si le rechargement échoue
+            if (editingField !== 'password') {
+              setUserData(prev => prev ? { ...prev, [editingField]: editValue.trim() } : null);
+            }
+          }
+        } catch (reloadErr) {
+          console.error('[Frontend] Error reloading user details:', reloadErr);
+          // Fallback : mettre à jour localement si le rechargement échoue
+          if (editingField !== 'password') {
+            setUserData(prev => prev ? { ...prev, [editingField]: editValue.trim() } : null);
+          }
+        }
+        toast.success(`${editingField === 'username' ? 'Identifiant' : editingField === 'email' ? 'Email' : 'Mot de passe'} mis à jour !`);
         cancelEdit();
       } else {
-        toast.error(data.error || 'Erreur lors de la mise à jour');
+        const errorMsg = data.error || data.message || 'Erreur lors de la mise à jour';
+        console.error('[Frontend] Update failed:', errorMsg);
+        toast.error(errorMsg);
       }
     } catch (err) {
+      console.error('[Frontend] Network error:', err);
       toast.error('Erreur de connexion au serveur');
     } finally {
       setSaving(false);
@@ -222,7 +303,11 @@ export default function UserDetails() {
         {/* Header */}
         <div className="flex items-center gap-4 mb-8">
           <button
-            onClick={() => setLocation('/subscribers')}
+            onClick={() => {
+              const urlParams = new URLSearchParams(window.location.search);
+              const backParam = urlParams.get('back');
+              setLocation(backParam ? decodeURIComponent(backParam) : '/settings/users');
+            }}
             className="text-zinc-400 hover:text-white transition-colors"
           >
             <ArrowLeft size={24} />
@@ -232,7 +317,7 @@ export default function UserDetails() {
         
         {/* User Info Card */}
         <div className="bg-zinc-900/90 border border-zinc-700 rounded-xl p-6 shadow-xl">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {/* Username - Éditable */}
             <div className="flex items-center gap-3">
               <button
@@ -245,19 +330,17 @@ export default function UserDetails() {
               <div className="flex-1">
                 <div className="text-zinc-500 text-sm">Identifiant</div>
                 {editingField === 'username' ? (
-                  <div className="flex items-center gap-2">
+                  <div ref={editInputRef} className="flex items-center gap-2">
                     <input
                       type="text"
                       value={editValue}
                       onChange={(e) => setEditValue(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && !saving) saveEdit(); }}
                       className="bg-black border border-casino-gold/50 rounded px-2 py-1 text-white focus:border-casino-gold outline-none text-lg"
                       autoFocus
                     />
                     <button onClick={saveEdit} disabled={saving} className="p-1 bg-green-600 hover:bg-green-500 rounded text-white">
                       <Check size={16} />
-                    </button>
-                    <button onClick={cancelEdit} className="p-1 bg-red-600 hover:bg-red-500 rounded text-white">
-                      <X size={16} />
                     </button>
                   </div>
                 ) : (
@@ -283,25 +366,90 @@ export default function UserDetails() {
               <div className="flex-1">
                 <div className="text-zinc-500 text-sm">Email</div>
                 {editingField === 'email' ? (
-                  <div className="flex items-center gap-2">
+                  <div ref={editInputRef} className="flex items-center gap-2">
                     <input
                       type="email"
                       value={editValue}
                       onChange={(e) => setEditValue(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && !saving) saveEdit(); }}
                       className="bg-black border border-casino-gold/50 rounded px-2 py-1 text-white focus:border-casino-gold outline-none text-lg flex-1"
                       autoFocus
                     />
                     <button onClick={saveEdit} disabled={saving} className="p-1 bg-green-600 hover:bg-green-500 rounded text-white">
                       <Check size={16} />
                     </button>
-                    <button onClick={cancelEdit} className="p-1 bg-red-600 hover:bg-red-500 rounded text-white">
-                      <X size={16} />
-                    </button>
                   </div>
                 ) : (
                   <div className="flex items-center gap-2">
                     <span className="text-white text-lg">{userData.email}</span>
                     <button onClick={() => startEdit('email')} className="p-1 text-zinc-500 hover:text-casino-gold transition-colors">
+                      <Edit2 size={14} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+            
+            {/* Password - Éditable */}
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => startEdit('password')}
+                className="w-12 h-12 rounded-full bg-zinc-800 flex items-center justify-center hover:scale-110 transition-transform cursor-pointer hover:bg-zinc-700"
+                title="Cliquer pour modifier le mot de passe"
+              >
+                <Lock className="text-zinc-400" size={24} />
+              </button>
+              <div className="flex-1">
+                <div className="text-zinc-500 text-sm">Mot de passe</div>
+                {editingField === 'password' ? (
+                  <div ref={editInputRef} className="space-y-2">
+                    <div className="flex items-center gap-2">
+                      <div className="relative flex-1">
+                        <input
+                          type={showPassword ? 'text' : 'password'}
+                          value={newPassword}
+                          onChange={(e) => setNewPassword(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter' && !saving) saveEdit(); }}
+                          className="bg-black border border-casino-gold/50 rounded px-2 py-1 text-white focus:border-casino-gold outline-none text-lg w-full pr-8"
+                          placeholder="Nouveau mot de passe"
+                          autoFocus
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-white"
+                        >
+                          {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <div className="relative flex-1">
+                        <input
+                          type={showPassword ? 'text' : 'password'}
+                          value={confirmPassword}
+                          onChange={(e) => setConfirmPassword(e.target.value)}
+                          className="bg-black border border-casino-gold/50 rounded px-2 py-1 text-white focus:border-casino-gold outline-none text-lg w-full pr-8"
+                          placeholder="Confirmer le mot de passe"
+                          onKeyDown={(e) => { if (e.key === 'Enter' && !saving) saveEdit(); }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-white"
+                        >
+                          {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                        </button>
+                      </div>
+                      <button onClick={saveEdit} disabled={saving} className="p-1 bg-green-600 hover:bg-green-500 rounded text-white">
+                        <Check size={16} />
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <span className="text-white text-lg">••••••••</span>
+                    <button onClick={() => startEdit('password')} className="p-1 text-zinc-500 hover:text-casino-gold transition-colors">
                       <Edit2 size={14} />
                     </button>
                   </div>
@@ -445,13 +593,20 @@ export default function UserDetails() {
                   </tr>
                 </thead>
                 <tbody className="font-rajdhani">
-                  {sortedGrids.map(grid => (
-                    <tr key={grid.id} className="border-b border-zinc-800 hover:bg-white/5">
+                  {sortedGrids.map(grid => {
+                    return (
+                    <tr
+                      key={grid.id}
+                      className="border-b border-zinc-800 hover:bg-white/5"
+                    >
                       <td className="p-3 text-zinc-300">{formatDate(grid.playedAt)}</td>
                       <td className="p-3">
                         <div className="flex gap-2">
                           {(grid.numbers as number[]).map(n => (
-                            <span key={n} className="w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center text-sm font-bold">
+                            <span
+                              key={n}
+                              className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold transition-all bg-blue-600 text-white"
+                            >
                               {n}
                             </span>
                           ))}
@@ -460,7 +615,10 @@ export default function UserDetails() {
                       <td className="p-3">
                         <div className="flex gap-2">
                           {(grid.stars as number[]).map(s => (
-                            <span key={s} className="w-8 h-8 rounded-full bg-yellow-500 text-black flex items-center justify-center text-sm font-bold">
+                            <span
+                              key={s}
+                              className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold transition-all bg-yellow-500 text-black"
+                            >
                               ★{s}
                             </span>
                           ))}
@@ -470,22 +628,11 @@ export default function UserDetails() {
                         {grid.targetDate || '—'}
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             )}
-          </div>
-        </div>
-        
-        {/* Won Grids */}
-        <div className="bg-zinc-900/90 border border-zinc-700 rounded-xl overflow-hidden shadow-xl">
-          <div className="bg-black px-6 py-4 flex items-center gap-3 border-b border-zinc-700">
-            <Trophy className="text-casino-gold" size={20} />
-            <h2 className="text-lg font-orbitron text-zinc-300">GRILLES GAGNANTES ({wonGrids.length})</h2>
-          </div>
-          
-          <div className="p-8 text-center text-zinc-500">
-            {wonGrids.length === 0 ? 'Aucune grille gagnante enregistrée' : 'À implémenter'}
           </div>
         </div>
         
@@ -493,7 +640,7 @@ export default function UserDetails() {
         <div className="flex justify-center pt-4">
           <CasinoButton
             variant="secondary"
-            onClick={() => setLocation('/subscribers')}
+            onClick={() => setLocation('/settings/users')}
           >
             ← Retour à la gestion des abonnés
           </CasinoButton>

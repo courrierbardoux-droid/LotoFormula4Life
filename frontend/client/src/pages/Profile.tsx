@@ -183,7 +183,7 @@ export default function Profile() {
                 size="sm"
                 className="bg-gradient-to-b from-[#e8f0f8] via-[#d0e0f0] to-[#a8c0d8] text-white border-blue-300 font-bold shadow-lg hover:shadow-xl hover:from-[#f0f8ff] hover:via-[#d8e8f8] hover:to-[#b0d0e8]"
                 onClick={() => {
-                  setNewEmail(user.email);
+                  setNewEmail(user.email ?? '');
                   setShowEmailModal(true);
                 }}
               >

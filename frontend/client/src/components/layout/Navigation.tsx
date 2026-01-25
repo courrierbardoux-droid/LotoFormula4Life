@@ -1,7 +1,7 @@
 
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'wouter';
-import { Menu, X, Home, BookOpen, User, History, Grid, FileText, Shield, LogOut, Users, Settings } from 'lucide-react';
+import { Menu, X, Home, BookOpen, User, History, Grid, FileText, Shield, LogOut, Users, Settings, ChevronDown } from 'lucide-react';
 import { useUser } from '@/lib/UserContext';
 import { cn } from '@/lib/utils';
 import { Howl } from 'howler';
@@ -15,25 +15,57 @@ export const Navigation = () => {
   const [isOpen, setIsOpen] = useState(false);
   const { user, logout } = useUser();
   const [location] = useLocation();
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    // Auto-open the group matching the current location (without auto-closing others)
+    setOpenGroups((prev) => ({
+      ...prev,
+      settings: prev.settings || (location.startsWith("/settings") && !location.startsWith("/settings/users")),
+      users: prev.users || location.startsWith("/settings/users"),
+    }));
+  }, [location]);
 
   const toggleMenu = () => {
     menuSound.play();
     setIsOpen(!isOpen);
   };
 
-  const menuItems = [
+  const menuItems: Array<
+    | { icon: any; label: string; path: string }
+    | { icon: any; label: string; groupKey: "settings" | "users"; children: Array<{ label: string; path: string }> }
+  > = [
     { icon: Home, label: 'Accueil / Console', path: user?.role === 'admin' ? '/admin' : '/dashboard' },
     { icon: BookOpen, label: 'Comment ça marche ?', path: '/presentation' },
     { icon: User, label: 'Mon Profil', path: '/profile' },
-    { icon: History, label: 'Historique EuroMillions', path: '/history' },
     { icon: Grid, label: 'Mes Grilles Jouées', path: '/my-grids' },
-    { icon: Settings, label: 'Paramètres', path: '/settings' },
+    { icon: History, label: 'Historique EuroMillions', path: '/history' },
     { icon: FileText, label: 'Règles du Jeu', path: '/rules' },
     { icon: Shield, label: 'CGU', path: '/cgu' },
   ];
 
   if (user?.role === 'admin') {
-    menuItems.push({ icon: Users, label: 'Gestion Abonnés', path: '/subscribers' });
+    menuItems.splice(5, 0, {
+      icon: Settings,
+      label: 'Paramètres',
+      groupKey: "settings",
+      children: [
+        { label: 'Taille des pools', path: '/settings/pools' },
+        { label: 'Fenêtre de calcul par pool', path: '/settings/windows' },
+        { label: 'Gestion des pop-up et e-mails', path: '/settings/popups-emails' },
+      ],
+    });
+    menuItems.splice(6, 0, {
+      icon: Users,
+      label: 'Gestion utilisateurs',
+      groupKey: "users",
+      children: [
+        { label: 'Informations utilisateurs', path: '/settings/users' },
+        { label: 'Historique des utilisateurs', path: '/settings/users/history' },
+      ],
+    });
+  } else {
+    menuItems.splice(5, 0, { icon: Settings, label: 'Paramètres', path: '/settings' });
   }
 
   if (!user) return null;
@@ -66,22 +98,79 @@ export const Navigation = () => {
         </div>
 
         <nav className="flex-1 overflow-y-auto p-6 space-y-2">
-          {menuItems.map((item) => (
-            <Link key={item.path} href={item.path}>
-              <a 
-                className={cn(
-                  "flex items-center gap-4 p-4 rounded-xl font-rajdhani text-xl transition-all hover:pl-6",
-                  location === item.path 
-                    ? "bg-casino-gold/10 text-casino-gold border-l-4 border-casino-gold" 
-                    : "text-zinc-400 hover:text-white hover:bg-white/5"
-                )}
-                onClick={() => setIsOpen(false)}
-              >
-                <item.icon size={24} />
-                {item.label}
-              </a>
-            </Link>
-          ))}
+          {menuItems.map((item) => {
+            if ("children" in item) {
+              const anyChildActive = item.children.some((c) => location === c.path);
+              const isUsersGroup = item.groupKey === "users";
+              const groupActive = anyChildActive
+                ? true
+                : isUsersGroup
+                  ? location.startsWith("/settings/users")
+                  : location.startsWith("/settings") && !location.startsWith("/settings/users");
+              const isOpenGroup = !!openGroups[item.groupKey];
+              return (
+                <div key={item.label} className="space-y-1">
+                  <button
+                    type="button"
+                    className={cn(
+                      "w-full flex items-center gap-4 p-4 rounded-xl font-rajdhani text-xl transition-all hover:pl-6",
+                      groupActive
+                        ? "bg-casino-gold/10 text-casino-gold border-l-4 border-casino-gold"
+                        : "text-zinc-400 hover:text-white hover:bg-white/5"
+                    )}
+                    onClick={() =>
+                      setOpenGroups((prev) => ({
+                        ...prev,
+                        [item.groupKey]: !prev[item.groupKey],
+                      }))
+                    }
+                  >
+                    <item.icon size={24} />
+                    <span className="flex-1 text-left">{item.label}</span>
+                    <ChevronDown size={20} className={cn("transition-transform", isOpenGroup ? "rotate-180" : "")} />
+                  </button>
+
+                  {isOpenGroup && (
+                    <div className="pl-6 space-y-1">
+                      {item.children.map((child) => (
+                        <Link key={child.path} href={child.path}>
+                          <a
+                            className={cn(
+                              "flex items-center gap-3 p-3 rounded-xl font-rajdhani text-lg transition-all hover:pl-5",
+                              location === child.path
+                                ? "bg-casino-gold/10 text-casino-gold border-l-4 border-casino-gold"
+                                : "text-zinc-400 hover:text-white hover:bg-white/5"
+                            )}
+                            onClick={() => setIsOpen(false)}
+                          >
+                            <span className="w-2 h-2 rounded-full bg-zinc-600" />
+                            {child.label}
+                          </a>
+                        </Link>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            }
+
+            return (
+              <Link key={item.path} href={item.path}>
+                <a
+                  className={cn(
+                    "flex items-center gap-4 p-4 rounded-xl font-rajdhani text-xl transition-all hover:pl-6",
+                    location === item.path
+                      ? "bg-casino-gold/10 text-casino-gold border-l-4 border-casino-gold"
+                      : "text-zinc-400 hover:text-white hover:bg-white/5"
+                  )}
+                  onClick={() => setIsOpen(false)}
+                >
+                  <item.icon size={24} />
+                  {item.label}
+                </a>
+              </Link>
+            );
+          })}
         </nav>
 
         <div className="p-6 border-t-2 border-zinc-800">

@@ -1,4 +1,4 @@
-import { pgTable, serial, varchar, integer, json, timestamp, date, text } from 'drizzle-orm/pg-core';
+import { pgTable, serial, varchar, integer, json, timestamp, date, text, uniqueIndex } from 'drizzle-orm/pg-core';
 
 // ============================================
 // TABLE USERS - Utilisateurs du système
@@ -97,6 +97,102 @@ export const pendingDraws = pgTable('pending_draws', {
 });
 
 // ============================================
+// TABLE ACTIVITY_EVENTS - Journal d'activité (Admin)
+// ============================================
+export const activityEvents = pgTable('activity_events', {
+  id: serial('id').primaryKey(),
+  type: varchar('type', { length: 50 }).notNull(), // ex: GRID_CREATED, PROFILE_UPDATED, WINNER_DETECTED
+  createdAt: timestamp('created_at').defaultNow(),
+  userId: integer('user_id').references(() => users.id).notNull(),
+  usernameSnapshot: varchar('username_snapshot', { length: 50 }).notNull(),
+  payload: json('payload').notNull().$type<{
+    gridId?: number | null;
+    numbers?: number[];
+    stars?: number[];
+    targetDate?: string | null;
+    channel?: 'email' | 'direct';
+    [k: string]: unknown;
+  }>(),
+});
+
+// ============================================
+// TABLE DRAW_PAYOUTS - Répartition des gains (FDJ) par tirage
+// ============================================
+export const drawPayouts = pgTable('draw_payouts', {
+  id: serial('id').primaryKey(),
+  drawDate: date('draw_date').notNull().unique(), // Date du tirage (YYYY-MM-DD)
+  // Map: "matchNum+matchStar" -> gain en centimes (number) ou null si non déterminable (ex: jackpot "/")
+  payouts: json('payouts').notNull().$type<Record<string, number | null>>(),
+  source: varchar('source', { length: 20 }).notNull().default('fdj'),
+  fetchedAt: timestamp('fetched_at').defaultNow(),
+  expiresAt: timestamp('expires_at'), // Nettoyage après ~65 jours
+});
+
+// ============================================
+// TABLE WINNING_GRIDS - Résultats gagnants par grille (persistés)
+// ============================================
+export const winningGrids = pgTable(
+  'winning_grids',
+  {
+    id: serial('id').primaryKey(),
+    userId: integer('user_id').references(() => users.id).notNull(),
+    usernameSnapshot: varchar('username_snapshot', { length: 50 }).notNull(),
+    gridId: integer('grid_id').references(() => grids.id).notNull(),
+    targetDate: date('target_date').notNull(),
+    matchNum: integer('match_num').notNull(),
+    matchStar: integer('match_star').notNull(),
+    // gain en centimes (null si jackpot / montant non déterminé)
+    gainCents: integer('gain_cents'),
+    emailNotifiedAt: timestamp('email_notified_at'),
+    seenAt: timestamp('seen_at'),
+    createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
+  },
+  (t) => ({
+    gridTargetUniq: uniqueIndex('winning_grids_grid_target_uniq').on(t.gridId, t.targetDate),
+  })
+);
+
+// ============================================
+// TABLE AUTO_UPDATE_RUNS - Historique des tentatives AUTO (alertes)
+// ============================================
+export const autoUpdateRuns = pgTable('auto_update_runs', {
+  id: serial('id').primaryKey(),
+  source: varchar('source', { length: 20 }).notNull().default('fdj'),
+  startedAt: timestamp('started_at').defaultNow(),
+  finishedAt: timestamp('finished_at'),
+  success: integer('success').notNull().default(0), // 0/1 (compat simple)
+  drawDate: date('draw_date'),
+  message: text('message'),
+  url: text('url'),
+  expiresAt: timestamp('expires_at'), // Nettoyage après ~65 jours
+});
+
+// ============================================
+// TABLE EMAIL_POPUP_TEMPLATES - Templates pour emails et popups
+// ============================================
+export const emailPopupTemplates = pgTable('email_popup_templates', {
+  id: serial('id').primaryKey(),
+  type: varchar('type', { length: 20 }).notNull().unique(), // 'email1', 'email2', 'popup1', 'popup2'
+  content: text('content').notNull(),                       // HTML content du template
+  variablesConfig: json('variables_config').$type<Record<string, string>>(), // Configuration des variables
+  updatedAt: timestamp('updated_at').defaultNow(),
+  updatedBy: integer('updated_by').references(() => users.id), // Admin qui a mis à jour
+});
+
+// ============================================
+// TABLE TEMPLATE_VARIABLES - Variables globales pour les templates
+// ============================================
+export const templateVariables = pgTable('template_variables', {
+  id: serial('id').primaryKey(),
+  key: varchar('key', { length: 50 }).notNull().unique(),   // Ex: 'contactdéveloppeur'
+  value: text('value').notNull(),                            // Valeur par défaut
+  description: varchar('description', { length: 255 }),      // Description de la variable
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// ============================================
 // TYPES INFÉRÉS POUR TYPESCRIPT
 // ============================================
 export type User = typeof users.$inferSelect;
@@ -119,4 +215,22 @@ export type NewLoginHistoryEntry = typeof loginHistory.$inferInsert;
 
 export type PendingDraw = typeof pendingDraws.$inferSelect;
 export type NewPendingDraw = typeof pendingDraws.$inferInsert;
+
+export type ActivityEvent = typeof activityEvents.$inferSelect;
+export type NewActivityEvent = typeof activityEvents.$inferInsert;
+
+export type DrawPayout = typeof drawPayouts.$inferSelect;
+export type NewDrawPayout = typeof drawPayouts.$inferInsert;
+
+export type WinningGrid = typeof winningGrids.$inferSelect;
+export type NewWinningGrid = typeof winningGrids.$inferInsert;
+
+export type AutoUpdateRun = typeof autoUpdateRuns.$inferSelect;
+export type NewAutoUpdateRun = typeof autoUpdateRuns.$inferInsert;
+
+export type EmailPopupTemplate = typeof emailPopupTemplates.$inferSelect;
+export type NewEmailPopupTemplate = typeof emailPopupTemplates.$inferInsert;
+
+export type TemplateVariable = typeof templateVariables.$inferSelect;
+export type NewTemplateVariable = typeof templateVariables.$inferInsert;
 

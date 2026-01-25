@@ -2,49 +2,85 @@
 import React, { useEffect, useState } from 'react';
 import { CasinoLayout } from '@/components/layout/CasinoLayout';
 import { LottoBall } from '@/components/casino/LottoBall';
-import { getGridHistory, PlayedGrid, checkGridResult, chargerHistorique, getDernierTirage, Tirage, deleteGridHistory } from '@/lib/lotoService';
+import { loadGridsFromDB, deleteGridFromDB, PlayedGrid } from '@/lib/lotoService';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 import { Trash2 } from 'lucide-react';
 import { Checkbox } from "@/components/ui/checkbox";
+import { cn } from '@/lib/utils';
 
 export default function MyGrids() {
   const [history, setHistory] = useState<PlayedGrid[]>([]);
-  const [lastDraw, setLastDraw] = useState<Tirage | null>(null);
   const [loading, setLoading] = useState(true);
-  const [selectedGrids, setSelectedGrids] = useState<string[]>([]);
+  const [selectedGrids, setSelectedGrids] = useState<(string | number)[]>([]);
+  const [highlightedGrids, setHighlightedGrids] = useState<Set<string | number>>(new Set());
+  // NOTE: toutes les indications de gains/rangs sont supprimées (aucun surlignage / aucun résultat).
+
+  console.log('[MyGrids] RENDU: Composant MyGrids rendu, loading:', loading, 'history length:', history.length);
+
+  const normalizeDate = (raw?: string | null) => String(raw || '').trim().split('T')[0].split(' ')[0];
 
   useEffect(() => {
     const loadData = async () => {
-      // 1. Load Real Draw History (for results checking)
-      const tirages = await chargerHistorique();
-      const latest = getDernierTirage(tirages);
-      setLastDraw(latest);
+      console.log('[MyGrids] ÉTAPE 1: Début de loadData - setLoading(true)');
+      try {
+        setLoading(true);
 
-      // 2. Load User Played Grids (from LocalStorage)
-      const userGrids = getGridHistory();
-      setHistory(userGrids);
-      
-      setLoading(false);
+        // Charger les grilles depuis la DB (sans calcul de gains/rangs)
+        const userGrids = await loadGridsFromDB();
+        console.log('[MyGrids] ÉTAPE 6: Grilles chargées depuis la DB, nombre:', userGrids.length);
+        setHistory(userGrids);
+
+        console.log('[MyGrids] ÉTAPE 7: Vérification des paramètres URL pour highlight...');
+        
+        // 3. Vérifier s'il y a des grilles à mettre en évidence (depuis URL)
+        const urlParams = new URLSearchParams(window.location.search);
+        const highlightParam = urlParams.get('highlight');
+        if (highlightParam) {
+          console.log('[MyGrids] ÉTAPE 8: Paramètre highlight trouvé:', highlightParam);
+          // Le paramètre est le nombre de grilles à mettre en évidence (les plus récentes)
+          const count = parseInt(highlightParam) || 1;
+          const idsToHighlight = new Set<string | number>();
+          const gridsToHighlight = userGrids
+            .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+            .slice(0, count);
+          gridsToHighlight.forEach(grid => idsToHighlight.add(grid.id));
+          setHighlightedGrids(idsToHighlight);
+          console.log('[MyGrids] ÉTAPE 9: Grilles mises en évidence:', Array.from(idsToHighlight));
+          
+          // Retirer le paramètre de l'URL
+          urlParams.delete('highlight');
+          const newUrl = window.location.pathname + (urlParams.toString() ? '?' + urlParams.toString() : '');
+          window.history.replaceState({}, '', newUrl);
+          
+          // Arrêter la mise en évidence après 10 secondes
+          setTimeout(() => {
+            setHighlightedGrids(new Set());
+            console.log('[MyGrids] ÉTAPE 10: Mise en évidence arrêtée après 10 secondes');
+          }, 10000);
+        } else {
+          console.log('[MyGrids] ÉTAPE 8: Aucun paramètre highlight dans l\'URL');
+        }
+        
+        // Pause avant de terminer
+        await new Promise(resolve => setTimeout(resolve, 200));
+        console.log('[MyGrids] ÉTAPE 11: Chargement terminé avec succès, setLoading(false)');
+      } catch (error) {
+        console.error('[MyGrids] ERREUR: Erreur chargement MyGrids:', error);
+        // En cas d'erreur, initialiser avec des valeurs vides plutôt que de bloquer
+        setHistory([]);
+        console.log('[MyGrids] ÉTAPE ERREUR: Données initialisées à vide');
+      } finally {
+        setLoading(false);
+        console.log('[MyGrids] ÉTAPE FINALE: setLoading(false) exécuté dans finally');
+      }
     };
     
+    console.log('[MyGrids] useEffect déclenché, appel de loadData()');
     loadData();
-    
-    // Refresh interval to catch new plays if user navigates back and forth (though React mounts usually handle this)
-    const interval = setInterval(() => {
-        const userGrids = getGridHistory();
-        // Simple check if length changed to avoid unnecessary re-renders loop if reference changes
-        setHistory(prev => {
-            if (prev.length !== userGrids.length) return userGrids;
-            if (prev.length > 0 && userGrids.length > 0 && prev[0].id !== userGrids[0].id) return userGrids;
-            return prev;
-        });
-    }, 2000);
-    
-    return () => clearInterval(interval);
   }, []);
 
-  const toggleSelection = (id: string) => {
+  const toggleSelection = (id: string | number) => {
     setSelectedGrids(prev => 
       prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
     );
@@ -58,16 +94,38 @@ export default function MyGrids() {
     }
   };
 
-  const handleDeleteSelected = () => {
+  const handleDeleteSelected = async () => {
     if (selectedGrids.length === 0) return;
-    const newHistory = deleteGridHistory(selectedGrids);
-    setHistory(newHistory);
+    
+    // Supprimer chaque grille de la DB
+    for (const gridId of selectedGrids) {
+      await deleteGridFromDB(gridId);
+    }
+    
+    // Recharger les grilles depuis la DB
+    const updatedGrids = await loadGridsFromDB();
+    setHistory(updatedGrids);
     setSelectedGrids([]);
   };
 
+  if (loading) {
+    console.log('[MyGrids] RENDU: Affichage écran de chargement (loading = true)');
+    return (
+      <CasinoLayout>
+        <div className="max-w-6xl mx-auto p-4 md:p-8 space-y-6 min-h-screen flex items-center justify-center">
+          <div className="text-center">
+            <div className="inline-block animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-casino-gold mb-4"></div>
+            <p className="text-xl font-orbitron text-white tracking-widest">CHARGEMENT...</p>
+          </div>
+        </div>
+      </CasinoLayout>
+    );
+  }
+
+  console.log('[MyGrids] RENDU: Affichage du contenu principal (loading = false, history length:', history.length, ')');
   return (
     <CasinoLayout>
-      <div className="max-w-6xl mx-auto p-4 md:p-8 space-y-6">
+      <div className="max-w-7xl mx-auto p-4 md:p-8 space-y-6">
         
         {/* TITRE CENTRÉ ET ESPACÉ */}
         <div className="text-center my-12 py-6 relative">
@@ -103,88 +161,84 @@ export default function MyGrids() {
                 <table className="w-full text-left border-collapse">
                 <thead>
                     <tr className="bg-black text-zinc-400 text-sm md:text-base uppercase font-orbitron tracking-wider border-b border-zinc-700">
-                    <th className="p-3 w-12 text-center">
+                    <th className="p-1.5 w-10 text-center">
                         <Checkbox 
                             checked={history.length > 0 && selectedGrids.length === history.length}
                             onCheckedChange={toggleSelectAll}
                             className="border-zinc-500 data-[state=checked]:bg-casino-gold data-[state=checked]:text-black"
                         />
                     </th>
-                    <th className="p-3">Date Jeu</th>
-                    <th className="p-3">Tirage Visé</th>
-                    <th className="p-3 text-center">Combinaison</th>
-                    <th className="p-3 text-center">Résultat</th>
-                    <th className="p-3 text-right">Gain</th>
+                    <th className="p-1.5">
+                        <div className="flex flex-col items-start">
+                            <span>Date</span>
+                            <span>Jeu</span>
+                        </div>
+                    </th>
+                    <th className="py-1.5 pl-1.5 pr-0">
+                        <div className="flex flex-col items-start">
+                            <span>Tirage</span>
+                            <span>Visé</span>
+                        </div>
+                    </th>
+                    <th className="py-1.5 px-0 text-center">Combinaison</th>
                     </tr>
                 </thead>
                 <tbody className="font-rajdhani text-base md:text-lg">
                     {history.length === 0 ? (
                         <tr>
-                            <td colSpan={6} className="p-12 text-center text-zinc-500 font-orbitron text-xl">
+                            <td colSpan={4} className="p-6 text-center text-zinc-500 font-orbitron text-lg">
                                 AUCUNE GRILLE JOUÉE POUR LE MOMENT
                             </td>
                         </tr>
                     ) : (
                         history.map((grid) => {
-                            const result = checkGridResult(grid, lastDraw);
-                            const isWin = result.gain > 0;
-                            const isJackpot = result.status.includes('JACKPOT');
                             const isSelected = selectedGrids.includes(grid.id);
+                            const isHighlighted = highlightedGrids.has(grid.id);
                             
                             return (
                                 <tr 
                                     key={grid.id} 
-                                    className={`border-b border-zinc-800 transition-colors group cursor-pointer ${isSelected ? 'bg-red-900/20' : 'hover:bg-white/5'}`}
+                                    className={cn(
+                                        "border-b border-zinc-800 transition-all duration-500 group cursor-pointer",
+                                        isSelected ? 'bg-red-900/20' : 'hover:bg-white/5',
+                                        isHighlighted && "bg-green-900/30 border-green-500/50 shadow-[0_0_20px_rgba(34,197,94,0.6)] animate-pulse"
+                                    )}
                                     onClick={() => toggleSelection(grid.id)}
                                 >
-                                    <td className="p-3 text-center" onClick={(e) => e.stopPropagation()}>
+                                    <td className="p-1.5 text-center" onClick={(e) => e.stopPropagation()}>
                                         <Checkbox 
                                             checked={isSelected}
                                             onCheckedChange={() => toggleSelection(grid.id)}
                                             className="border-zinc-500 data-[state=checked]:bg-casino-gold data-[state=checked]:text-black"
                                         />
                                     </td>
-                                    <td className="p-3 text-zinc-300 whitespace-nowrap">
+                                    <td className="p-1.5 text-zinc-300 whitespace-nowrap text-sm">
                                         {format(new Date(grid.date), 'dd/MM HH:mm')}
                                     </td>
-                                    <td className="p-3 text-white font-bold text-lg whitespace-nowrap">
+                                    <td className="py-1.5 pl-1.5 pr-0 text-white font-bold text-base whitespace-nowrap">
                                         {grid.drawDate ? format(new Date(grid.drawDate), 'dd MMMM yyyy', { locale: fr }) : '-'}
                                     </td>
-                                    <td className="p-3">
-                                        <div className="flex justify-center gap-1 md:gap-2 scale-90 origin-center">
+                                    <td className="py-1.5 px-0">
+                                        <div className="flex justify-center gap-0.5 md:gap-1 scale-75 origin-center">
                                             {grid.numeros.map(n => (
                                                 <LottoBall 
                                                     key={n} 
                                                     number={n} 
                                                     size="sm" 
-                                                    className={lastDraw?.numeros.includes(n) ? "ring-2 ring-green-500 shadow-[0_0_10px_rgba(34,197,94,0.8)]" : ""}
+                                                    className=""
                                                 />
                                             ))}
-                                            <div className="w-4 flex items-center justify-center text-zinc-600">|</div>
+                                            <div className="w-2 flex items-center justify-center text-zinc-600 text-xs">|</div>
                                             {grid.etoiles.map(n => (
                                                 <LottoBall 
                                                     key={n} 
                                                     number={n} 
                                                     size="sm" 
                                                     isStar 
-                                                    className={lastDraw?.etoiles.includes(n) ? "ring-2 ring-green-500 shadow-[0_0_10px_rgba(34,197,94,0.8)]" : ""}
+                                                    className=""
                                                 />
                                             ))}
                                         </div>
-                                    </td>
-                                    <td className="p-3 text-center whitespace-nowrap">
-                                        <div className={`
-                                            inline-block px-3 py-1 rounded-full text-sm font-bold uppercase tracking-wider
-                                            ${isJackpot ? "bg-purple-900 text-purple-200 border border-purple-500 animate-pulse" : 
-                                              isWin ? "bg-green-900/50 text-green-400 border border-green-500/50" : 
-                                              result.status === 'En attente' ? "bg-blue-900/30 text-blue-300 border border-blue-500/30" :
-                                              "text-zinc-500"}
-                                        `}>
-                                            {result.status}
-                                        </div>
-                                    </td>
-                                    <td className={`p-3 text-right font-black text-xl md:text-2xl whitespace-nowrap ${isWin ? "text-casino-gold text-shadow-glow" : "text-zinc-600"}`}>
-                                        {result.gain > 0 ? `${result.gain.toLocaleString()} €` : '-'}
                                     </td>
                                 </tr>
                             );
@@ -196,16 +250,7 @@ export default function MyGrids() {
             </div>
             
             {/* Légende */}
-            <div className="mt-6 flex justify-center gap-8 text-sm text-zinc-500 font-rajdhani">
-                <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full bg-green-500 shadow-[0_0_5px_rgba(34,197,94,0.8)]" />
-                    <span>Numéro Sorti</span>
-                </div>
-                <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full bg-casino-gold shadow-[0_0_5px_rgba(255,215,0,0.8)]" />
-                    <span>Gain Validé</span>
-                </div>
-            </div>
+            {/* Légende supprimée (Numéro Sorti / Gain Validé) */}
         </div>
       </div>
     </CasinoLayout>

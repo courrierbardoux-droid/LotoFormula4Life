@@ -603,100 +603,102 @@ export async function genererCombinaison(config: {
   };
 }
 
-// --- GESTION DE L'HISTORIQUE DES GRILLES JOUÉES (LocalStorage) ---
+// --- GESTION DES GRILLES JOUÉES (Base de données uniquement) ---
 
 export interface PlayedGrid {
-  id: string;
-  date: string; // Date de jeu
+  id: string | number; // ID de la DB (number) ou string pour compatibilité
+  date: string; // Date de jeu (playedAt)
   numeros: number[];
   etoiles: number[];
-  drawDate?: string; // Date du tirage concerné (prochain tirage au moment du jeu)
+  drawDate?: string; // Date du tirage visé (targetDate)
 }
 
-// Compteur pour générer des IDs uniques même dans la même milliseconde
-let gridIdCounter = 0;
-
-export function saveGridToHistory(numeros: number[], etoiles: number[]) {
+// Sauvegarder une grille directement dans la base de données
+export async function saveGridToDB(numeros: number[], etoiles: number[]): Promise<PlayedGrid | null> {
   try {
-    const existingHistoryJSON = localStorage.getItem('loto_played_grids');
-    const history: PlayedGrid[] = existingHistoryJSON ? JSON.parse(existingHistoryJSON) : [];
-    
     const nextDraw = getProchainTirage();
+    const targetDate = nextDraw.date.toISOString().split('T')[0]; // Format YYYY-MM-DD
     
-    // Générer un ID unique : timestamp + compteur + nombre aléatoire
-    gridIdCounter++;
-    const uniqueId = `${Date.now()}-${gridIdCounter}-${Math.random().toString(36).substr(2, 9)}`;
-    
-    const newGrid: PlayedGrid = {
-      id: uniqueId,
-      date: new Date().toISOString(),
-      numeros,
-      etoiles,
-      drawDate: nextDraw.date.toISOString()
-    };
-    
-    // Add to beginning
-    history.unshift(newGrid);
-    
-    // Limit to last 50 grids
-    if (history.length > 50) {
-      history.length = 50;
-    }
-    
-    localStorage.setItem('loto_played_grids', JSON.stringify(history));
-    
-    // Synchroniser avec la base de données (async, non bloquant)
-    syncGridToDatabase(numeros, etoiles, nextDraw.date.toISOString().split('T')[0], uniqueId);
-    
-    return newGrid;
-  } catch (e) {
-    console.error("Erreur sauvegarde grille:", e);
-    return null;
-  }
-}
-
-// Fonction pour synchroniser la grille avec la base de données
-async function syncGridToDatabase(numbers: number[], stars: number[], targetDate: string, odlId: string) {
-  try {
-    await fetch('/api/grids', {
+    const response = await fetch('/api/grids', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify({
-        numbers,
-        stars,
-        targetDate,
-        odlId, // Ancien ID localStorage pour référence
+        numbers: numeros,
+        stars: etoiles,
+        targetDate: targetDate,
       }),
     });
-  } catch (err) {
-    console.error('[lotoService] Erreur sync grille DB:', err);
-    // Ne pas bloquer si la sync échoue - la grille reste en localStorage
+    
+    if (!response.ok) {
+      throw new Error('Erreur sauvegarde grille');
+    }
+    
+    const data = await response.json();
+    
+    // Convertir le format DB au format PlayedGrid
+    return {
+      id: data.grid.id,
+      date: data.grid.playedAt,
+      numeros: data.grid.numbers,
+      etoiles: data.grid.stars,
+      drawDate: data.grid.targetDate ? `${data.grid.targetDate}T00:00:00.000Z` : undefined,
+    };
+  } catch (e) {
+    console.error("Erreur sauvegarde grille DB:", e);
+    return null;
   }
 }
 
-export function getGridHistory(): PlayedGrid[] {
+// Charger toutes les grilles de l'utilisateur depuis la base de données
+export async function loadGridsFromDB(): Promise<PlayedGrid[]> {
+  console.log('[loadGridsFromDB] ÉTAPE 1: Début de loadGridsFromDB, appel /api/grids...');
   try {
-    const json = localStorage.getItem('loto_played_grids');
-    return json ? JSON.parse(json) : [];
+    const response = await fetch('/api/grids', {
+      method: 'GET',
+      credentials: 'include',
+    });
+    
+    console.log('[loadGridsFromDB] ÉTAPE 2: Réponse reçue, status:', response.status, 'ok:', response.ok);
+    
+    if (!response.ok) {
+      console.error('[loadGridsFromDB] ERREUR: Réponse non OK, status:', response.status);
+      throw new Error('Erreur chargement grilles');
+    }
+    
+    const grids = await response.json();
+    console.log('[loadGridsFromDB] ÉTAPE 3: Grilles récupérées depuis l\'API, nombre:', grids.length);
+    
+    // Convertir le format DB au format PlayedGrid
+    const convertedGrids = grids.map((g: any) => ({
+      id: g.id,
+      date: g.playedAt,
+      numeros: g.numbers,
+      etoiles: g.stars,
+      drawDate: g.targetDate ? `${g.targetDate}T00:00:00.000Z` : undefined,
+    }));
+    
+    console.log('[loadGridsFromDB] ÉTAPE 4: Grilles converties, retour:', convertedGrids.length, 'grilles');
+    return convertedGrids;
   } catch (e) {
-    console.error("Erreur lecture historique:", e);
+    console.error("[loadGridsFromDB] ERREUR: Erreur chargement grilles DB:", e);
+    console.log("[loadGridsFromDB] ÉTAPE ERREUR: Retour tableau vide");
     return [];
   }
 }
 
-export function deleteGridHistory(ids: string[]): PlayedGrid[] {
+// Supprimer une grille de la base de données
+export async function deleteGridFromDB(gridId: string | number): Promise<boolean> {
   try {
-    const existingHistoryJSON = localStorage.getItem('loto_played_grids');
-    let history: PlayedGrid[] = existingHistoryJSON ? JSON.parse(existingHistoryJSON) : [];
+    const response = await fetch(`/api/grids/${gridId}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    });
     
-    history = history.filter(grid => !ids.includes(grid.id));
-    
-    localStorage.setItem('loto_played_grids', JSON.stringify(history));
-    return history;
+    return response.ok;
   } catch (e) {
-    console.error("Erreur suppression grille:", e);
-    return [];
+    console.error("Erreur suppression grille DB:", e);
+    return false;
   }
 }
 
@@ -712,8 +714,25 @@ export function checkGridResult(grid: PlayedGrid, lastDraw: Tirage | null): { st
   // If grid.drawDate is after lastDraw.date -> En attente
   // If grid.drawDate is before lastDraw.date -> Find that specific draw in history? (Too complex for now, just compare with lastDraw for demo purposes if dates match roughly)
   
-  const gridDrawDate = new Date(grid.drawDate || '');
+  // Vérifier si grid.drawDate existe et est valide
+  if (!grid.drawDate) {
+    // Si pas de date de tirage, considérer comme en attente
+    return { status: 'En attente', gain: 0, matchNum: 0, matchStar: 0 };
+  }
+  
+  const gridDrawDate = new Date(grid.drawDate);
   const lastDrawDate = new Date(lastDraw.date);
+  
+  // Vérifier si les dates sont valides
+  if (isNaN(gridDrawDate.getTime())) {
+    console.warn('[checkGridResult] Date invalide pour la grille:', grid.drawDate, grid.id);
+    return { status: 'En attente', gain: 0, matchNum: 0, matchStar: 0 };
+  }
+  
+  if (isNaN(lastDrawDate.getTime())) {
+    console.warn('[checkGridResult] Date invalide pour le dernier tirage:', lastDraw.date);
+    return { status: 'En attente', gain: 0, matchNum: 0, matchStar: 0 };
+  }
   
   // Normalize dates to YYYY-MM-DD for comparison
   const gridDateStr = gridDrawDate.toISOString().split('T')[0];

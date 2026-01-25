@@ -1,14 +1,22 @@
 import { Express, Request, Response, NextFunction } from 'express';
 import passport from 'passport';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 
 // ============================================
 // MIDDLEWARES D'AUTHENTIFICATION
 // ============================================
 
 function requireAuth(req: Request, res: Response, next: NextFunction) {
+  console.log('[requireAuth] Vérification authentification, isAuthenticated():', req.isAuthenticated());
+  console.log('[requireAuth] req.user:', req.user ? { id: (req.user as any).id, username: (req.user as any).username, role: (req.user as any).role } : 'null');
+  
   if (req.isAuthenticated()) {
+    console.log('[requireAuth] ✅ Authentification OK, passage au handler suivant');
     return next();
   }
+  
+  console.log('[requireAuth] ❌ Authentification échouée, envoi 401');
   res.status(401).json({ error: 'Non authentifié' });
 }
 
@@ -29,6 +37,45 @@ const mockUsers = [
   { id: 3, username: 'MarieCurie', email: 'marie@science.com', password: 'vip', role: 'vip', createdAt: new Date('2025-02-20') },
   { id: 4, username: 'Guest123', email: 'guest@temp.com', password: 'guest', role: 'invite', createdAt: new Date('2025-03-10') },
 ];
+
+// ============================================
+// JOURNAL ADMIN (SSE) - Mémoire process
+// ============================================
+
+type ActivityPayload = {
+  gridId?: number | null;
+  numbers?: number[];
+  stars?: number[];
+  targetDate?: string | null;
+  channel?: 'email' | 'direct';
+  [k: string]: unknown;
+};
+
+type ActivityEventDTO = {
+  id?: number;
+  type: string;
+  createdAt: string | number;
+  userId: number;
+  username: string;
+  payload: ActivityPayload;
+};
+
+const activitySseClients = new Set<Response>();
+
+function sseWrite(res: Response, event: string, data: unknown) {
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+function broadcastActivityEvent(event: ActivityEventDTO) {
+  for (const client of Array.from(activitySseClients)) {
+    try {
+      sseWrite(client, 'activity', event);
+    } catch (e) {
+      activitySseClients.delete(client);
+    }
+  }
+}
 
 // ============================================
 // ENREGISTREMENT DES ROUTES
@@ -432,6 +479,102 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
     }
   });
 
+  // ==========================================
+  // ROUTES ADMIN ACTIVITY (Journal)
+  // ==========================================
+
+  const logActivity = async (event: Omit<ActivityEventDTO, 'id'>) => {
+    if (!hasDatabase) return;
+    try {
+      const { db } = await import('../db');
+      const { activityEvents } = await import('../db/schema');
+
+      const createdAt = new Date(event.createdAt);
+      const [row] = await db
+        .insert(activityEvents)
+        .values({
+          type: event.type,
+          createdAt,
+          userId: event.userId,
+          usernameSnapshot: event.username,
+          payload: event.payload,
+        })
+        .returning();
+
+      const dto: ActivityEventDTO = {
+        ...event,
+        id: (row as any)?.id,
+        createdAt: ((row as any)?.createdAt ?? createdAt).toISOString(),
+      };
+
+      broadcastActivityEvent(dto);
+    } catch (e) {
+      console.error('[API] Erreur log activity:', e);
+      // Ne pas bloquer la feature principale (tirage/grille) si le journal échoue
+    }
+  };
+
+  app.get('/api/admin/activity', requireAdmin, async (req, res) => {
+    try {
+      if (!hasDatabase) return res.json([]);
+
+      const limitRaw = Number(req.query.limit ?? 200);
+      const limit = Math.min(200, Math.max(1, Number.isFinite(limitRaw) ? Math.trunc(limitRaw) : 200));
+
+      const { db } = await import('../db');
+      const { activityEvents } = await import('../db/schema');
+      const { desc } = await import('drizzle-orm');
+
+      const rows = await db.select().from(activityEvents).orderBy(desc(activityEvents.createdAt), desc(activityEvents.id)).limit(limit);
+
+      res.json(
+        rows.map((r: any) => ({
+          id: r.id,
+          type: r.type,
+          createdAt: r.createdAt,
+          userId: r.userId,
+          username: r.usernameSnapshot,
+          payload: r.payload,
+        }))
+      );
+    } catch (e: any) {
+      // Si la table n'existe pas encore (migration non faite), on renvoie juste un tableau vide
+      const msg = String(e?.message || e);
+      if (e?.code === '42P01' || msg.includes('activity_events') && msg.includes('does not exist')) {
+        return res.json([]);
+      }
+      console.error('[API] Erreur get admin activity:', e);
+      res.status(500).json({ error: 'Erreur serveur' });
+    }
+  });
+
+  app.get('/api/admin/activity/stream', requireAdmin, (req, res) => {
+    res.status(200);
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    // Ligne de commentaire pour “ouvrir” le flux côté navigateur
+    res.write(':ok\n\n');
+
+    activitySseClients.add(res);
+
+    const ping = setInterval(() => {
+      try {
+        sseWrite(res, 'ping', {});
+      } catch (e) {
+        clearInterval(ping);
+        activitySseClients.delete(res);
+      }
+    }, 25000);
+
+    req.on('close', () => {
+      clearInterval(ping);
+      activitySseClients.delete(res);
+    });
+  });
+
   // Rechercher un utilisateur par email (admin) - pour trouver les comptes "fantômes"
   app.get('/api/users/search', requireAdmin, async (req, res) => {
     try {
@@ -531,6 +674,31 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
     }
   });
 
+  // Supprimer un tirage (admin) — utile pour effacer des tirages de test
+  app.delete('/api/history/:date', requireAdmin, async (req, res) => {
+    try {
+      if (!hasDatabase) return res.status(400).json({ success: false, error: 'Base de données requise' });
+      const date = String(req.params.date || '').trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ success: false, error: 'Date invalide (attendu YYYY-MM-DD)' });
+      }
+
+      const { db } = await import('../db');
+      const { draws, drawPayouts, winningGrids, autoUpdateRuns } = await import('../db/schema');
+      const { eq } = await import('drizzle-orm');
+
+      const deletedDraw = await db.delete(draws).where(eq(draws.date, date)).returning();
+      // Nettoyage soft des tables associées (si présentes)
+      try { await db.delete(drawPayouts).where(eq(drawPayouts.drawDate, date)); } catch {}
+      try { await db.delete(winningGrids).where(eq(winningGrids.targetDate, date)); } catch {}
+      try { await db.delete(autoUpdateRuns).where(eq(autoUpdateRuns.drawDate, date)); } catch {}
+
+      res.json({ success: true, deleted: deletedDraw.length });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: String(e?.message || e) });
+    }
+  });
+
   app.get('/api/history/latest', async (req, res) => {
     try {
       if (hasDatabase) {
@@ -566,14 +734,15 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
       
       const { db } = await import('../db');
       const { draws } = await import('../db/schema');
+      const { eq } = await import('drizzle-orm');
       const { tirages } = req.body;
       
       if (!Array.isArray(tirages)) {
         return res.status(400).json({ error: 'Format invalide: tirages doit être un tableau' });
       }
       
-      let inserted = 0;
-      let skipped = 0;
+      let processed = 0;
+      let failed = 0;
       
       for (const tirage of tirages) {
         try {
@@ -581,16 +750,117 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
             date: tirage.date,
             numbers: tirage.numeros,
             stars: tirage.etoiles,
-          }).onConflictDoNothing();
-          inserted++;
+          }).onConflictDoUpdate({
+            target: draws.date,
+            set: {
+              numbers: tirage.numeros,
+              stars: tirage.etoiles,
+            },
+          });
+          processed++;
         } catch (e) {
-          skipped++;
+          failed++;
         }
       }
+
+      // Détection gagnants + emails immédiats sur la date la plus récente envoyée
+      try {
+        const dates = tirages.map((t: any) => String(t?.date ?? '').split('T')[0].split(' ')[0]).filter(Boolean);
+        const latest = dates.sort().slice(-1)[0];
+        if (latest) {
+          const { computeAndPersistWinnersForDraw } = await import('./winnerService');
+          await computeAndPersistWinnersForDraw({ drawDate: latest, hasDatabase, sendEmails: true });
+        }
+      } catch {
+        // ignore
+      }
+
+      let probeAfter: any = null;
+      try {
+        const [row] = await db.select().from(draws).where(eq(draws.date, '2026-01-27')).limit(1);
+        if (row) {
+          probeAfter = { date: row.date, etoiles: (row.stars as any[] | null)?.slice?.(0, 10) ?? null, numeros: (row.numbers as any[] | null)?.slice?.(0, 10) ?? null };
+        } else {
+          probeAfter = null;
+        }
+      } catch {
+        probeAfter = { error: 'probe query failed' };
+      }
       
-      res.json({ success: true, inserted, skipped });
+      res.json({ success: true, processed, failed });
     } catch (err) {
       console.error('[API] Erreur post history:', err);
+      res.status(500).json({ error: 'Erreur serveur' });
+    }
+  });
+
+  // ==========================================
+  // WINNERS (User) — message à la connexion/console
+  // ==========================================
+  app.get('/api/wins/me', requireAuth, async (req, res) => {
+    try {
+      if (!hasDatabase) return res.json({ success: true, rows: [] });
+      const user = req.user as any;
+      const unseenOnly = String(req.query.unseenOnly ?? 'true') === 'true';
+      const limitRaw = Number(req.query.limit ?? 50);
+      const limit = Math.min(200, Math.max(1, Number.isFinite(limitRaw) ? Math.trunc(limitRaw) : 50));
+
+      const { db } = await import('../db');
+      const { winningGrids } = await import('../db/schema');
+      const { eq, desc, isNull, and } = await import('drizzle-orm');
+
+      let where: any = eq(winningGrids.userId, user.id);
+      if (unseenOnly) where = and(where, isNull(winningGrids.seenAt));
+
+      const rows: any[] = await db
+        .select()
+        .from(winningGrids)
+        .where(where)
+        .orderBy(desc(winningGrids.targetDate), desc(winningGrids.id))
+        .limit(limit);
+
+      res.json({
+        success: true,
+        rows: rows.map((r: any) => ({
+          id: r.id,
+          gridId: r.gridId,
+          targetDate: r.targetDate,
+          matchNum: r.matchNum,
+          matchStar: r.matchStar,
+          gainCents: r.gainCents,
+          emailNotifiedAt: r.emailNotifiedAt,
+          seenAt: r.seenAt,
+        })),
+      });
+    } catch (e) {
+      res.status(500).json({ error: 'Erreur serveur' });
+    }
+  });
+
+  app.post('/api/wins/me/ack', requireAuth, async (req, res) => {
+    try {
+      if (!hasDatabase) return res.json({ success: true });
+      const user = req.user as any;
+      const ids = Array.isArray(req.body?.ids)
+        ? req.body.ids.map((x: any) => parseInt(x)).filter((n: any) => Number.isFinite(n))
+        : [];
+
+      const { db } = await import('../db');
+      const { winningGrids } = await import('../db/schema');
+      const { eq, and, inArray, isNull } = await import('drizzle-orm');
+
+      const baseWhere: any = and(eq(winningGrids.userId, user.id), isNull(winningGrids.seenAt));
+      if (ids.length > 0) {
+        await db
+          .update(winningGrids)
+          .set({ seenAt: new Date(), updatedAt: new Date() })
+          .where(and(baseWhere, inArray(winningGrids.id, ids)) as any);
+      } else {
+        await db.update(winningGrids).set({ seenAt: new Date(), updatedAt: new Date() }).where(baseWhere);
+      }
+
+      res.json({ success: true });
+    } catch (e) {
       res.status(500).json({ error: 'Erreur serveur' });
     }
   });
@@ -651,104 +921,141 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
     }
   });
 
-  // Vérifier les grilles gagnantes de TOUS les utilisateurs après une mise à jour
-  app.post('/api/history/check-winners', requireAdmin, async (req, res) => {
+  // ==========================================
+  // HISTORIQUE - MODE MAJ (AUTO / MANUEL)
+  // ==========================================
+  // Stockage simple côté serveur (fichier), persistant au redémarrage.
+  const HISTORY_MODE_FILE = path.join(process.cwd(), 'server', 'data', 'history-update-mode.json');
+  type HistoryUpdateMode = 'auto' | 'manual';
+  const HISTORY_SCHEDULE_FILE = path.join(process.cwd(), 'server', 'data', 'history-auto-update-schedule.json');
+  type HistoryAutoUpdateSchedule = { time: string; updatedAt: number };
+
+  async function readHistoryUpdateMode(): Promise<HistoryUpdateMode> {
     try {
-      if (!hasDatabase) {
-        return res.status(400).json({ error: 'Base de données requise' });
-      }
+      const raw = await fs.readFile(HISTORY_MODE_FILE, 'utf-8');
+      const parsed = JSON.parse(raw);
+      const mode = parsed?.mode;
+      return mode === 'manual' ? 'manual' : 'auto';
+    } catch {
+      return 'auto';
+    }
+  }
 
-      const { lastDrawDate, lastDrawNumbers, lastDrawStars } = req.body;
-      
-      if (!lastDrawDate || !lastDrawNumbers || !lastDrawStars) {
-        return res.status(400).json({ error: 'Données du tirage manquantes' });
-      }
+  async function writeHistoryUpdateMode(mode: HistoryUpdateMode) {
+    const dir = path.dirname(HISTORY_MODE_FILE);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      HISTORY_MODE_FILE,
+      JSON.stringify({ mode, updatedAt: Date.now() }, null, 2),
+      'utf-8'
+    );
+  }
 
-      const { db } = await import('../db');
-      const { grids, users } = await import('../db/schema');
-      const { eq, sql } = await import('drizzle-orm');
-      const { sendWinnerNotificationToAdmin } = await import('./email');
+  async function getHistoryUpdateMode(): Promise<HistoryUpdateMode> {
+    return await readHistoryUpdateMode();
+  }
 
-      // Récupérer toutes les grilles qui visaient cette date de tirage
-      const allGrids = await db.select({
-        grid: grids,
-        user: users,
-      })
-        .from(grids)
-        .innerJoin(users, eq(grids.userId, users.id))
-        .where(eq(grids.targetDate, lastDrawDate));
+  function sanitizeTimeHHMM(raw: unknown): string | null {
+    const s = String(raw ?? '').trim();
+    const m = s.match(/^(\d{1,2}):(\d{2})$/);
+    if (!m) return null;
+    const hh = Number(m[1]);
+    const mm = Number(m[2]);
+    if (!Number.isFinite(hh) || !Number.isFinite(mm)) return null;
+    if (hh < 0 || hh > 23) return null;
+    if (mm < 0 || mm > 59) return null;
+    return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+  }
 
-      const winners: any[] = [];
-      
-      // Gains EuroMillions (approximatifs)
-      const GAINS: { [key: string]: number } = {
-        '5+2': 200000000, '5+1': 500000, '5+0': 100000,
-        '4+2': 5000, '4+1': 200, '4+0': 100,
-        '3+2': 100, '3+1': 20, '3+0': 15,
-        '2+2': 20, '2+1': 10, '2+0': 5,
-        '1+2': 10, '0+2': 5,
-      };
+  async function readHistoryAutoUpdateSchedule(): Promise<HistoryAutoUpdateSchedule> {
+    try {
+      const raw = await fs.readFile(HISTORY_SCHEDULE_FILE, 'utf-8');
+      const parsed = JSON.parse(raw);
+      const t = sanitizeTimeHHMM(parsed?.time);
+      return { time: t ?? '22:00', updatedAt: Number(parsed?.updatedAt ?? Date.now()) };
+    } catch {
+      return { time: '22:00', updatedAt: Date.now() };
+    }
+  }
 
-      for (const { grid, user } of allGrids) {
-        const gridNumbers = grid.numbers as number[];
-        const gridStars = grid.stars as number[];
-        
-        // Compter les correspondances
-        const matchNum = gridNumbers.filter(n => lastDrawNumbers.includes(n)).length;
-        const matchStar = gridStars.filter(s => lastDrawStars.includes(s)).length;
-        
-        const key = `${matchNum}+${matchStar}`;
-        const gain = GAINS[key] || 0;
-        
-        if (gain > 0) {
-          winners.push({
-            userId: user.id,
-            username: user.username,
-            email: user.email,
-            gridId: grid.id,
-            numbers: gridNumbers,
-            stars: gridStars,
-            matchNum,
-            matchStar,
-            gain,
-          });
-          
-          // Envoyer email à l'admin pour chaque gagnant
-          await sendWinnerNotificationToAdmin({
-            winnerUsername: user.username,
-            winnerEmail: user.email,
-            numbers: gridNumbers,
-            stars: gridStars,
-            matchNum,
-            matchStar,
-            gain,
-            drawDate: lastDrawDate,
-          });
-        }
-      }
+  async function writeHistoryAutoUpdateSchedule(time: string) {
+    const dir = path.dirname(HISTORY_SCHEDULE_FILE);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(
+      HISTORY_SCHEDULE_FILE,
+      JSON.stringify({ time, updatedAt: Date.now() }, null, 2),
+      'utf-8'
+    );
+  }
 
-      // Stocker les notifications pour l'admin (à afficher au login)
-      if (winners.length > 0) {
-        // On peut stocker dans une table notifications ou simplement en session
-        // Pour l'instant, on retourne juste les gagnants
-        console.log(`[API] ${winners.length} gagnant(s) détecté(s) pour le tirage du ${lastDrawDate}`);
-      }
+  app.get('/api/history/update-mode', requireAdmin, async (req, res) => {
+    const mode = await readHistoryUpdateMode();
+    res.json({ success: true, mode });
+  });
 
-      res.json({ 
-        success: true, 
-        winnersCount: winners.length,
-        winners: winners.map(w => ({
-          username: w.username,
-          matchNum: w.matchNum,
-          matchStar: w.matchStar,
-          gain: w.gain,
-        }))
-      });
-    } catch (err) {
-      console.error('[API] Erreur check winners:', err);
-      res.status(500).json({ error: 'Erreur serveur' });
+  app.post('/api/history/update-mode', requireAdmin, async (req, res) => {
+    const modeRaw = String(req.body?.mode ?? '');
+    const mode: HistoryUpdateMode = modeRaw === 'manual' ? 'manual' : 'auto';
+    await writeHistoryUpdateMode(mode);
+    res.json({ success: true, mode });
+  });
+
+  // Horaire AUTO (mardi & vendredi) — persisté côté serveur
+  app.get('/api/history/auto-update/schedule', requireAdmin, async (req, res) => {
+    const schedule = await readHistoryAutoUpdateSchedule();
+    res.json({ success: true, time: schedule.time, updatedAt: schedule.updatedAt, retryMinutes: 90 });
+  });
+
+  app.post('/api/history/auto-update/schedule', requireAdmin, async (req, res) => {
+    const t = sanitizeTimeHHMM(req.body?.time);
+    if (!t) return res.status(400).json({ success: false, error: 'Heure invalide (attendu HH:MM)' });
+    await writeHistoryAutoUpdateSchedule(t);
+    res.json({ success: true, time: t });
+  });
+
+  // Déclencher un run AUTO (admin) — utilisé par le bouton "ACTUALISER" quand toggle = AUTO
+  app.post('/api/history/auto-update/run', requireAdmin, async (req, res) => {
+    try {
+      if (!hasDatabase) return res.status(400).json({ error: 'Base de données requise' });
+      const mode = await getHistoryUpdateMode();
+      if (mode !== 'auto') return res.status(400).json({ error: 'Mode AUTO non actif' });
+
+      const { runHistoryAutoUpdateOnce } = await import('./historyAutoUpdater');
+      const result = await runHistoryAutoUpdateOnce({ hasDatabase });
+      if (!result.ok) return res.status(500).json({ success: false, error: result.message, meta: result });
+      res.json({ success: true, result });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: String(e?.message || e) });
     }
   });
+
+  // Statut AUTO (dernier run) — affichage console/connexion
+  app.get('/api/history/auto-update/status', requireAuth, async (req, res) => {
+    try {
+      if (!hasDatabase) return res.json({ success: true, status: null });
+      const { db } = await import('../db');
+      const { autoUpdateRuns } = await import('../db/schema');
+      const { desc } = await import('drizzle-orm');
+      const [last] = await db.select().from(autoUpdateRuns).orderBy(desc(autoUpdateRuns.id)).limit(1);
+      res.json({
+        success: true,
+        status: last
+          ? {
+              id: last.id,
+              success: Number(last.success) === 1,
+              drawDate: last.drawDate,
+              message: last.message,
+              finishedAt: last.finishedAt,
+              url: last.url,
+            }
+          : null,
+      });
+    } catch (e: any) {
+      res.json({ success: true, status: null });
+    }
+  });
+
+  // (Gagnants) : suppression totale (routes et logique retirées)
 
   // ==========================================
   // ROUTES GRIDS & PRESETS - Simplifiées pour mode sans DB
@@ -756,12 +1063,16 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
   
   // Récupérer les grilles de l'utilisateur connecté
   app.get('/api/grids', requireAuth, async (req, res) => {
+    console.log('[API /api/grids] ÉTAPE 1: Handler appelé, user:', (req.user as any)?.username || 'null', 'role:', (req.user as any)?.role || 'null');
     try {
       if (!hasDatabase) {
+        console.log('[API /api/grids] ÉTAPE 2: Pas de base de données, retour tableau vide');
         return res.json([]);
       }
 
       const user = req.user as any;
+      console.log('[API /api/grids] ÉTAPE 3: Base de données disponible, récupération des grilles pour user.id:', user.id);
+      
       const { db } = await import('../db');
       const { grids } = await import('../db/schema');
       const { eq, desc } = await import('drizzle-orm');
@@ -771,7 +1082,9 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
         .where(eq(grids.userId, user.id))
         .orderBy(desc(grids.playedAt));
 
-      res.json(userGrids.map(g => ({
+      console.log('[API /api/grids] ÉTAPE 4: Grilles récupérées depuis la DB, nombre:', userGrids.length);
+
+      const formattedGrids = userGrids.map(g => ({
         id: g.id,
         odlId: g.odlId,
         numbers: g.numbers,
@@ -780,9 +1093,12 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
         targetDate: g.targetDate,
         name: g.name,
         createdAt: g.createdAt,
-      })));
+      }));
+
+      console.log('[API /api/grids] ÉTAPE 5: Grilles formatées, envoi réponse avec', formattedGrids.length, 'grilles');
+      res.json(formattedGrids);
     } catch (err) {
-      console.error('[API] Erreur get grids:', err);
+      console.error('[API /api/grids] ERREUR: Erreur get grids:', err);
       res.json([]);
     }
   });
@@ -808,6 +1124,21 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
         name: name || null,
         odlId: odlId || null,
       }).returning();
+
+      // Journal admin: grille créée (sans email)
+      await logActivity({
+        type: 'GRID_CREATED',
+        createdAt: (newGrid as any)?.playedAt ?? new Date(),
+        userId: user.id,
+        username: user.username,
+        payload: {
+          gridId: (newGrid as any)?.id ?? null,
+          numbers,
+          stars,
+          targetDate: targetDate || null,
+          channel: 'direct',
+        },
+      });
 
       res.json({ success: true, grid: newGrid });
     } catch (err) {
@@ -901,12 +1232,15 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
 
       // Envoyer l'email
       const { sendInvitationEmail } = await import('./email');
+      console.log(`[API] Tentative envoi invitation ${type} à ${email} avec code ${code}`);
       const sent = await sendInvitationEmail({ to: email, code, type: type as 'vip' | 'invite' });
 
       if (sent) {
+        console.log(`[API] Invitation ${type} envoyée avec succès à ${email}`);
         res.json({ success: true, message: `Invitation ${type} envoyée à ${email}` });
       } else {
-        res.status(500).json({ error: 'Erreur envoi email' });
+        console.error(`[API] Échec envoi invitation ${type} à ${email}`);
+        res.status(500).json({ error: 'Erreur envoi email. Vérifiez les logs serveur et les variables d\'environnement GMAIL_USER et GMAIL_APP_PASSWORD.' });
       }
     } catch (err) {
       console.error('[API] Erreur envoi invitation:', err);
@@ -1167,10 +1501,14 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
       }
 
       const { userId } = req.params;
-      const { username, email } = req.body;
+      const { username, email, password } = req.body;
+      
+      console.log('[API] Update user request:', { userId, hasUsername: !!username, hasEmail: !!email, hasPassword: !!password });
+      
       const { db } = await import('../db');
       const { users } = await import('../db/schema');
       const { eq, and, ne } = await import('drizzle-orm');
+      const bcrypt = await import('bcrypt');
 
       const updates: any = { updatedAt: new Date() };
 
@@ -1202,16 +1540,34 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
         updates.email = email;
       }
 
+      // Modification du mot de passe (admin peut changer sans ancien mot de passe)
+      if (password !== undefined && password !== null) {
+        const passwordStr = String(password).trim();
+        if (passwordStr.length === 0) {
+          return res.status(400).json({ error: 'Le mot de passe ne peut pas être vide', field: 'password' });
+        }
+        if (passwordStr.length < 6) {
+          return res.status(400).json({ error: 'Le mot de passe doit contenir au moins 6 caractères', field: 'password' });
+        }
+        updates.password = await bcrypt.hash(passwordStr, 10);
+        console.log('[API] Password hash generated, updates keys:', Object.keys(updates));
+      }
+
       // Appliquer les modifications
-      if (Object.keys(updates).length > 1) {
+      const updateKeys = Object.keys(updates);
+      console.log('[API] Updates to apply:', updateKeys, 'Count:', updateKeys.length);
+      
+      if (updateKeys.length > 1) {
         await db.update(users).set(updates).where(eq(users.id, parseInt(userId)));
+        console.log('[API] User updated successfully');
         res.json({ success: true, message: 'Utilisateur mis à jour' });
       } else {
-        res.json({ success: true, message: 'Aucune modification' });
+        console.log('[API] No updates to apply (only updatedAt)');
+        res.status(400).json({ error: 'Aucune modification à appliquer', success: false });
       }
     } catch (err) {
       console.error('[API] Erreur update user:', err);
-      res.status(500).json({ error: 'Erreur serveur' });
+      res.status(500).json({ error: 'Erreur serveur', success: false });
     }
   });
 
@@ -1290,18 +1646,25 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
     }
   });
 
-  // Page de confirmation (quand l'utilisateur clique sur le lien dans l'email)
+  // Page de confirmation (quand l'utilisateur clique sur le lien dans l'email) - ENVOIE DIRECTEMENT L'EMAIL 2
   app.get('/api/draws/confirm/:token', async (req, res) => {
+    console.log('[API] ========== GET /api/draws/confirm/:token APPELÉ ==========');
+    console.log('[API] Token reçu:', req.params.token);
+    console.log('[API] URL complète:', req.url);
+    console.log('[API] Headers:', JSON.stringify(req.headers, null, 2));
+    
     try {
       if (!hasDatabase) {
-        return res.status(400).json({ error: 'Base de données requise' });
+        console.log('[API] ERREUR: Base de données non disponible');
+        return res.status(400).send('Base de données requise');
       }
 
       const { token } = req.params;
       const { db } = await import('../db');
-      const { pendingDraws, users } = await import('../db/schema');
+      const { pendingDraws, users, grids } = await import('../db/schema');
       const { eq, isNull, gt, and } = await import('drizzle-orm');
 
+      console.log('[API] Recherche du token dans pendingDraws...');
       // Vérifier le token
       const [pending] = await db.select()
         .from(pendingDraws)
@@ -1313,10 +1676,23 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
           )
         );
 
+      console.log('[API] Résultat recherche token:', pending ? `TROUVÉ (userId: ${pending.userId})` : 'NON TROUVÉ');
+
       if (!pending) {
-        return res.status(404).json({ valid: false, error: 'Lien invalide ou expiré' });
+        console.log('[API] Token invalide ou expiré, retour 404');
+        return res.status(404).send(`
+          <!DOCTYPE html>
+          <html>
+          <head><meta charset="utf-8"><title>Lien invalide</title></head>
+          <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+            <h1>Lien invalide ou expiré</h1>
+            <p>Ce lien n'est plus valide. Veuillez demander un nouvel envoi.</p>
+          </body>
+          </html>
+        `);
       }
 
+      console.log('[API] Récupération de toutes les grilles en attente pour userId:', pending.userId);
       // Récupérer toutes les grilles en attente pour cet utilisateur
       const allPending = await db.select()
         .from(pendingDraws)
@@ -1328,14 +1704,110 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
           )
         );
 
-      res.json({ 
-        valid: true, 
-        gridCount: allPending.length,
-        userId: pending.userId 
+      console.log('[API] Nombre de grilles en attente trouvées:', allPending.length);
+      
+      // LOGS POUR ANALYSER targetDate
+      console.log('[API] ===== ANALYSE targetDate =====');
+      for (let i = 0; i < allPending.length; i++) {
+        const draw = allPending[i];
+        console.log(`[API] Grille ${i + 1} - targetDate brute:`, draw.targetDate);
+        console.log(`[API] Grille ${i + 1} - targetDate type:`, typeof draw.targetDate);
+        console.log(`[API] Grille ${i + 1} - targetDate null?:`, draw.targetDate === null);
+        console.log(`[API] Grille ${i + 1} - targetDate undefined?:`, draw.targetDate === undefined);
+        if (draw.targetDate) {
+          try {
+            const dateObj = new Date(draw.targetDate);
+            console.log(`[API] Grille ${i + 1} - Date formatée:`, dateObj.toLocaleDateString('fr-FR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }));
+          } catch (e) {
+            console.log(`[API] Grille ${i + 1} - ERREUR formatage date:`, e);
+          }
+        }
+      }
+      console.log('[API] ===== FIN ANALYSE targetDate =====');
+
+      // Récupérer l'utilisateur
+      console.log('[API] Récupération de l\'utilisateur userId:', pending.userId);
+      const [userData] = await db.select().from(users).where(eq(users.id, pending.userId));
+      if (!userData) {
+        console.log('[API] ERREUR: Utilisateur non trouvé');
+        return res.status(404).send('Utilisateur non trouvé');
+      }
+      console.log('[API] Utilisateur trouvé:', userData.email, userData.username);
+
+      // Sauvegarder les grilles dans l'historique
+      console.log('[API] Sauvegarde des grilles dans l\'historique...');
+      const now = new Date();
+      for (const draw of allPending) {
+        const [createdGrid] = await db.insert(grids).values({
+          userId: draw.userId,
+          numbers: draw.numbers,
+          stars: draw.stars,
+          playedAt: now,
+          targetDate: draw.targetDate,
+        }).returning();
+
+        // Journal admin: grille créée (avec email)
+        await logActivity({
+          type: 'GRID_CREATED',
+          createdAt: now.getTime(),
+          userId: draw.userId,
+          username: userData.username,
+          payload: {
+            gridId: (createdGrid as any)?.id ?? null,
+            numbers: (draw.numbers as number[]) ?? [],
+            stars: (draw.stars as number[]) ?? [],
+            targetDate: draw.targetDate ?? null,
+            channel: 'email',
+          },
+        });
+        
+        // Marquer comme envoyé
+        await db.update(pendingDraws)
+          .set({ sentAt: now })
+          .where(eq(pendingDraws.id, draw.id));
+      }
+      console.log('[API] Grilles sauvegardées avec succès');
+
+      // Envoyer l'email 2 (un seul email avec toutes les grilles)
+      console.log('[API] Début de l\'envoi de l\'email (email2) avec toutes les grilles...');
+      const { sendDrawNumbersEmailMulti } = await import('./email');
+      
+      const emailGrids = allPending.map(draw => ({
+        numbers: draw.numbers as number[],
+        stars: draw.stars as number[],
+        targetDate: draw.targetDate || undefined,
+      }));
+      
+      console.log('[API] Grilles préparées pour email:', emailGrids.map(g => ({ 
+        numbers: g.numbers, 
+        stars: g.stars, 
+        targetDate: g.targetDate,
+        targetDateType: typeof g.targetDate 
+      })));
+      
+      console.log('[API] Envoi email2 avec', emailGrids.length, 'grille(s)');
+      const emailSent = await sendDrawNumbersEmailMulti({
+        to: userData.email,
+        username: userData.username,
+        grids: emailGrids,
       });
+      console.log('[API] Résultat envoi email2:', emailSent ? 'SUCCÈS' : 'ÉCHEC');
+
+      console.log('[API] Tous les emails envoyés, retour 204');
+      // Retourner une réponse HTTP 204 (No Content) - pas de page de succès
+      res.status(204).send();
     } catch (err) {
       console.error('[API] Erreur confirm draw:', err);
-      res.status(500).json({ error: 'Erreur serveur' });
+      res.status(500).send(`
+        <!DOCTYPE html>
+        <html>
+        <head><meta charset="utf-8"><title>Erreur</title></head>
+        <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px;">
+          <h1>Erreur serveur</h1>
+          <p>Une erreur est survenue. Veuillez réessayer plus tard.</p>
+        </body>
+        </html>
+      `);
     }
   });
 
@@ -1386,12 +1858,27 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
       // Sauvegarder les grilles dans l'historique
       const now = new Date();
       for (const draw of allPending) {
-        await db.insert(grids).values({
+        const [createdGrid] = await db.insert(grids).values({
           userId: draw.userId,
           numbers: draw.numbers,
           stars: draw.stars,
           playedAt: now,
           targetDate: draw.targetDate,
+        }).returning();
+
+        // Journal admin: grille créée (avec email)
+        await logActivity({
+          type: 'GRID_CREATED',
+          createdAt: now.getTime(),
+          userId: draw.userId,
+          username: userData.username,
+          payload: {
+            gridId: (createdGrid as any)?.id ?? null,
+            numbers: (draw.numbers as number[]) ?? [],
+            stars: (draw.stars as number[]) ?? [],
+            targetDate: draw.targetDate ?? null,
+            channel: 'email',
+          },
         });
         
         // Marquer comme envoyé
@@ -1421,6 +1908,87 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
     } catch (err) {
       console.error('[API] Erreur send draw:', err);
       res.status(500).json({ success: false, error: 'Erreur serveur' });
+    }
+  });
+
+  // Envoyer l'email 2 directement après validation du popup gratitude (pour invités)
+  app.post('/api/draws/send-direct', requireAuth, async (req, res) => {
+    try {
+      if (!hasDatabase) {
+        return res.status(400).json({ error: 'Base de données requise' });
+      }
+
+      const user = req.user as any;
+      
+      // Vérifier que l'utilisateur est invite
+      if (user.role !== 'invite') {
+        return res.status(400).json({ error: 'Cette fonctionnalité est réservée aux invités' });
+      }
+
+      const { draws } = req.body; // Array de { nums: number[], stars: number[], targetDate?: string }
+      
+      if (!draws || !Array.isArray(draws) || draws.length === 0) {
+        return res.status(400).json({ error: 'Aucune grille à envoyer' });
+      }
+
+      const { db } = await import('../db');
+      const { users, grids } = await import('../db/schema');
+      const { eq } = await import('drizzle-orm');
+
+      // Récupérer l'email de l'utilisateur
+      const [userData] = await db.select().from(users).where(eq(users.id, user.id));
+      if (!userData) {
+        return res.status(404).json({ error: 'Utilisateur non trouvé' });
+      }
+
+      // Sauvegarder les grilles dans l'historique
+      const now = new Date();
+      for (const draw of draws) {
+        const [createdGrid] = await db.insert(grids).values({
+          userId: user.id,
+          numbers: draw.nums,
+          stars: draw.stars,
+          playedAt: now,
+          targetDate: draw.targetDate || null,
+        }).returning();
+
+        // Journal admin: grille créée (avec email)
+        await logActivity({
+          type: 'GRID_CREATED',
+          createdAt: now.getTime(),
+          userId: user.id,
+          username: userData.username,
+          payload: {
+            gridId: (createdGrid as any)?.id ?? null,
+            numbers: (draw.nums as number[]) ?? [],
+            stars: (draw.stars as number[]) ?? [],
+            targetDate: (draw.targetDate as any) ?? null,
+            channel: 'email',
+          },
+        });
+      }
+
+      // Envoyer l'email 2 (email avec les numéros) pour chaque grille
+      const { sendDrawNumbersEmail } = await import('./email');
+      
+      for (const draw of draws) {
+        await sendDrawNumbersEmail({
+          to: userData.email,
+          username: userData.username,
+          numbers: draw.nums,
+          stars: draw.stars,
+          targetDate: draw.targetDate || undefined,
+        });
+      }
+
+      res.json({ 
+        success: true, 
+        message: `${draws.length} grille(s) envoyée(s)`,
+        gridCount: draws.length 
+      });
+    } catch (err) {
+      console.error('[API] Erreur send direct:', err);
+      res.status(500).json({ error: 'Erreur serveur' });
     }
   });
 
@@ -1520,6 +2088,256 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
       });
     } catch (err) {
       console.error('[API] Erreur user details:', err);
+      res.status(500).json({ error: 'Erreur serveur' });
+    }
+  });
+
+  // ==========================================
+  // ROUTES GESTION TEMPLATES EMAIL/POPUP (ADMIN)
+  // ==========================================
+
+  // Récupérer tous les templates
+  app.get('/api/admin/templates', requireAdmin, async (req, res) => {
+    try {
+      if (!hasDatabase) {
+        return res.json({ templates: [] });
+      }
+
+      const { db } = await import('../db');
+      const { emailPopupTemplates } = await import('../db/schema');
+
+      const allTemplates = await db.select().from(emailPopupTemplates);
+
+      res.json({ templates: allTemplates });
+    } catch (err) {
+      console.error('[API] Erreur get templates:', err);
+      res.status(500).json({ error: 'Erreur serveur' });
+    }
+  });
+
+  // Sauvegarder un template (create or update)
+  app.post('/api/admin/templates', requireAdmin, async (req, res) => {
+    try {
+      console.log('[API] Save template request:', { bodyKeys: Object.keys(req.body) });
+      
+      if (!hasDatabase) {
+        console.log('[API] Save template: Pas de base de données');
+        return res.status(400).json({ error: 'Base de données requise' });
+      }
+
+      const { type, content, variablesConfig } = req.body;
+      const user = req.user as any;
+
+      console.log('[API] Save template: Données reçues', { type, contentLength: content?.length || 0, userId: user?.id });
+
+      if (!type || !content) {
+        console.log('[API] Save template: Paramètres manquants');
+        return res.status(400).json({ error: 'Type et contenu requis' });
+      }
+
+      const validTypes = ['email1', 'email2', 'popup1', 'popup2'];
+      if (!validTypes.includes(type)) {
+        console.log('[API] Save template: Type invalide', { type });
+        return res.status(400).json({ error: 'Type invalide' });
+      }
+
+      console.log('[API] Save template: Import DB...');
+      const { db } = await import('../db');
+      const { emailPopupTemplates } = await import('../db/schema');
+      const { eq } = await import('drizzle-orm');
+
+      console.log('[API] Save template: Vérification template existant...');
+      // Vérifier si le template existe déjà
+      const [existing] = await db.select()
+        .from(emailPopupTemplates)
+        .where(eq(emailPopupTemplates.type, type));
+
+      console.log('[API] Save template: Template existant?', { exists: !!existing, existingId: existing?.id });
+
+      if (existing) {
+        // Mise à jour
+        console.log('[API] Save template: Mise à jour template...');
+        await db.update(emailPopupTemplates)
+          .set({
+            content,
+            variablesConfig: variablesConfig || {},
+            updatedAt: new Date(),
+            updatedBy: user.id
+          })
+          .where(eq(emailPopupTemplates.type, type));
+
+        console.log('[API] Save template: Template mis à jour avec succès');
+        res.json({ success: true, message: 'Template mis à jour' });
+      } else {
+        // Création
+        console.log('[API] Save template: Création nouveau template...');
+        await db.insert(emailPopupTemplates).values({
+          type,
+          content,
+          variablesConfig: variablesConfig || {},
+          updatedBy: user.id
+        });
+
+        console.log('[API] Save template: Template créé avec succès');
+        res.json({ success: true, message: 'Template créé' });
+      }
+    } catch (err: any) {
+      console.error('[API] Erreur save template:', err);
+      console.error('[API] Erreur save template - Stack:', err?.stack);
+      console.error('[API] Erreur save template - Message:', err?.message);
+      res.status(500).json({ 
+        error: 'Erreur serveur',
+        details: err?.message || String(err)
+      });
+    }
+  });
+
+  // Récupérer les variables de template
+  app.get('/api/admin/template-variables', requireAdmin, async (req, res) => {
+    try {
+      if (!hasDatabase) {
+        return res.json({ variables: [] });
+      }
+
+      const { db } = await import('../db');
+      const { templateVariables } = await import('../db/schema');
+
+      const allVariables = await db.select().from(templateVariables);
+
+      res.json({ variables: allVariables });
+    } catch (err) {
+      console.error('[API] Erreur get variables:', err);
+      res.status(500).json({ error: 'Erreur serveur' });
+    }
+  });
+
+  // Sauvegarder une variable de template (create or update)
+  app.post('/api/admin/template-variables', requireAdmin, async (req, res) => {
+    try {
+      if (!hasDatabase) {
+        return res.status(400).json({ error: 'Base de données requise' });
+      }
+
+      const { key, value, description } = req.body;
+
+      if (!key || value === undefined) {
+        return res.status(400).json({ error: 'Clé et valeur requises' });
+      }
+
+      const { db } = await import('../db');
+      const { templateVariables } = await import('../db/schema');
+      const { eq } = await import('drizzle-orm');
+
+      // Vérifier si la variable existe déjà
+      const [existing] = await db.select()
+        .from(templateVariables)
+        .where(eq(templateVariables.key, key));
+
+      if (existing) {
+        // Mise à jour
+        await db.update(templateVariables)
+          .set({
+            value,
+            description: description || existing.description,
+            updatedAt: new Date()
+          })
+          .where(eq(templateVariables.key, key));
+
+        res.json({ success: true, message: 'Variable mise à jour' });
+      } else {
+        // Création
+        await db.insert(templateVariables).values({
+          key,
+          value,
+          description: description || `Variable ${key}`
+        });
+
+        res.json({ success: true, message: 'Variable créée' });
+      }
+    } catch (err) {
+      console.error('[API] Erreur save variable:', err);
+      res.status(500).json({ error: 'Erreur serveur' });
+    }
+  });
+
+  // Envoyer un email de test
+  app.post('/api/admin/templates/test', requireAdmin, async (req, res) => {
+    try {
+      const { type, email, content } = req.body;
+
+      console.log('[API] Test email request:', { type, email, contentLength: content?.length || 0 });
+
+      if (!type || !email || !content) {
+        console.log('[API] Test email: Paramètres manquants');
+        return res.status(400).json({ error: 'Type, email et contenu requis' });
+      }
+
+      // Vérifier les variables d'environnement avant d'essayer d'envoyer
+      if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
+        console.error('[API] Test email: Variables d\'environnement manquantes (GMAIL_USER ou GMAIL_APP_PASSWORD)');
+        return res.status(500).json({ 
+          error: 'Configuration email manquante. Vérifiez les variables d\'environnement GMAIL_USER et GMAIL_APP_PASSWORD.' 
+        });
+      }
+
+      // Utiliser la fonction d'envoi d'email existante
+      console.log('[API] Test email: Tentative d\'envoi à', email);
+      const { sendTestEmail } = await import('./email');
+      const success = await sendTestEmail({
+        to: email,
+        subject: `[TEST] Template ${type} - LotoFormula4Life`,
+        html: content
+      });
+
+      console.log('[API] Test email: Résultat sendTestEmail =', success);
+
+      if (success) {
+        console.log('[API] Test email: Succès - email envoyé à', email);
+        res.json({ success: true, message: 'Email de test envoyé' });
+      } else {
+        console.error('[API] Test email: Échec - sendTestEmail a retourné false');
+        res.status(500).json({ error: 'Erreur lors de l\'envoi de l\'email. Vérifiez les logs du serveur.' });
+      }
+    } catch (err) {
+      console.error('[API] Erreur test email (exception):', err);
+      res.status(500).json({ error: 'Erreur serveur: ' + (err instanceof Error ? err.message : String(err)) });
+    }
+  });
+
+  // Récupérer un template popup traité avec variables (pour affichage dans la console)
+  app.get('/api/popup/template/:type', async (req, res) => {
+    try {
+      if (!hasDatabase) {
+        return res.status(500).json({ error: 'Base de données non disponible' });
+      }
+
+      const { type } = req.params;
+      const user = req.user as any;
+
+      if (type !== 'popup1' && type !== 'popup2') {
+        return res.status(400).json({ error: 'Type invalide. Utilisez popup1 ou popup2' });
+      }
+
+      const { getProcessedTemplate } = await import('./templateService');
+      
+      // Préparer les variables pour le template
+      const variables = {
+        utilisateur: user?.username || 'Utilisateur',
+        email: user?.email || '',
+        date: new Date().toLocaleDateString('fr-FR'),
+      };
+
+      console.log(`[API] Récupération template ${type} pour utilisateur ${user?.username}`);
+      const template = await getProcessedTemplate(type as 'popup1' | 'popup2', variables);
+
+      if (!template) {
+        console.warn(`[API] Template ${type} non trouvé en DB`);
+        return res.status(404).json({ error: 'Template non trouvé' });
+      }
+
+      res.json({ template });
+    } catch (err) {
+      console.error(`[API] Erreur récupération template popup ${req.params.type}:`, err);
       res.status(500).json({ error: 'Erreur serveur' });
     }
   });
