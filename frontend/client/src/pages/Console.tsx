@@ -4277,7 +4277,7 @@ export default function Console() {
                 )}
 
                 <SectionPanel 
-                    title="ACTIONS"
+                    title="PROGRAMMATION DES TIRAGES"
                     disabled={false}
                     showLed={false}
                     className="h-[395px]"
