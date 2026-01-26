@@ -9,6 +9,7 @@ import { ToggleSwitch } from "@/components/casino/ToggleSwitch";
 import { Counter } from "@/components/casino/Counter";
 import { LEDIndicator } from "@/components/casino/LEDIndicator";
 import { ProchainTirageSimple } from "@/components/casino/ProchainTirageSimple";
+import { LCDDisplay } from "@/components/casino/LCDDisplay";
 import { DebugPanel } from "@/components/casino/DebugPanel";
 import { GratitudePopup } from "@/components/GratitudePopup";
 import { cn } from "@/lib/utils";
@@ -240,6 +241,7 @@ interface PoolItem {
     trend: number;
     absence: number;
     trendDirection: 'hausse' | 'baisse' | 'stable';
+    surreprZ: number; // z-score de surreprésentation (fenêtre Surrepr)
 }
 
 export default function Console() {
@@ -289,6 +291,11 @@ export default function Console() {
   const [stats, setStats] = useState<StatsNumeros | null>(null);
   const [statsTrend, setStatsTrend] = useState<StatsNumeros | null>(null);
   const [statsDormeur, setStatsDormeur] = useState<StatsNumeros | null>(null);
+  const [statsSurrepr, setStatsSurrepr] = useState<StatsNumeros | null>(null);
+  const [highWindowCount, setHighWindowCount] = useState(0);
+  const [trendWindowCount, setTrendWindowCount] = useState(0);
+  const [dormeurWindowCount, setDormeurWindowCount] = useState(0);
+  const [surreprWindowCount, setSurreprWindowCount] = useState(0);
   const [dernierTirage, setDernierTirage] = useState<Tirage | null>(null);
   const [prochainTirage, setProchainTirage] = useState<{ date: Date, jour: string } | null>(null);
   const [updateNeeded, setUpdateNeeded] = useState(false);
@@ -401,8 +408,8 @@ export default function Console() {
   // Simplified mode toggle for Pondération Boules
   const [isSimplifiedMode, setIsSimplifiedMode] = useState(true);
   
-  // Simplified mode: sort order for balls (cycles: 'numeric' -> 'frequency' -> 'trend' -> 'dormeur')
-  const [simplifiedSortOrder, setSimplifiedSortOrder] = useState<'numeric' | 'frequency' | 'trend' | 'dormeur'>('numeric'); 
+  // Simplified mode: sort order for balls/stars
+  const [simplifiedSortOrder, setSimplifiedSortOrder] = useState<'numeric' | 'frequency' | 'trend' | 'dormeur' | 'surrepr'>('numeric'); 
   
   // Simplified mode: priority system for tie-breaking (each must be unique)
   const [sortPriority1, setSortPriority1] = useState<'frequency' | 'trend' | 'dormeur'>('frequency');
@@ -503,11 +510,13 @@ export default function Console() {
       }
   });
 
-  // --- POOL WINDOWS (High / Trend / Dormeur) ---
-  type PoolKey = "high" | "trend" | "dormeur";
+  // --- POOL WINDOWS (High / Surrepr / Trend / Dormeur) ---
+  type PoolKey = "high" | "surrepr" | "trend" | "dormeur";
   type PoolWindowsConfig = Record<PoolKey, FrequencyConfig>;
   const defaultPoolWindows: PoolWindowsConfig = {
     high: { type: "custom", customUnit: "draws", customValue: 25 },
+    // Par défaut: même fenêtre que High (Fréquences)
+    surrepr: { type: "custom", customUnit: "draws", customValue: 25 },
     trend: { type: "custom", customUnit: "draws", customValue: 70 },
     dormeur: { type: "custom", customUnit: "years", customValue: 3 },
   };
@@ -516,10 +525,13 @@ export default function Console() {
       const raw = localStorage.getItem(LS_POOL_WINDOWS_KEY);
       if (raw) {
         const parsed = JSON.parse(raw) as Partial<PoolWindowsConfig>;
-        if (parsed?.high && parsed?.trend && parsed?.dormeur) return parsed as PoolWindowsConfig;
+        // Migration: anciennes versions n'avaient pas "surrepr"
+        const migrated: Partial<PoolWindowsConfig> = { ...parsed };
+        if (!migrated.surrepr && migrated.high) migrated.surrepr = migrated.high;
+        if (migrated?.high && migrated?.surrepr && migrated?.trend && migrated?.dormeur) return migrated as PoolWindowsConfig;
       }
     } catch {}
-    return { ...defaultPoolWindows, high: freqConfig };
+    return { ...defaultPoolWindows, high: freqConfig, surrepr: freqConfig };
   });
 
   // --- POOL SIZE SETTINGS (Top N) ---
@@ -574,10 +586,13 @@ export default function Console() {
       try {
         const raw = localStorage.getItem(LS_POOL_WINDOWS_KEY);
         if (!raw) return;
-        const parsed = JSON.parse(raw) as PoolWindowsConfig;
-        if (!parsed?.high || !parsed?.trend || !parsed?.dormeur) return;
-        setPoolWindows(parsed);
-        setFreqConfig(parsed.high); // compat: "fenêtre high" visible via l'ancien réglage
+        const parsed = JSON.parse(raw) as Partial<PoolWindowsConfig>;
+        // Migration: anciennes versions n'avaient pas "surrepr"
+        const migrated: Partial<PoolWindowsConfig> = { ...parsed };
+        if (!migrated.surrepr && migrated.high) migrated.surrepr = migrated.high;
+        if (!migrated?.high || !migrated?.surrepr || !migrated?.trend || !migrated?.dormeur) return;
+        setPoolWindows(migrated as PoolWindowsConfig);
+        setFreqConfig(migrated.high); // compat: "fenêtre high" visible via l'ancien réglage
       } catch {}
     };
     window.addEventListener(EVENT_POOL_WINDOWS_CHANGED, handler as EventListener);
@@ -593,7 +608,14 @@ export default function Console() {
               const parsed = JSON.parse(raw) as FrequencyConfig;
               if (parsed?.type === 'custom' && (!parsed.customUnit || !parsed.customValue)) return;
               setFreqConfig(parsed);
-              setPoolWindows((prev) => ({ ...prev, high: parsed })); // compat: legacy => high
+              setPoolWindows((prev) => {
+                const prevHigh = prev.high;
+                const prevSurrepr = prev.surrepr;
+                const next = { ...prev, high: parsed };
+                // Par défaut, Surrepr suit High tant que l'utilisateur ne l'a pas personnalisée
+                if (isSameFreqConfig(prevSurrepr, prevHigh)) next.surrepr = parsed;
+                return next;
+              }); // compat: legacy => high
           } catch {}
       };
       window.addEventListener(EVENT_FREQ_CONFIG_CHANGED, handler as EventListener);
@@ -608,17 +630,32 @@ export default function Console() {
   const autoDrawsContainerRef = useRef<HTMLDivElement | null>(null);
   const wasScrollableRef = useRef(false);
 
+  const isSameFreqConfig = (a?: FrequencyConfig, b?: FrequencyConfig) => {
+    if (!a || !b) return false;
+    if (a.type !== b.type) return false;
+    if (a.type !== "custom") return true;
+    return a.customUnit === b.customUnit && a.customValue === b.customValue;
+  };
+
   // Persist when changed from Console UI too
   useEffect(() => {
       try {
           localStorage.setItem(LS_FREQ_CONFIG_KEY, JSON.stringify(freqConfig));
           // Compat: si la fenêtre high est modifiée depuis la Console, on maintient aussi la config multi-fenêtres.
           const raw = localStorage.getItem(LS_POOL_WINDOWS_KEY);
-          let next = { ...defaultPoolWindows, high: freqConfig } as PoolWindowsConfig;
+          let next = { ...defaultPoolWindows, high: freqConfig, surrepr: freqConfig } as PoolWindowsConfig;
           if (raw) {
             try {
               const parsed = JSON.parse(raw) as Partial<PoolWindowsConfig>;
-              if (parsed?.high && parsed?.trend && parsed?.dormeur) next = { ...(parsed as PoolWindowsConfig), high: freqConfig };
+              const migrated: Partial<PoolWindowsConfig> = { ...parsed };
+              if (!migrated.surrepr && migrated.high) migrated.surrepr = migrated.high;
+              if (migrated?.high && migrated?.surrepr && migrated?.trend && migrated?.dormeur) {
+                const prevHigh = migrated.high;
+                const prevSurrepr = migrated.surrepr;
+                next = { ...(migrated as PoolWindowsConfig), high: freqConfig };
+                // Par défaut, Surrepr suit High tant que l'utilisateur ne l'a pas personnalisée
+                if (isSameFreqConfig(prevSurrepr, prevHigh)) next.surrepr = freqConfig;
+              }
             } catch {}
           }
           localStorage.setItem(LS_POOL_WINDOWS_KEY, JSON.stringify(next));
@@ -1056,16 +1093,23 @@ export default function Console() {
   useEffect(() => {
       if (fullHistory.length > 0) {
           const filteredHigh = filterTirages(fullHistory, poolWindows.high);
+          const filteredSurrepr = filterTirages(fullHistory, poolWindows.surrepr);
           const filteredTrend = filterTirages(fullHistory, poolWindows.trend);
           const filteredDormeur = filterTirages(fullHistory, poolWindows.dormeur);
 
           const newStatsHigh = computeStatsFromTirages(filteredHigh);
+          const newStatsSurrepr = computeStatsFromTirages(filteredSurrepr);
           const newStatsTrend = computeStatsFromTirages(filteredTrend);
           const newStatsDormeur = computeStatsFromTirages(filteredDormeur);
 
           setStats(newStatsHigh);
+          setStatsSurrepr(newStatsSurrepr);
           setStatsTrend(newStatsTrend);
           setStatsDormeur(newStatsDormeur);
+          setHighWindowCount(filteredHigh.length);
+          setTrendWindowCount(filteredTrend.length);
+          setDormeurWindowCount(filteredDormeur.length);
+          setSurreprWindowCount(filteredSurrepr.length);
           
           // Toast info
           let periodName = "Historique Complet";
@@ -1145,13 +1189,16 @@ export default function Console() {
   
   // Pre-calculated pools for BALLS (50 numbers)
   const ballPools = useMemo(() => {
-      if (!stats || !statsTrend || !statsDormeur) return null;
+      if (!stats || !statsTrend || !statsDormeur || !statsSurrepr) return null;
       
       // Create base array with all stats
       const frequencies = Object.values(stats.freqNumeros);
       const minFreq = Math.min(...frequencies);
       const maxFreq = Math.max(...frequencies);
       const freqRange = maxFreq - minFreq || 1; // Avoid division by zero
+      const nSurrepr = Math.max(0, surreprWindowCount);
+      const p0Ball = 5 / 50; // EuroMillions
+      const denomBall = nSurrepr > 0 ? Math.sqrt(nSurrepr * p0Ball * (1 - p0Ball)) : 0;
       
       const allBalls: PoolItem[] = Array.from({ length: 50 }, (_, i) => {
           const num = i + 1;
@@ -1160,13 +1207,17 @@ export default function Console() {
           const freq = stats.freqNumeros[num] || 0;
           // Calculate percentage: 0% = min, 100% = max
           const frequencyPercent = Math.round(((freq - minFreq) / freqRange) * 100);
+          const k = statsSurrepr.freqNumeros[num] || 0;
+          const expected = nSurrepr * p0Ball;
+          const surreprZ = denomBall > 0 ? (k - expected) / denomBall : 0;
           return {
               number: num,
               frequency: freq,
               frequencyPercent,
               trend: trend.score,
               absence: statsDormeur.absenceNumeros[num] || 0,
-              trendDirection: trend.direction
+              trendDirection: trend.direction,
+              surreprZ
           };
       });
       
@@ -1176,19 +1227,23 @@ export default function Console() {
           byFrequency: [...allBalls].sort((a, b) => (b.frequency - a.frequency) || (b.trend - a.trend) || (a.number - b.number)),
           // Tie-break: à tendance égale, la fréquence départage
           byTrend: [...allBalls].sort((a, b) => (b.trend - a.trend) || (b.frequency - a.frequency) || (a.number - b.number)),
-          byDormeur: [...allBalls].sort((a, b) => b.absence - a.absence)
+          byDormeur: [...allBalls].sort((a, b) => b.absence - a.absence),
+          bySurrepr: [...allBalls].sort((a, b) => (b.surreprZ - a.surreprZ) || (a.number - b.number))
       };
-  }, [stats, statsTrend, statsDormeur]);
+  }, [stats, statsTrend, statsDormeur, statsSurrepr, surreprWindowCount]);
   
   // Pre-calculated pools for STARS (12 numbers)
   const starPools = useMemo(() => {
-      if (!stats || !statsTrend || !statsDormeur) return null;
+      if (!stats || !statsTrend || !statsDormeur || !statsSurrepr) return null;
       
       // Calculate min/max for stars
       const starFrequencies = Object.values(stats.freqEtoiles);
       const minStarFreq = Math.min(...starFrequencies);
       const maxStarFreq = Math.max(...starFrequencies);
       const starFreqRange = maxStarFreq - minStarFreq || 1;
+      const nSurrepr = Math.max(0, surreprWindowCount);
+      const p0Star = 2 / 12; // EuroMillions
+      const denomStar = nSurrepr > 0 ? Math.sqrt(nSurrepr * p0Star * (1 - p0Star)) : 0;
       
       const allStars: PoolItem[] = Array.from({ length: 12 }, (_, i) => {
           const num = i + 1;
@@ -1196,13 +1251,17 @@ export default function Console() {
           const trend = statsTrend.tendancesEtoiles ? statsTrend.tendancesEtoiles[num] : defaultTrend;
           const freq = stats.freqEtoiles[num] || 0;
           const frequencyPercent = Math.round(((freq - minStarFreq) / starFreqRange) * 100);
+          const k = statsSurrepr.freqEtoiles[num] || 0;
+          const expected = nSurrepr * p0Star;
+          const surreprZ = denomStar > 0 ? (k - expected) / denomStar : 0;
           return {
               number: num,
               frequency: freq,
               frequencyPercent,
               trend: trend ? trend.score : 5,
               absence: statsDormeur.absenceEtoiles[num] || 0,
-              trendDirection: trend ? trend.direction : 'stable'
+              trendDirection: trend ? trend.direction : 'stable',
+              surreprZ
           };
       });
       
@@ -1210,9 +1269,27 @@ export default function Console() {
           byNumeric: [...allStars].sort((a, b) => a.number - b.number),
           byFrequency: [...allStars].sort((a, b) => (b.frequency - a.frequency) || (b.trend - a.trend) || (a.number - b.number)),
           byTrend: [...allStars].sort((a, b) => (b.trend - a.trend) || (b.frequency - a.frequency) || (a.number - b.number)),
-          byDormeur: [...allStars].sort((a, b) => b.absence - a.absence)
+          byDormeur: [...allStars].sort((a, b) => b.absence - a.absence),
+          bySurrepr: [...allStars].sort((a, b) => (b.surreprZ - a.surreprZ) || (a.number - b.number))
       };
-  }, [stats]);
+  }, [stats, statsTrend, statsDormeur, statsSurrepr, surreprWindowCount]);
+
+  const formatZ = (z: number) => {
+    const v = Number.isFinite(z) ? z : 0;
+    const sign = v >= 0 ? "+" : "";
+    return `z=${sign}${v.toFixed(1)}`;
+  };
+
+  const lcdText =
+    simplifiedSortOrder === "numeric"
+      ? "Remplir la grille"
+      : simplifiedSortOrder === "frequency"
+        ? `N=${highWindowCount}`
+        : simplifiedSortOrder === "trend"
+          ? `N=${trendWindowCount}`
+          : simplifiedSortOrder === "dormeur"
+            ? `N=${dormeurWindowCount}`
+            : `N=${surreprWindowCount}`;
   
   // Helper to get rank in a pool (for tie-breaking)
   const getRankInPool = (pool: PoolItem[] | undefined, num: number): number => {
@@ -1222,13 +1299,15 @@ export default function Console() {
   };
   
   // --- SIMPLIFIED MODE: Get sorted stats with priority-based tie-breaking ---
-  const getSimplifiedBallStats = (sortMode: 'numeric' | 'frequency' | 'trend' | 'dormeur'): DisplayStat[] => {
+  const getSimplifiedBallStats = (sortMode: 'numeric' | 'surrepr' | 'frequency' | 'trend' | 'dormeur'): DisplayStat[] => {
       if (!ballPools) return [];
       
       // Get the primary sorted pool based on mode
       let basePool: PoolItem[];
       if (sortMode === 'numeric') {
           basePool = ballPools.byNumeric;
+      } else if (sortMode === 'surrepr') {
+          basePool = ballPools.bySurrepr;
       } else if (sortMode === 'frequency') {
           basePool = ballPools.byFrequency;
       } else if (sortMode === 'trend') {
@@ -1243,6 +1322,8 @@ export default function Console() {
           let diff = 0;
           if (sortMode === 'numeric') {
               diff = a.number - b.number;
+          } else if (sortMode === 'surrepr') {
+              diff = b.surreprZ - a.surreprZ;
           } else if (sortMode === 'frequency') {
               diff = b.frequency - a.frequency;
           } else if (sortMode === 'trend') {
@@ -1278,16 +1359,23 @@ export default function Console() {
           trendDirection: item.trendDirection,
           // Affichage demandé: la fréquence brute au-dessus, et la tendance (déjà sous la boule).
           // En mode dormeur, on garde l'absence comme indicateur principal.
-          displayLabel: sortMode === 'dormeur' ? `${item.absence}` : `${item.frequency}`
+          displayLabel:
+            sortMode === 'dormeur'
+              ? `${item.absence}`
+              : sortMode === 'surrepr'
+                ? formatZ(item.surreprZ)
+                : `${item.frequency}`
       }));
   };
   
-  const getSimplifiedStarStats = (sortMode: 'numeric' | 'frequency' | 'trend' | 'dormeur'): DisplayStat[] => {
+  const getSimplifiedStarStats = (sortMode: 'numeric' | 'surrepr' | 'frequency' | 'trend' | 'dormeur'): DisplayStat[] => {
       if (!starPools) return [];
       
       let basePool: PoolItem[];
       if (sortMode === 'numeric') {
           basePool = starPools.byNumeric;
+      } else if (sortMode === 'surrepr') {
+          basePool = starPools.bySurrepr;
       } else if (sortMode === 'frequency') {
           basePool = starPools.byFrequency;
       } else if (sortMode === 'trend') {
@@ -1300,6 +1388,8 @@ export default function Console() {
           let diff = 0;
           if (sortMode === 'numeric') {
               diff = a.number - b.number;
+          } else if (sortMode === 'surrepr') {
+              diff = b.surreprZ - a.surreprZ;
           } else if (sortMode === 'frequency') {
               diff = b.frequency - a.frequency;
           } else if (sortMode === 'trend') {
@@ -1333,7 +1423,12 @@ export default function Console() {
           trendScore: item.trend,
           trendDirection: item.trendDirection,
           // Affichage demandé: fréquence brute au-dessus, tendance sous la boule.
-          displayLabel: sortMode === 'dormeur' ? `${item.absence}` : `${item.frequency}`
+          displayLabel:
+            sortMode === 'dormeur'
+              ? `${item.absence}`
+              : sortMode === 'surrepr'
+                ? formatZ(item.surreprZ)
+                : `${item.frequency}`
       }));
   };
 
@@ -3610,33 +3705,97 @@ export default function Console() {
                     <SectionPanel 
                         title={
                             isSimplifiedMode ? (
-                                <span className="flex items-center justify-center w-full gap-3">
-                                    <span className="flex-1 text-center">Boules de 1 à 50</span>
+                                <span className="flex flex-nowrap items-center justify-start w-full gap-2">
                                     <button
                                         className={cn(
-                                            "px-3 py-1 text-sm font-bold rounded transition-colors",
-                                            simplifiedSortOrder === 'numeric' 
-                                                ? "bg-white text-black hover:bg-zinc-200" 
-                                                : simplifiedSortOrder === 'frequency' 
-                                                    ? "bg-green-600 text-white hover:bg-green-500" 
-                                                    : simplifiedSortOrder === 'trend'
-                                                        ? "bg-red-600 text-white hover:bg-red-500"
-                                                        : "bg-blue-600 text-white hover:bg-blue-500"
+                                            "px-3 py-1 text-sm font-bold rounded transition-colors whitespace-nowrap",
+                                            "w-[140px] flex items-center justify-center shrink-0",
+                                            simplifiedSortOrder === 'numeric'
+                                                ? "bg-white text-black hover:bg-zinc-200"
+                                                : "bg-white/20 text-white/80 hover:bg-white/30"
                                         )}
                                         onClick={(e) => {
                                             e.stopPropagation();
-                                            setSimplifiedSortOrder(prev => 
-                                                prev === 'numeric' ? 'frequency' : 
-                                                prev === 'frequency' ? 'trend' :
-                                                prev === 'trend' ? 'dormeur' : 'numeric'
-                                            );
+                                            setSimplifiedSortOrder('numeric');
                                             playSound('click');
                                         }}
+                                        aria-pressed={simplifiedSortOrder === 'numeric'}
                                     >
-                                        {simplifiedSortOrder === 'numeric' ? 'Numéros' : 
-                                         simplifiedSortOrder === 'frequency' ? 'Fréquences' : 
-                                         simplifiedSortOrder === 'trend' ? 'Tendance' : 'Dormeurs'}
+                                        Boules de 1 à 50
                                     </button>
+                                    <div className="flex flex-nowrap items-center gap-2 min-w-0">
+                                        <button
+                                            className={cn(
+                                                "px-3 py-1 text-sm font-bold rounded transition-colors",
+                                                simplifiedSortOrder === 'frequency'
+                                                    ? "bg-green-600 text-white hover:bg-green-500"
+                                                    : "bg-green-600/25 text-white/80 hover:bg-green-600/35"
+                                            )}
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                setSimplifiedSortOrder('frequency');
+                                                playSound('click');
+                                            }}
+                                            aria-pressed={simplifiedSortOrder === 'frequency'}
+                                        >
+                                            Fréquence
+                                        </button>
+                                        <button
+                                            className={cn(
+                                                "px-3 py-1 text-sm font-bold rounded transition-colors",
+                                                simplifiedSortOrder === 'trend'
+                                                    ? "bg-red-600 text-white hover:bg-red-500"
+                                                    : "bg-red-600/25 text-white/80 hover:bg-red-600/35"
+                                            )}
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                setSimplifiedSortOrder('trend');
+                                                playSound('click');
+                                            }}
+                                            aria-pressed={simplifiedSortOrder === 'trend'}
+                                        >
+                                            Tendance
+                                        </button>
+                                        <button
+                                            className={cn(
+                                                "px-3 py-1 text-sm font-bold rounded transition-colors",
+                                                simplifiedSortOrder === 'dormeur'
+                                                    ? "bg-blue-600 text-white hover:bg-blue-500"
+                                                    : "bg-blue-600/25 text-white/80 hover:bg-blue-600/35"
+                                            )}
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                setSimplifiedSortOrder('dormeur');
+                                                playSound('click');
+                                            }}
+                                            aria-pressed={simplifiedSortOrder === 'dormeur'}
+                                        >
+                                            Dormeur
+                                        </button>
+                                        <button
+                                            className={cn(
+                                                "px-3 py-1 text-sm font-bold rounded transition-colors",
+                                                simplifiedSortOrder === 'surrepr'
+                                                    ? "bg-violet-600 text-white hover:bg-violet-500"
+                                                    : "bg-violet-600/25 text-white/80 hover:bg-violet-600/35"
+                                            )}
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                setSimplifiedSortOrder('surrepr');
+                                                playSound('click');
+                                            }}
+                                            aria-pressed={simplifiedSortOrder === 'surrepr'}
+                                        >
+                                            Surreprés.
+                                        </button>
+                                        <LCDDisplay
+                                            value={lcdText}
+                                            size="btn"
+                                            variant="inline"
+                                            color="green"
+                                            className="ml-0 shrink-0 w-[150px]"
+                                        />
+                                    </div>
                                 </span>
                             ) : "CONFIGURATION BOULES (1-50)"
                         }

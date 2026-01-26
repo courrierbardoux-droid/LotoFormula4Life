@@ -31,7 +31,7 @@ function safeParseFreqConfig(raw: string | null): FrequencyConfig | null {
 export type SettingsMode = "all" | "pools" | "windows";
 
 export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
-  type PoolKey = "high" | "trend" | "dormeur";
+  type PoolKey = "high" | "surrepr" | "trend" | "dormeur";
   type PoolWindowsConfig = Record<PoolKey, FrequencyConfig>;
   type WindowPreset = "recent25" | "general70" | "years3" | "years10" | "all" | "custom";
   type PresetNumberKey = "recentDraws" | "generalDraws" | "yearsShort" | "yearsLong";
@@ -53,6 +53,7 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
 
   const defaultPresetNumbers: PoolWindowPresetNumbers = {
     high: { recentDraws: 25, generalDraws: 70, yearsShort: 3, yearsLong: 10 },
+    surrepr: { recentDraws: 25, generalDraws: 70, yearsShort: 3, yearsLong: 10 },
     trend: { recentDraws: 25, generalDraws: 70, yearsShort: 3, yearsLong: 10 },
     dormeur: { recentDraws: 25, generalDraws: 70, yearsShort: 3, yearsLong: 10 },
   };
@@ -61,7 +62,7 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
     if (!raw) return null;
     try {
       const obj = JSON.parse(raw) as Partial<PoolWindowPresetNumbers>;
-      const keys: PoolKey[] = ["high", "trend", "dormeur"];
+      const keys: PoolKey[] = ["high", "surrepr", "trend", "dormeur"];
       const out: PoolWindowPresetNumbers = { ...defaultPresetNumbers };
       for (const k of keys) {
         const v = obj?.[k] as Partial<Record<PresetNumberKey, unknown>> | undefined;
@@ -91,6 +92,8 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
 
   const defaultPoolWindows: PoolWindowsConfig = {
     high: { type: "custom", customUnit: "draws", customValue: 25 },
+    // Par défaut : même fenêtre que "High (Fréquences)" (paramétrable ensuite)
+    surrepr: { type: "custom", customUnit: "draws", customValue: 25 },
     trend: { type: "custom", customUnit: "draws", customValue: 70 },
     dormeur: { type: "custom", customUnit: "years", customValue: 3 },
   };
@@ -130,14 +133,21 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
     if (!raw) return null;
     try {
       const obj = JSON.parse(raw) as Partial<PoolWindowsConfig>;
-      const keys: PoolKey[] = ["high", "trend", "dormeur"];
+
+      // Migration: anciennes versions n'avaient pas "surrepr"
+      const migrated: Partial<PoolWindowsConfig> = { ...obj };
+      if (!migrated.surrepr && migrated.high) {
+        migrated.surrepr = migrated.high;
+      }
+
+      const keys: PoolKey[] = ["high", "surrepr", "trend", "dormeur"];
       for (const k of keys) {
-        const cfg = obj?.[k];
+        const cfg = migrated?.[k];
         if (!cfg) return null;
         if (cfg.type !== "all" && cfg.type !== "last_20" && cfg.type !== "last_year" && cfg.type !== "custom") return null;
         if (cfg.type === "custom" && (!cfg.customUnit || !cfg.customValue)) return null;
       }
-      return obj as PoolWindowsConfig;
+      return migrated as PoolWindowsConfig;
     } catch {
       return null;
     }
@@ -148,7 +158,8 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
     if (existing) return existing;
     // Compat: si l'ancien réglage unique existe, on l'utilise comme fenêtre High
     const old = safeParseFreqConfig(localStorage.getItem(LS_FREQ_CONFIG_KEY));
-    return { ...defaultPoolWindows, high: old ?? defaultPoolWindows.high };
+    const high = old ?? defaultPoolWindows.high;
+    return { ...defaultPoolWindows, high, surrepr: high };
   });
 
   // AUTO-APPLY (Tableau 1): on persiste et on notifie dès que la fenêtre change.
@@ -163,6 +174,7 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
 
   const [poolWindowPresets, setPoolWindowPresets] = useState<Record<PoolKey, WindowPreset>>(() => ({
     high: windowToPreset("high", poolWindows.high),
+    surrepr: windowToPreset("surrepr", poolWindows.surrepr),
     trend: windowToPreset("trend", poolWindows.trend),
     dormeur: windowToPreset("dormeur", poolWindows.dormeur),
   }));
@@ -213,6 +225,7 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
     setPoolWindowPresets((prev) => ({
       ...prev,
       high: windowToPreset("high", poolWindows.high),
+      surrepr: windowToPreset("surrepr", poolWindows.surrepr),
       trend: windowToPreset("trend", poolWindows.trend),
       dormeur: windowToPreset("dormeur", poolWindows.dormeur),
     }));
@@ -340,12 +353,19 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
                 <div className="border border-zinc-800 rounded-lg p-4">
                   <h2 className="font-orbitron text-lg text-casino-gold tracking-widest">Fenêtre de calcul</h2>
                   <p className="text-zinc-400 mt-2 text-sm">
-                    Chaque pool peut avoir sa propre fenêtre de calcul: High (fréquences), Tendance, Dormeur (retards).
+                    Chaque pool peut avoir sa propre fenêtre de calcul: High (fréquences), Surreprésentation, Tendance, Dormeur (retards).
                   </p>
 
                   <div className="mt-4 grid grid-cols-1 gap-4">
-                    {(["high", "trend", "dormeur"] as const).map((k) => {
-                      const title = k === "high" ? "High (Fréquences)" : k === "trend" ? "Tendance" : "Dormeur";
+                    {(["high", "surrepr", "trend", "dormeur"] as const).map((k) => {
+                      const title =
+                        k === "high"
+                          ? "High (Fréquences)"
+                          : k === "surrepr"
+                            ? "Surreprésentation (z-score)"
+                            : k === "trend"
+                              ? "Tendance"
+                              : "Dormeur";
                       const p = poolWindowPresets[k];
                       const cfg = poolWindows[k];
                       const nums = presetNumbers[k];
@@ -562,6 +582,7 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
                     <div className="font-rajdhani text-lg">Fenêtres actives</div>
                     <div className="text-zinc-400 text-sm space-y-1 mt-1">
                       <div>High: {describeWindow(poolWindows.high)}</div>
+                      <div>Surreprésentation: {describeWindow(poolWindows.surrepr)}</div>
                       <div>Tendance: {describeWindow(poolWindows.trend)}</div>
                       <div>Dormeur: {describeWindow(poolWindows.dormeur)}</div>
                     </div>
