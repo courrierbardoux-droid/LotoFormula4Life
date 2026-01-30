@@ -12,7 +12,10 @@
     "start": "node dist/index.cjs",
     "check": "tsc",
     "db:push": "drizzle-kit push",
-    "db:seed": "tsx script/seed.ts"
+    "db:seed": "tsx script/seed.ts",
+    "analyse:fenetre-longue": "tsx script/analyse-fenetre-longue.ts",
+    "analyse:fenetre-courte": "tsx script/analyse-fenetre-courte.ts",
+    "analyse:fenetre-tendance": "tsx script/analyse-fenetre-tendance.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

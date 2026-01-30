@@ -30,6 +30,7 @@ import {
   computeStatsFromTirages,
   FrequencyConfig,
   PeriodUnit,
+  TrendWindowConfig,
   verifierMiseAJourNecessaire
 } from "@/lib/lotoService";
 import { 
@@ -512,22 +513,22 @@ export default function Console() {
 
   // --- POOL WINDOWS (High / Surrepr / Trend / Dormeur) ---
   type PoolKey = "high" | "surrepr" | "trend" | "dormeur";
-  type PoolWindowsConfig = Record<PoolKey, FrequencyConfig>;
+  type PoolWindowsConfig = { high: FrequencyConfig; surrepr: FrequencyConfig; trend: TrendWindowConfig; dormeur: FrequencyConfig };
   const defaultPoolWindows: PoolWindowsConfig = {
     high: { type: "custom", customUnit: "draws", customValue: 25 },
-    // Par défaut: même fenêtre que High (Fréquences)
     surrepr: { type: "custom", customUnit: "draws", customValue: 25 },
-    trend: { type: "custom", customUnit: "draws", customValue: 70 },
+    trend: { type: "custom", customUnit: "draws", customValue: 160, trendPeriodR: 65 },
     dormeur: { type: "custom", customUnit: "years", customValue: 3 },
   };
   const [poolWindows, setPoolWindows] = useState<PoolWindowsConfig>(() => {
     try {
       const raw = localStorage.getItem(LS_POOL_WINDOWS_KEY);
       if (raw) {
-        const parsed = JSON.parse(raw) as Partial<PoolWindowsConfig>;
-        // Migration: anciennes versions n'avaient pas "surrepr"
+        const parsed = JSON.parse(raw) as Partial<PoolWindowsConfig & { trend?: TrendWindowConfig }>;
         const migrated: Partial<PoolWindowsConfig> = { ...parsed };
         if (!migrated.surrepr && migrated.high) migrated.surrepr = migrated.high;
+        const t = migrated.trend as (FrequencyConfig & { trendPeriodR?: number }) | undefined;
+        if (t && typeof t.trendPeriodR !== "number") migrated.trend = { ...t, trendPeriodR: 65 } as TrendWindowConfig;
         if (migrated?.high && migrated?.surrepr && migrated?.trend && migrated?.dormeur) return migrated as PoolWindowsConfig;
       }
     } catch {}
@@ -586,10 +587,11 @@ export default function Console() {
       try {
         const raw = localStorage.getItem(LS_POOL_WINDOWS_KEY);
         if (!raw) return;
-        const parsed = JSON.parse(raw) as Partial<PoolWindowsConfig>;
-        // Migration: anciennes versions n'avaient pas "surrepr"
+        const parsed = JSON.parse(raw) as Partial<PoolWindowsConfig & { trend?: TrendWindowConfig }>;
         const migrated: Partial<PoolWindowsConfig> = { ...parsed };
         if (!migrated.surrepr && migrated.high) migrated.surrepr = migrated.high;
+        const t = migrated.trend as (FrequencyConfig & { trendPeriodR?: number }) | undefined;
+        if (t && typeof t.trendPeriodR !== "number") migrated.trend = { ...t, trendPeriodR: 65 } as TrendWindowConfig;
         if (!migrated?.high || !migrated?.surrepr || !migrated?.trend || !migrated?.dormeur) return;
         setPoolWindows(migrated as PoolWindowsConfig);
         setFreqConfig(migrated.high); // compat: "fenêtre high" visible via l'ancien réglage
@@ -646,9 +648,11 @@ export default function Console() {
           let next = { ...defaultPoolWindows, high: freqConfig, surrepr: freqConfig } as PoolWindowsConfig;
           if (raw) {
             try {
-              const parsed = JSON.parse(raw) as Partial<PoolWindowsConfig>;
+              const parsed = JSON.parse(raw) as Partial<PoolWindowsConfig & { trend?: TrendWindowConfig }>;
               const migrated: Partial<PoolWindowsConfig> = { ...parsed };
               if (!migrated.surrepr && migrated.high) migrated.surrepr = migrated.high;
+              const t = migrated.trend as (FrequencyConfig & { trendPeriodR?: number }) | undefined;
+              if (t && typeof t.trendPeriodR !== "number") migrated.trend = { ...t, trendPeriodR: 65 } as TrendWindowConfig;
               if (migrated?.high && migrated?.surrepr && migrated?.trend && migrated?.dormeur) {
                 const prevHigh = migrated.high;
                 const prevSurrepr = migrated.surrepr;
@@ -1099,7 +1103,9 @@ export default function Console() {
 
           const newStatsHigh = computeStatsFromTirages(filteredHigh);
           const newStatsSurrepr = computeStatsFromTirages(filteredSurrepr);
-          const newStatsTrend = computeStatsFromTirages(filteredTrend);
+          const newStatsTrend = computeStatsFromTirages(filteredTrend, {
+            trendPeriodRecente: (poolWindows.trend as TrendWindowConfig).trendPeriodR ?? 65,
+          });
           const newStatsDormeur = computeStatsFromTirages(filteredDormeur);
 
           setStats(newStatsHigh);
@@ -3743,6 +3749,22 @@ export default function Console() {
                                         <button
                                             className={cn(
                                                 "px-3 py-1 text-sm font-bold rounded transition-colors",
+                                                simplifiedSortOrder === 'surrepr'
+                                                    ? "bg-violet-600 text-white hover:bg-violet-500"
+                                                    : "bg-violet-600/25 text-white/80 hover:bg-violet-600/35"
+                                            )}
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                setSimplifiedSortOrder('surrepr');
+                                                playSound('click');
+                                            }}
+                                            aria-pressed={simplifiedSortOrder === 'surrepr'}
+                                        >
+                                            Surreprés.
+                                        </button>
+                                        <button
+                                            className={cn(
+                                                "px-3 py-1 text-sm font-bold rounded transition-colors",
                                                 simplifiedSortOrder === 'trend'
                                                     ? "bg-red-600 text-white hover:bg-red-500"
                                                     : "bg-red-600/25 text-white/80 hover:bg-red-600/35"
@@ -3771,22 +3793,6 @@ export default function Console() {
                                             aria-pressed={simplifiedSortOrder === 'dormeur'}
                                         >
                                             Dormeur
-                                        </button>
-                                        <button
-                                            className={cn(
-                                                "px-3 py-1 text-sm font-bold rounded transition-colors",
-                                                simplifiedSortOrder === 'surrepr'
-                                                    ? "bg-violet-600 text-white hover:bg-violet-500"
-                                                    : "bg-violet-600/25 text-white/80 hover:bg-violet-600/35"
-                                            )}
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                setSimplifiedSortOrder('surrepr');
-                                                playSound('click');
-                                            }}
-                                            aria-pressed={simplifiedSortOrder === 'surrepr'}
-                                        >
-                                            Surreprés.
                                         </button>
                                         <LCDDisplay
                                             value={lcdText}

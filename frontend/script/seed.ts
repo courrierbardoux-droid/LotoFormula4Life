@@ -13,26 +13,35 @@ async function seed() {
 
   // ============================================
   // ÉTAPE 1: Créer les utilisateurs par défaut
+  // Alignés sur les mock users du backend (routes.ts) pour que
+  // ADMINISTRATEUR / 123456 etc. fonctionnent aussi en mode DB.
   // ============================================
   
   console.log('👤 [1/2] Creating default users...');
   
   try {
+    const password123456 = await bcrypt.hash('123456', 10);
     const adminPassword = await bcrypt.hash('AntoAbso', 10);
     const guestPassword = await bcrypt.hash('guest', 10);
     const abonnePassword = await bcrypt.hash('abonne', 10);
     const vipPassword = await bcrypt.hash('vip', 10);
-    
+
     const defaultUsers = [
+      { username: 'ADMINISTRATEUR', email: 'courrier.bardoux@gmail.com', password: password123456, role: 'admin' },
+      { username: 'TestINVITE', email: 'alerteprix@laposte.net', password: password123456, role: 'invite' },
+      { username: 'TestVIP', email: 'contact.absolu@gmail.com', password: password123456, role: 'vip' },
+      { username: 'TestABONNE', email: 'wbusiness@laposte.net', password: password123456, role: 'abonne' },
+      { username: 'cls', email: 'courrier.login.s@gmail.com', password: password123456, role: 'vip' },
+      { username: 'clp', email: 'courrier.login.p@gmail.com', password: password123456, role: 'invite' },
       { username: 'AntoAbso', email: 'admin@lotoformula.com', password: adminPassword, role: 'admin' },
       { username: 'Guest123', email: 'guest@lotoformula.com', password: guestPassword, role: 'invite' },
       { username: 'JeanDupont', email: 'jean@test.com', password: abonnePassword, role: 'abonne' },
       { username: 'MarieCurie', email: 'marie@science.com', password: vipPassword, role: 'vip' },
     ];
-    
+
     for (const userData of defaultUsers) {
       try {
-        await db.insert(users).values(userData).onConflictDoNothing();
+        await db.insert(users).values(userData).onConflictDoNothing({ target: users.username });
         console.log(`   ✅ User: ${userData.username} (${userData.role})`);
       } catch (e) {
         console.log(`   ⏭️ User: ${userData.username} (already exists)`);
@@ -112,8 +121,8 @@ async function seed() {
   console.log('╔════════════════════════════════════════════════════════════╗');
   console.log('║           ✅ SEED COMPLETE ✅                               ║');
   console.log('╠════════════════════════════════════════════════════════════╣');
-  console.log('║  Users:    AntoAbso (admin), Guest123 (invite)             ║');
-  console.log('║            JeanDupont (abonne), MarieCurie (vip)           ║');
+  console.log('║  Users:    ADMINISTRATEUR / 123456 (admin), cls, clp, etc. ║');
+  console.log('║            AntoAbso, Guest123, JeanDupont, MarieCurie      ║');
   console.log('║  History:  Imported from CSV                               ║');
   console.log('╚════════════════════════════════════════════════════════════╝');
   console.log('');

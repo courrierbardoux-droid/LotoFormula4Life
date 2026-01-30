@@ -139,7 +139,9 @@ export async function chargerHistorique(): Promise<Tirage[]> {
   try {
     const response = await fetch('/api/history', { credentials: 'include' });
     if (response.ok) {
-      const tirages = await response.json() as Tirage[];
+      const rawJson: unknown = await response.json();
+      const isArray = Array.isArray(rawJson);
+      const tirages = (isArray ? rawJson : []) as Tirage[];
       if (tirages && tirages.length > 0) {
         cachedTirages = tirages;
         // Aussi mettre à jour le localStorage pour cohérence
@@ -219,6 +221,9 @@ export interface FrequencyConfig {
     customUnit?: PeriodUnit;
 }
 
+/** Config Tendance : Fenêtre W (via customValue quand customUnit=draws) + Période récente R (tirages). */
+export type TrendWindowConfig = FrequencyConfig & { trendPeriodR?: number };
+
 export function filterTirages(tirages: Tirage[], config: FrequencyConfig): Tirage[] {
     if (!tirages || tirages.length === 0) return [];
 
@@ -253,19 +258,21 @@ export function filterTirages(tirages: Tirage[], config: FrequencyConfig): Tirag
     }
 }
 
-export function computeStatsFromTirages(tirages: Tirage[]): StatsNumeros {
+export interface ComputeStatsOptions {
+  /** Période récente R (tirages) pour le calcul des tendances. Utilisé uniquement quand on calcule les stats sur la fenêtre Tendance. */
+  trendPeriodRecente?: number;
+}
+
+export function computeStatsFromTirages(tirages: Tirage[], options?: ComputeStatsOptions): StatsNumeros {
   const { freqNumeros, freqEtoiles } = calculerFrequencesAbsolues(tirages);
   const freqNumerosNorm = normaliserFrequences(freqNumeros);
   const freqEtoilesNorm = normaliserFrequences(freqEtoiles);
   
   // Note: Absences and Tendances always need context of "recent" vs "total" or just "latest".
-  // For absences: It's always relative to the LATEST draw in the filtered set? 
-  // Or relative to TODAY? Usually relative to the latest draw in the dataset.
   const { absenceNumeros, absenceEtoiles } = calculerAbsences(tirages);
   
-  // Tendances: Should they be calculated on the filtered set or always on the last 30 of the filtered set?
-  // Logic inside calculerTendances uses slice(0, 30). So it works on the subset passed.
-  const { tendancesNumeros, tendancesEtoiles } = calculerTendances(tirages);
+  const periodRecente = options?.trendPeriodRecente ?? 65;
+  const { tendancesNumeros, tendancesEtoiles } = calculerTendances(tirages, periodRecente);
   
   const categoriesNum = categoriserNumeros(freqNumeros);
   const categoriesEtoiles = categoriserEtoiles(freqEtoiles);
@@ -349,8 +356,14 @@ export function calculerAbsences(tirages: Tirage[]) {
   return { absenceNumeros, absenceEtoiles };
 }
 
-export function calculerTendances(tirages: Tirage[]) {
-  const recent = tirages.slice(0, 30); // 30 derniers tirages
+/**
+ * Calcule les tendances (hausse / stable / baisse) par numéro et étoile.
+ * @param tirages Fenêtre de tirages (déjà filtrée, ex. les W derniers).
+ * @param periodRecente Nombre de tout derniers tirages (R) à comparer à la moyenne sur la fenêtre. Défaut 65.
+ */
+export function calculerTendances(tirages: Tirage[], periodRecente: number = 65) {
+  const R = Math.min(periodRecente, tirages.length) || 1;
+  const recent = tirages.slice(0, R);
   const total = tirages;
   
   const { freqNumeros: freqRecenteNum, freqEtoiles: freqRecenteEtoile } = calculerFrequencesAbsolues(recent);
@@ -359,17 +372,13 @@ export function calculerTendances(tirages: Tirage[]) {
   const tendancesNumeros: Record<number, { direction: 'hausse' | 'baisse' | 'stable'; score: number }> = {};
   const tendancesEtoiles: Record<number, { direction: 'hausse' | 'baisse' | 'stable'; score: number }> = {};
   
-  // Calcul pour les NUMÉROS (1-50)
   for (let num = 1; num <= 50; num++) {
-    // Fréquence attendue sur 30 tirages = (freqTotale / totalTirages) * 30
-    const freqAttendue = (freqTotaleNum[num] / total.length) * 30;
-    const freqReelle = freqRecenteNum[num];
-    
+    const freqAttendue = total.length > 0 ? (freqTotaleNum[num] / total.length) * R : 0;
+    const freqReelle = freqRecenteNum[num] ?? 0;
     const ratio = freqAttendue > 0 ? freqReelle / freqAttendue : 0;
     
     let direction: 'hausse' | 'baisse' | 'stable';
     let score: number;
-    
     if (ratio > 1.2) {
       direction = 'hausse';
       score = Math.min(10, Math.round((ratio - 1) * 10));
@@ -380,20 +389,16 @@ export function calculerTendances(tirages: Tirage[]) {
       direction = 'stable';
       score = 5;
     }
-    
     tendancesNumeros[num] = { direction, score };
   }
 
-  // Calcul pour les ÉTOILES (1-12)
   for (let num = 1; num <= 12; num++) {
-    const freqAttendue = (freqTotaleEtoile[num] / total.length) * 30;
-    const freqReelle = freqRecenteEtoile[num];
-    
+    const freqAttendue = total.length > 0 ? (freqTotaleEtoile[num] / total.length) * R : 0;
+    const freqReelle = freqRecenteEtoile[num] ?? 0;
     const ratio = freqAttendue > 0 ? freqReelle / freqAttendue : 0;
     
     let direction: 'hausse' | 'baisse' | 'stable';
     let score: number;
-    
     if (ratio > 1.2) {
       direction = 'hausse';
       score = Math.min(10, Math.round((ratio - 1) * 10));
@@ -404,7 +409,6 @@ export function calculerTendances(tirages: Tirage[]) {
       direction = 'stable';
       score = 5;
     }
-    
     tendancesEtoiles[num] = { direction, score };
   }
   
@@ -613,12 +617,22 @@ export interface PlayedGrid {
   drawDate?: string; // Date du tirage visé (targetDate)
 }
 
+export interface PlayedGridWithResult extends PlayedGrid {
+  status: 'En attente' | 'Perdu' | 'Gagné';
+  gainCents: number | null;
+  matchNum?: number;
+  matchStar?: number;
+  winningGridId?: number;
+  drawNumbers?: number[];
+  drawStars?: number[];
+}
+
 // Sauvegarder une grille directement dans la base de données
 export async function saveGridToDB(numeros: number[], etoiles: number[]): Promise<PlayedGrid | null> {
   try {
     const nextDraw = getProchainTirage();
     const targetDate = nextDraw.date.toISOString().split('T')[0]; // Format YYYY-MM-DD
-    
+
     const response = await fetch('/api/grids', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -629,14 +643,17 @@ export async function saveGridToDB(numeros: number[], etoiles: number[]): Promis
         targetDate: targetDate,
       }),
     });
-    
+
     if (!response.ok) {
       throw new Error('Erreur sauvegarde grille');
     }
-    
+
     const data = await response.json();
-    
+
     // Convertir le format DB au format PlayedGrid
+    if (!data.grid) {
+      return null;
+    }
     return {
       id: data.grid.id,
       date: data.grid.playedAt,
@@ -668,7 +685,6 @@ export async function loadGridsFromDB(): Promise<PlayedGrid[]> {
     
     const grids = await response.json();
     console.log('[loadGridsFromDB] ÉTAPE 3: Grilles récupérées depuis l\'API, nombre:', grids.length);
-    
     // Convertir le format DB au format PlayedGrid
     const convertedGrids = grids.map((g: any) => ({
       id: g.id,
@@ -687,6 +703,78 @@ export async function loadGridsFromDB(): Promise<PlayedGrid[]> {
   }
 }
 
+// Charger les grilles avec résultats (status, rang, gain, numéros tirés)
+export async function loadGridsWithResults(): Promise<PlayedGridWithResult[]> {
+  try {
+    const response = await fetch('/api/grids/with-results', { method: 'GET', credentials: 'include' });
+    if (!response.ok) throw new Error('Erreur chargement grilles');
+    const grids = await response.json();
+    return grids.map((g: any) => ({
+      id: g.id,
+      date: g.playedAt,
+      numeros: g.numbers ?? [],
+      etoiles: g.stars ?? [],
+      drawDate: g.targetDate ? `${g.targetDate}T00:00:00.000Z` : undefined,
+      status: g.status ?? 'En attente',
+      gainCents: g.gainCents ?? null,
+      matchNum: g.matchNum,
+      matchStar: g.matchStar,
+      winningGridId: g.winningGridId,
+      drawNumbers: g.drawNumbers,
+      drawStars: g.drawStars,
+    }));
+  } catch (e) {
+    console.error('[loadGridsWithResults] Erreur:', e);
+    return [];
+  }
+}
+
+/** Vérifie si l'utilisateur a des gains non vus (badges non cliqués). Utilisé pour la redirection à la connexion. */
+export async function hasUnseenWins(): Promise<boolean> {
+  try {
+    const response = await fetch('/api/wins/me?unseenOnly=true&limit=1', {
+      credentials: 'include',
+    });
+    if (!response.ok) return false;
+    const data = await response.json();
+    return Array.isArray(data?.rows) && data.rows.length > 0;
+  } catch (e) {
+    console.error('[hasUnseenWins] Erreur:', e);
+    return false;
+  }
+}
+
+/** (Admin) Vérifie s'il y a des gains d'utilisateurs non vus par l'admin. */
+export async function hasAdminUnseenWins(): Promise<boolean> {
+  try {
+    const response = await fetch('/api/admin/wins/unseen', {
+      credentials: 'include',
+    });
+    if (!response.ok) return false;
+    const data = await response.json();
+    return data?.hasUnseen === true;
+  } catch (e) {
+    console.error('[hasAdminUnseenWins] Erreur:', e);
+    return false;
+  }
+}
+
+// Marquer une grille gagnante comme vue (clic sur badge)
+export async function ackWinningGrid(winningGridId: number): Promise<boolean> {
+  try {
+    const response = await fetch('/api/wins/me/ack', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ ids: [winningGridId] }),
+    });
+    return response.ok;
+  } catch (e) {
+    console.error('[ackWinningGrid] Erreur:', e);
+    return false;
+  }
+}
+
 // Supprimer une grille de la base de données
 export async function deleteGridFromDB(gridId: string | number): Promise<boolean> {
   try {
@@ -694,12 +782,29 @@ export async function deleteGridFromDB(gridId: string | number): Promise<boolean
       method: 'DELETE',
       credentials: 'include',
     });
-    
     return response.ok;
   } catch (e) {
     console.error("Erreur suppression grille DB:", e);
     return false;
   }
+}
+
+/** Retourne le libellé du rang selon matchNum + matchStar (EuroMillions) */
+export function getRankLabel(matchNum: number, matchStar: number): string {
+  if (matchNum === 5 && matchStar === 2) return 'Jackpot';
+  if (matchNum === 5 && matchStar === 1) return 'Rang 2';
+  if (matchNum === 5 && matchStar === 0) return 'Rang 3';
+  if (matchNum === 4 && matchStar === 2) return 'Rang 4';
+  if (matchNum === 4 && matchStar === 1) return 'Rang 5';
+  if (matchNum === 3 && matchStar === 2) return 'Rang 6';
+  if (matchNum === 4 && matchStar === 0) return 'Rang 7';
+  if (matchNum === 2 && matchStar === 2) return 'Rang 8';
+  if (matchNum === 3 && matchStar === 1) return 'Rang 9';
+  if (matchNum === 3 && matchStar === 0) return 'Rang 10';
+  if (matchNum === 1 && matchStar === 2) return 'Rang 11';
+  if (matchNum === 2 && matchStar === 1) return 'Rang 12';
+  if (matchNum === 2 && matchStar === 0) return 'Rang 13';
+  return '';
 }
 
 export function checkGridResult(grid: PlayedGrid, lastDraw: Tirage | null): { status: string, gain: number, matchNum: number, matchStar: number } {

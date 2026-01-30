@@ -32,10 +32,12 @@ function requireAdmin(req: Request, res: Response, next: NextFunction) {
 // ============================================
 
 const mockUsers = [
-  { id: 1, username: 'AntoAbso', email: 'admin@loto.com', password: 'AntoAbso', role: 'admin', createdAt: new Date('2024-01-01') },
-  { id: 2, username: 'JeanDupont', email: 'jean@test.com', password: 'abonne', role: 'abonne', createdAt: new Date('2025-01-15') },
-  { id: 3, username: 'MarieCurie', email: 'marie@science.com', password: 'vip', role: 'vip', createdAt: new Date('2025-02-20') },
-  { id: 4, username: 'Guest123', email: 'guest@temp.com', password: 'guest', role: 'invite', createdAt: new Date('2025-03-10') },
+  { id: 1, username: 'ADMINISTRATEUR', email: 'courrier.bardoux@gmail.com', password: '123456', role: 'admin', createdAt: new Date('2026-01-02') },
+  { id: 2, username: 'TestINVITE', email: 'alerteprix@laposte.net', password: '123456', role: 'invite', createdAt: new Date('2026-01-02') },
+  { id: 10, username: 'TestVIP', email: 'contact.absolu@gmail.com', password: '123456', role: 'vip', createdAt: new Date('2026-01-03') },
+  { id: 11, username: 'TestABONNE', email: 'wbusiness@laposte.net', password: '123456', role: 'abonne', createdAt: new Date('2026-01-04') },
+  { id: 12, username: 'cls', email: 'courrier.login.s@gmail.com', password: '123456', role: 'vip', createdAt: new Date('2026-01-24') },
+  { id: 13, username: 'clp', email: 'courrier.login.p@gmail.com', password: '123456', role: 'invite', createdAt: new Date('2026-01-24') },
 ];
 
 // ============================================
@@ -575,6 +577,173 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
     });
   });
 
+  // ==========================================
+  // ADMIN - Grilles de tous les utilisateurs avec résultats (sauf admin)
+  // ==========================================
+  app.get('/api/admin/grids/with-results', requireAdmin, async (req, res) => {
+    try {
+      if (!hasDatabase) return res.json([]);
+      const admin = req.user as any;
+      const { db } = await import('../db');
+      const { grids, winningGrids, draws, users } = await import('../db/schema');
+      const { ne, desc } = await import('drizzle-orm');
+
+      // Récupérer toutes les grilles SAUF celles de l'admin
+      const allGrids = await db
+        .select({ grid: grids, user: users })
+        .from(grids)
+        .innerJoin(users, (await import('drizzle-orm')).eq(grids.userId, users.id))
+        .where(ne(grids.userId, admin.id))
+        .orderBy(desc(grids.playedAt));
+
+      const [lastDrawRow] = await db.select().from(draws).orderBy(desc(draws.date)).limit(1);
+      const lastDrawDateStr = lastDrawRow ? String(lastDrawRow.date).split('T')[0] : null;
+
+      // Récupérer tous les gains (sauf admin)
+      const allWins = await db.select().from(winningGrids).where(ne(winningGrids.userId, admin.id));
+      const targetDates = [...new Set(allWins.map((w: any) => String(w.targetDate).split('T')[0]))];
+      const drawsMap = new Map<string, any>();
+      if (targetDates.length > 0) {
+        const { inArray } = await import('drizzle-orm');
+        const drawsList = await db.select().from(draws).where(inArray(draws.date, targetDates));
+        for (const d of drawsList) drawsMap.set(String(d.date).split('T')[0], d);
+      }
+      const winsByGrid = new Map<number, { w: any; draw: any }>();
+      for (const w of allWins) {
+        const dateStr = String(w.targetDate).split('T')[0];
+        winsByGrid.set(w.gridId, { w, draw: drawsMap.get(dateStr) || null });
+      }
+
+      const result = allGrids.map(({ grid: g, user }: any) => {
+        const targetStr = g.targetDate ? String(g.targetDate).split('T')[0] : null;
+        const win = targetStr ? winsByGrid.get(g.id) : undefined;
+        const baseData = {
+          id: g.id,
+          odlId: g.odlId,
+          numbers: g.numbers,
+          stars: g.stars,
+          playedAt: g.playedAt,
+          targetDate: g.targetDate,
+          name: g.name,
+          createdAt: g.createdAt,
+          userId: user.id,
+          username: user.username,
+        };
+        if (!targetStr) {
+          return { ...baseData, status: 'En attente' as const, gainCents: null, matchNum: undefined, matchStar: undefined, winningGridId: undefined, drawNumbers: undefined, drawStars: undefined, adminSeenAt: undefined };
+        }
+        if (lastDrawDateStr && targetStr > lastDrawDateStr) {
+          return { ...baseData, status: 'En attente' as const, gainCents: null, matchNum: undefined, matchStar: undefined, winningGridId: undefined, drawNumbers: undefined, drawStars: undefined, adminSeenAt: undefined };
+        }
+        if (win) {
+          const nums = Array.isArray(win.draw?.numbers) ? win.draw.numbers : [];
+          const stars = Array.isArray(win.draw?.stars) ? win.draw.stars : [];
+          return { ...baseData, status: 'Gagné' as const, gainCents: win.w.gainCents, matchNum: win.w.matchNum, matchStar: win.w.matchStar, winningGridId: win.w.id, drawNumbers: nums, drawStars: stars, adminSeenAt: win.w.adminSeenAt };
+        }
+        return { ...baseData, status: 'Perdu' as const, gainCents: null, matchNum: undefined, matchStar: undefined, winningGridId: undefined, drawNumbers: undefined, drawStars: undefined, adminSeenAt: undefined };
+      });
+      res.json(result);
+    } catch (err) {
+      console.error('[API] Erreur admin/grids/with-results:', err);
+      res.status(500).json({ error: 'Erreur serveur' });
+    }
+  });
+
+  // Marquer des gains comme vus par l'admin
+  app.post('/api/admin/wins/ack', requireAdmin, async (req, res) => {
+    try {
+      if (!hasDatabase) return res.json({ success: true });
+      const ids = Array.isArray(req.body?.ids)
+        ? req.body.ids.map((x: any) => parseInt(x)).filter((n: any) => Number.isFinite(n))
+        : [];
+
+      const { db } = await import('../db');
+      const { winningGrids } = await import('../db/schema');
+      const { inArray, isNull, and } = await import('drizzle-orm');
+
+      if (ids.length > 0) {
+        await db
+          .update(winningGrids)
+          .set({ adminSeenAt: new Date(), updatedAt: new Date() })
+          .where(and(inArray(winningGrids.id, ids), isNull(winningGrids.adminSeenAt)) as any);
+      }
+      res.json({ success: true });
+    } catch (err) {
+      console.error('[API] Erreur admin/wins/ack:', err);
+      res.status(500).json({ error: 'Erreur serveur' });
+    }
+  });
+
+  // Vérifier s'il y a des gains non vus par l'admin (utilisateurs seulement, pas l'admin)
+  app.get('/api/admin/wins/unseen', requireAdmin, async (req, res) => {
+    try {
+      if (!hasDatabase) return res.json({ hasUnseen: false, count: 0 });
+      const admin = req.user as any;
+      const { db } = await import('../db');
+      const { winningGrids } = await import('../db/schema');
+      const { ne, isNull, and } = await import('drizzle-orm');
+
+      const rows = await db
+        .select()
+        .from(winningGrids)
+        .where(and(ne(winningGrids.userId, admin.id), isNull(winningGrids.adminSeenAt)))
+        .limit(1);
+
+      res.json({ hasUnseen: rows.length > 0, count: rows.length });
+    } catch (err) {
+      console.error('[API] Erreur admin/wins/unseen:', err);
+      res.status(500).json({ error: 'Erreur serveur' });
+    }
+  });
+
+  // Grilles d'un utilisateur spécifique avec résultats (admin)
+  app.get('/api/admin/user/:userId/grids/with-results', requireAdmin, async (req, res) => {
+    try {
+      if (!hasDatabase) return res.json([]);
+      const targetUserId = parseInt(req.params.userId);
+      if (!Number.isFinite(targetUserId)) return res.status(400).json({ error: 'userId invalide' });
+
+      const { db } = await import('../db');
+      const { grids, winningGrids, draws } = await import('../db/schema');
+      const { eq, desc } = await import('drizzle-orm');
+
+      const userGridsList = await db.select().from(grids).where(eq(grids.userId, targetUserId)).orderBy(desc(grids.playedAt));
+      const [lastDrawRow] = await db.select().from(draws).orderBy(desc(draws.date)).limit(1);
+      const lastDrawDateStr = lastDrawRow ? String(lastDrawRow.date).split('T')[0] : null;
+      const userWins = await db.select().from(winningGrids).where(eq(winningGrids.userId, targetUserId));
+      const targetDates = [...new Set(userWins.map((w: any) => String(w.targetDate).split('T')[0]))];
+      const drawsMap = new Map<string, any>();
+      if (targetDates.length > 0) {
+        const { inArray } = await import('drizzle-orm');
+        const drawsList = await db.select().from(draws).where(inArray(draws.date, targetDates));
+        for (const d of drawsList) drawsMap.set(String(d.date).split('T')[0], d);
+      }
+      const winsByGrid = new Map<number, { w: any; draw: any }>();
+      for (const w of userWins) {
+        const dateStr = String(w.targetDate).split('T')[0];
+        winsByGrid.set(w.gridId, { w, draw: drawsMap.get(dateStr) || null });
+      }
+
+      const result = userGridsList.map((g: any) => {
+        const targetStr = g.targetDate ? String(g.targetDate).split('T')[0] : null;
+        const win = targetStr ? winsByGrid.get(g.id) : undefined;
+        if (!targetStr || (lastDrawDateStr && targetStr > lastDrawDateStr)) {
+          return { id: g.id, numbers: g.numbers, stars: g.stars, playedAt: g.playedAt, targetDate: g.targetDate, name: g.name, status: 'En attente', gainCents: null, matchNum: undefined, matchStar: undefined, winningGridId: undefined, drawNumbers: undefined, drawStars: undefined };
+        }
+        if (win) {
+          const nums = Array.isArray(win.draw?.numbers) ? win.draw.numbers : [];
+          const stars = Array.isArray(win.draw?.stars) ? win.draw.stars : [];
+          return { id: g.id, numbers: g.numbers, stars: g.stars, playedAt: g.playedAt, targetDate: g.targetDate, name: g.name, status: 'Gagné', gainCents: win.w.gainCents, matchNum: win.w.matchNum, matchStar: win.w.matchStar, winningGridId: win.w.id, drawNumbers: nums, drawStars: stars };
+        }
+        return { id: g.id, numbers: g.numbers, stars: g.stars, playedAt: g.playedAt, targetDate: g.targetDate, name: g.name, status: 'Perdu', gainCents: null, matchNum: undefined, matchStar: undefined, winningGridId: undefined, drawNumbers: undefined, drawStars: undefined };
+      });
+      res.json(result);
+    } catch (err) {
+      console.error('[API] Erreur admin/user/:userId/grids/with-results:', err);
+      res.status(500).json({ error: 'Erreur serveur' });
+    }
+  });
+
   // Rechercher un utilisateur par email (admin) - pour trouver les comptes "fantômes"
   app.get('/api/users/search', requireAdmin, async (req, res) => {
     try {
@@ -1083,7 +1252,6 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
         .orderBy(desc(grids.playedAt));
 
       console.log('[API /api/grids] ÉTAPE 4: Grilles récupérées depuis la DB, nombre:', userGrids.length);
-
       const formattedGrids = userGrids.map(g => ({
         id: g.id,
         odlId: g.odlId,
@@ -1100,6 +1268,57 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
     } catch (err) {
       console.error('[API /api/grids] ERREUR: Erreur get grids:', err);
       res.json([]);
+    }
+  });
+
+  // Grilles avec résultats (status, rang, gainCents, drawNumbers/drawStars pour Gagné)
+  app.get('/api/grids/with-results', requireAuth, async (req, res) => {
+    try {
+      if (!hasDatabase) {
+        return res.json([]);
+      }
+      const user = req.user as any;
+      const { db } = await import('../db');
+      const { grids, winningGrids, draws } = await import('../db/schema');
+      const { eq, desc } = await import('drizzle-orm');
+
+      const userGridsList = await db.select().from(grids).where(eq(grids.userId, user.id)).orderBy(desc(grids.playedAt));
+      const [lastDrawRow] = await db.select().from(draws).orderBy(desc(draws.date)).limit(1);
+      const lastDrawDateStr = lastDrawRow ? String(lastDrawRow.date).split('T')[0] : null;
+      const userWins = await db.select().from(winningGrids).where(eq(winningGrids.userId, user.id));
+      const targetDates = [...new Set(userWins.map((w: any) => String(w.targetDate).split('T')[0]))];
+      const drawsMap = new Map<string, any>();
+      if (targetDates.length > 0) {
+        const { inArray } = await import('drizzle-orm');
+        const drawsList = await db.select().from(draws).where(inArray(draws.date, targetDates));
+        for (const d of drawsList) drawsMap.set(String(d.date).split('T')[0], d);
+      }
+      const winsByGrid = new Map<number, { w: any; draw: any }>();
+      for (const w of userWins) {
+        const dateStr = String(w.targetDate).split('T')[0];
+        winsByGrid.set(w.gridId, { w, draw: drawsMap.get(dateStr) || null });
+      }
+
+      const result = userGridsList.map((g: any) => {
+        const targetStr = g.targetDate ? String(g.targetDate).split('T')[0] : null;
+        const win = targetStr ? winsByGrid.get(g.id) : undefined;
+        if (!targetStr) {
+          return { id: g.id, odlId: g.odlId, numbers: g.numbers, stars: g.stars, playedAt: g.playedAt, targetDate: g.targetDate, name: g.name, createdAt: g.createdAt, status: 'En attente' as const, gainCents: null, matchNum: undefined, matchStar: undefined, winningGridId: undefined, drawNumbers: undefined, drawStars: undefined };
+        }
+        if (lastDrawDateStr && targetStr > lastDrawDateStr) {
+          return { id: g.id, odlId: g.odlId, numbers: g.numbers, stars: g.stars, playedAt: g.playedAt, targetDate: g.targetDate, name: g.name, createdAt: g.createdAt, status: 'En attente' as const, gainCents: null, matchNum: undefined, matchStar: undefined, winningGridId: undefined, drawNumbers: undefined, drawStars: undefined };
+        }
+        if (win) {
+          const nums = Array.isArray(win.draw?.numbers) ? win.draw.numbers : [];
+          const stars = Array.isArray(win.draw?.stars) ? win.draw.stars : [];
+          return { id: g.id, odlId: g.odlId, numbers: g.numbers, stars: g.stars, playedAt: g.playedAt, targetDate: g.targetDate, name: g.name, createdAt: g.createdAt, status: 'Gagné' as const, gainCents: win.w.gainCents, matchNum: win.w.matchNum, matchStar: win.w.matchStar, winningGridId: win.w.id, drawNumbers: nums, drawStars: stars };
+        }
+        return { id: g.id, odlId: g.odlId, numbers: g.numbers, stars: g.stars, playedAt: g.playedAt, targetDate: g.targetDate, name: g.name, createdAt: g.createdAt, status: 'Perdu' as const, gainCents: null, matchNum: undefined, matchStar: undefined, winningGridId: undefined, drawNumbers: undefined, drawStars: undefined };
+      });
+      res.json(result);
+    } catch (err) {
+      console.error('[API] Erreur grids/with-results:', err);
+      res.status(500).json({ error: 'Erreur serveur' });
     }
   });
 
@@ -1157,10 +1376,13 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
       const user = req.user as any;
       const gridId = parseInt(req.params.id);
       const { db } = await import('../db');
-      const { grids } = await import('../db/schema');
+      const { grids, winningGrids } = await import('../db/schema');
       const { eq, and } = await import('drizzle-orm');
 
-      // Ne supprimer que si la grille appartient à l'utilisateur
+      // D'abord supprimer les entrées winning_grids liées (contrainte FK)
+      await db.delete(winningGrids).where(eq(winningGrids.gridId, gridId));
+
+      // Ensuite supprimer la grille (si elle appartient à l'utilisateur)
       await db.delete(grids)
         .where(and(eq(grids.id, gridId), eq(grids.userId, user.id)));
 

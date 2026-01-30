@@ -48,12 +48,14 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
   const [useApi, setUseApi] = useState(true);
   const [, setLocation] = useLocation();
 
-  // Mock Database - utilisée en fallback si pas de backend
+  // Mock Database - utilisée en fallback si pas de backend (aligné sur base Neon)
   const mockUsers: User[] = [
-    { id: 1, username: 'AntoAbso', role: 'admin', email: 'admin@loto.com', joinDate: '2024-01-01' },
-    { id: 2, username: 'JeanDupont', role: 'abonne', email: 'jean@test.com', joinDate: '2025-01-15' },
-    { id: 3, username: 'MarieCurie', role: 'vip', email: 'marie@science.com', joinDate: '2025-02-20' },
-    { id: 4, username: 'Guest123', role: 'invite', email: 'guest@temp.com', joinDate: '2025-03-10' },
+    { id: 1, username: 'ADMINISTRATEUR', role: 'admin', email: 'courrier.bardoux@gmail.com', joinDate: '2026-01-02' },
+    { id: 2, username: 'TestINVITE', role: 'invite', email: 'alerteprix@laposte.net', joinDate: '2026-01-02' },
+    { id: 10, username: 'TestVIP', role: 'vip', email: 'contact.absolu@gmail.com', joinDate: '2026-01-03' },
+    { id: 11, username: 'TestABONNE', role: 'abonne', email: 'wbusiness@laposte.net', joinDate: '2026-01-04' },
+    { id: 12, username: 'cls', role: 'vip', email: 'courrier.login.s@gmail.com', joinDate: '2026-01-24' },
+    { id: 13, username: 'clp', role: 'invite', email: 'courrier.login.p@gmail.com', joinDate: '2026-01-24' },
   ];
 
   // Vérifier la session au chargement
@@ -150,12 +152,14 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       // Mode mock : vérification simple
       const mockUser = mockUsers.find(u => u.username === username);
       if (mockUser) {
-        // Vérification mock des mots de passe
+        // Vérification mock des mots de passe (aligné backend / base Neon, fallback local)
         const validPasswords: Record<string, string> = {
-          'AntoAbso': 'AntoAbso',
-          'Guest123': 'guest',
-          'JeanDupont': 'abonne',
-          'MarieCurie': 'vip'
+          'ADMINISTRATEUR': '123456',
+          'TestINVITE': '123456',
+          'TestVIP': '123456',
+          'TestABONNE': '123456',
+          'cls': '123456',
+          'clp': '123456',
         };
         
         if (validPasswords[username] === password) {

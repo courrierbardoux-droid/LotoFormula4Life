@@ -2,11 +2,14 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useLocation } from 'wouter';
 import { CasinoLayout } from '@/components/layout/CasinoLayout';
 import { CasinoButton } from '@/components/casino/CasinoButton';
+import { LottoBall } from '@/components/casino/LottoBall';
+import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 import { fr as frLocale } from 'date-fns/locale';
 import { ArrowLeft, Clock, Grid, User, Mail, Calendar, Shield, Edit2, Check, Lock, Eye, EyeOff } from 'lucide-react';
+import { getRankLabel } from '@/lib/lotoService';
 
 interface UserData {
   id: number;
@@ -33,6 +36,13 @@ interface PlayedGrid {
   playedAt: string;
   targetDate: string | null;
   name: string | null;
+  status?: 'En attente' | 'Perdu' | 'Gagné';
+  gainCents?: number | null;
+  matchNum?: number;
+  matchStar?: number;
+  winningGridId?: number;
+  drawNumbers?: number[];
+  drawStars?: number[];
 }
 
 export default function UserDetails() {
@@ -97,7 +107,19 @@ export default function UserDetails() {
         const data = await res.json();
         setUserData(data.user);
         setConnections(data.connections);
-        setPlayedGrids(data.playedGrids);
+        
+        // Charger les grilles avec résultats (status, rang, montant)
+        try {
+          const gridsRes = await fetch(`/api/admin/user/${params.userId}/grids/with-results`, { credentials: 'include' });
+          if (gridsRes.ok) {
+            const gridsData = await gridsRes.json();
+            setPlayedGrids(Array.isArray(gridsData) ? gridsData : []);
+          } else {
+            setPlayedGrids(data.playedGrids || []);
+          }
+        } catch {
+          setPlayedGrids(data.playedGrids || []);
+        }
       } catch (err) {
         toast.error('Erreur de chargement');
         console.error(err);
@@ -587,45 +609,76 @@ export default function UserDetails() {
                 <thead className="bg-zinc-800/50 sticky top-0">
                   <tr className="text-zinc-400 text-sm uppercase">
                     <th className="p-3">Date</th>
-                    <th className="p-3">Numéros</th>
-                    <th className="p-3">Étoiles</th>
+                    <th className="p-3">Combinaison</th>
                     <th className="p-3">Tirage visé</th>
+                    <th className="p-3 text-center">Rang</th>
+                    <th className="p-3 text-center">Résultat</th>
+                    <th className="p-3 text-center">Montant</th>
                   </tr>
                 </thead>
                 <tbody className="font-rajdhani">
                   {sortedGrids.map(grid => {
+                    const isWon = grid.status === 'Gagné';
+                    const drawNums = grid.drawNumbers ?? [];
+                    const drawStars = grid.drawStars ?? [];
+                    
                     return (
                     <tr
                       key={grid.id}
-                      className="border-b border-zinc-800 hover:bg-white/5"
+                      className={cn(
+                        "border-b border-zinc-800 transition-all",
+                        "hover:bg-white/5",
+                        isWon && "bg-green-900/20 border-green-500/30"
+                      )}
                     >
-                      <td className="p-3 text-zinc-300">{formatDate(grid.playedAt)}</td>
+                      <td className="p-3 text-zinc-300 text-sm whitespace-nowrap">{formatDate(grid.playedAt)}</td>
                       <td className="p-3">
-                        <div className="flex gap-2">
+                        <div className="flex items-center gap-1">
                           {(grid.numbers as number[]).map(n => (
-                            <span
+                            <LottoBall
                               key={n}
-                              className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold transition-all bg-blue-600 text-white"
-                            >
-                              {n}
-                            </span>
+                              number={n}
+                              size="sm"
+                              isWinning={isWon && drawNums.includes(n)}
+                              pulse={isWon && drawNums.includes(n)}
+                            />
                           ))}
-                        </div>
-                      </td>
-                      <td className="p-3">
-                        <div className="flex gap-2">
+                          <div className="w-2 flex items-center justify-center text-zinc-600 text-xs">|</div>
                           {(grid.stars as number[]).map(s => (
-                            <span
+                            <LottoBall
                               key={s}
-                              className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold transition-all bg-yellow-500 text-black"
-                            >
-                              ★{s}
-                            </span>
+                              number={s}
+                              size="sm"
+                              isStar
+                              isWinning={isWon && drawStars.includes(s)}
+                              pulse={isWon && drawStars.includes(s)}
+                            />
                           ))}
                         </div>
                       </td>
-                      <td className="p-3 text-zinc-500">
-                        {grid.targetDate || '—'}
+                      <td className="p-3 text-zinc-500 text-sm whitespace-nowrap">
+                        {grid.targetDate ? format(new Date(grid.targetDate), 'dd MMM yyyy', { locale: frLocale }) : '—'}
+                      </td>
+                      <td className="p-3 text-center text-zinc-400 text-sm">
+                        {isWon && grid.matchNum != null && grid.matchStar != null
+                          ? getRankLabel(grid.matchNum, grid.matchStar)
+                          : '-'}
+                      </td>
+                      <td className="p-3 text-center">
+                        {isWon ? (
+                          <Badge className="bg-green-700 text-green-100 border-green-500 animate-pulse">
+                            Gagné
+                          </Badge>
+                        ) : (
+                          <span className="text-zinc-500">-</span>
+                        )}
+                      </td>
+                      <td className="p-3 text-center text-zinc-300 text-sm">
+                        {isWon
+                          ? grid.gainCents != null
+                            ? (grid.gainCents / 100).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })
+                            : '?'
+                          : '-'}
                       </td>
                     </tr>
                     );

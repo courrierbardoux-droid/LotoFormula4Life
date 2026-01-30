@@ -1,8 +1,26 @@
-import 'dotenv/config';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { existsSync } from 'fs';
+import dotenv from 'dotenv';
+
+// Charger .env depuis le dossier frontend (où se trouve .env), quel que soit le répertoire de lancement
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const envPathFrontend = path.join(__dirname, '..', '.env');
+const envPathFrontendTxt = path.join(__dirname, '..', '.env.txt');
+const envPathCwd = path.join(process.cwd(), '.env');
+if (existsSync(envPathFrontend)) {
+  dotenv.config({ path: envPathFrontend });
+} else if (existsSync(envPathFrontendTxt)) {
+  dotenv.config({ path: envPathFrontendTxt });
+} else if (existsSync(envPathCwd)) {
+  dotenv.config({ path: envPathCwd });
+} else {
+  dotenv.config();
+}
+
 import express from 'express';
 import session from 'express-session';
 import passport from 'passport';
-import path from 'path';
 import { registerRoutes } from './routes';
 import fs from 'node:fs/promises';
 import { startHistoryAutoUpdater } from './historyAutoUpdater';

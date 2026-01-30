@@ -145,6 +145,8 @@ export const winningGrids = pgTable(
     gainCents: integer('gain_cents'),
     emailNotifiedAt: timestamp('email_notified_at'),
     seenAt: timestamp('seen_at'),
+    // Vu par l'admin (séparé de seenAt qui est pour l'utilisateur)
+    adminSeenAt: timestamp('admin_seen_at'),
     createdAt: timestamp('created_at').defaultNow(),
     updatedAt: timestamp('updated_at').defaultNow(),
   },

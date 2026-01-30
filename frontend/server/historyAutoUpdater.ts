@@ -10,11 +10,21 @@ function normalizeDate(d: Date) {
 }
 
 function getLatestDrawDateCandidate(now: Date) {
-  // Draw days: Tuesday & Friday. We want the latest draw date not in the future.
-  // If today is Tue/Fri, use today. Otherwise go backwards day by day until Tue/Fri.
+  // Draw days: Tuesday & Friday at 21:00 Paris time.
+  // We want the latest draw date where results are AVAILABLE (i.e., tirage already happened).
+  // If today is Tue/Fri but before ~21:30, skip today and go to the previous draw day.
+  const currentHour = now.getUTCHours() + 1; // Approximate Paris time (UTC+1)
+  const drawHour = 21; // Tirage at 21h Paris time
+  
   for (let i = 0; i < 7; i++) {
     const d = subDays(now, i);
-    if (isTuesday(d) || isFriday(d)) return d;
+    if (isTuesday(d) || isFriday(d)) {
+      // If it's today and before draw time, skip to previous draw day
+      if (i === 0 && currentHour < drawHour + 1) {
+        continue; // Skip today, tirage not yet happened
+      }
+      return d;
+    }
   }
   return now;
 }

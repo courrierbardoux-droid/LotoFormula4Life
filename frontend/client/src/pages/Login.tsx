@@ -9,7 +9,7 @@ import { useUser } from "@/lib/UserContext";
 import { Eye, EyeOff, Calendar, Clock, Timer, AlertTriangle } from "lucide-react";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
-import { getDernierTirage, chargerHistorique, Tirage, verifierMiseAJourNecessaire } from "@/lib/lotoService";
+import { getDernierTirage, chargerHistorique, Tirage, verifierMiseAJourNecessaire, hasUnseenWins, hasAdminUnseenWins } from "@/lib/lotoService";
 import { toast } from "sonner";
 
 // Composant Countdown intégré
@@ -157,10 +157,45 @@ export default function Login() {
   }, []);
 
   // Fonction pour rediriger après login
-  // Toujours vers Dashboard (Console), même si mise à jour nécessaire
-  // L'utilisateur peut choisir de faire la mise à jour plus tard
-  const redirectAfterLogin = () => {
-    setLocation("/dashboard");
+  // Logique de redirection :
+  // - Admin avec gains perso → /my-grids?wins=1 (et stocke qu'il y a des gains utilisateurs à voir)
+  // - Admin sans gains perso mais gains utilisateurs → /settings/users/history?wins=1
+  // - Non-admin avec gains → /my-grids?wins=1
+  // - Sinon → /dashboard
+  const redirectAfterLogin = async () => {
+    // Vérifier les gains personnels
+    const myUnseen = await hasUnseenWins();
+    
+    // Récupérer le rôle de l'utilisateur connecté
+    let isAdmin = false;
+    try {
+      const meRes = await fetch('/api/auth/me', { credentials: 'include' });
+      const meData = await meRes.json();
+      isAdmin = meData?.user?.role === 'admin';
+    } catch {
+      // ignore
+    }
+
+    if (isAdmin) {
+      // Vérifier les gains des utilisateurs (non vus par l'admin)
+      const usersUnseen = await hasAdminUnseenWins();
+      
+      if (myUnseen) {
+        // Admin a des gains perso → d'abord ses grilles, puis on stocke qu'il y a des gains utilisateurs
+        if (usersUnseen) {
+          sessionStorage.setItem('pendingAdminWinsRedirect', '1');
+        }
+        setLocation("/my-grids?wins=1");
+      } else if (usersUnseen) {
+        // Admin n'a pas de gains perso mais des gains utilisateurs
+        setLocation("/settings/users/history?wins=1");
+      } else {
+        setLocation("/dashboard");
+      }
+    } else {
+      // Non-admin
+      setLocation(myUnseen ? "/my-grids?wins=1" : "/dashboard");
+    }
   };
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -170,7 +205,7 @@ export default function Login() {
     try {
       const success = await login(username, password);
       if (success) {
-        redirectAfterLogin();
+        await redirectAfterLogin();
       } else {
         setError("Identifiant ou mot de passe incorrect");
       }

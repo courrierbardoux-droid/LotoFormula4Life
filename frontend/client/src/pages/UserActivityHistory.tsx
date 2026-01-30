@@ -1,236 +1,251 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { CasinoLayout } from "@/components/layout/CasinoLayout";
-import { Link } from "wouter";
+import { Link, useLocation } from "wouter";
 import { useUser } from "@/lib/UserContext";
+import { LottoBall } from "@/components/casino/LottoBall";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
+import { format } from "date-fns";
+import { fr } from "date-fns/locale";
 
-type ActivityPayload = {
-  gridId?: number | null;
-  numbers?: number[];
-  stars?: number[];
-  targetDate?: string | null;
-  channel?: "email" | "direct";
-  [k: string]: unknown;
-};
-
-type ActivityEvent = {
+type GridWithResult = {
   id: number;
-  type: string;
+  odlId?: string | null;
+  numbers: number[];
+  stars: number[];
+  playedAt: string;
+  targetDate: string | null;
+  name?: string | null;
   createdAt: string;
   userId: number;
   username: string;
-  payload: ActivityPayload;
+  status: "En attente" | "Perdu" | "Gagné";
+  gainCents: number | null;
+  matchNum?: number;
+  matchStar?: number;
+  winningGridId?: number;
+  drawNumbers?: number[];
+  drawStars?: number[];
+  adminSeenAt?: string | null;
 };
 
-function formatTime(ts: string) {
-  const d = new Date(ts);
-  if (!Number.isFinite(d.getTime())) return "--:--:--";
-  return d.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+function getRankLabel(matchNum: number, matchStar: number): string {
+  if (matchNum === 5 && matchStar === 2) return "Jackpot";
+  if (matchNum === 5 && matchStar === 1) return "Rang 2";
+  if (matchNum === 5 && matchStar === 0) return "Rang 3";
+  if (matchNum === 4 && matchStar === 2) return "Rang 4";
+  if (matchNum === 4 && matchStar === 1) return "Rang 5";
+  if (matchNum === 3 && matchStar === 2) return "Rang 6";
+  if (matchNum === 4 && matchStar === 0) return "Rang 7";
+  if (matchNum === 2 && matchStar === 2) return "Rang 8";
+  if (matchNum === 3 && matchStar === 1) return "Rang 9";
+  if (matchNum === 3 && matchStar === 0) return "Rang 10";
+  if (matchNum === 1 && matchStar === 2) return "Rang 11";
+  if (matchNum === 2 && matchStar === 1) return "Rang 12";
+  if (matchNum === 2 && matchStar === 0) return "Rang 13";
+  return "";
 }
 
-function fmtNumbers(nums?: number[]) {
-  if (!nums || nums.length === 0) return "—";
-  return nums.join(" ");
+async function ackAdminWin(winningGridId: number): Promise<boolean> {
+  try {
+    const response = await fetch("/api/admin/wins/ack", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ ids: [winningGridId] }),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 export default function UserActivityHistory() {
-  const [events, setEvents] = useState<ActivityEvent[]>([]);
-  const [status, setStatus] = useState<"connecting" | "live" | "error">("connecting");
+  const [grids, setGrids] = useState<GridWithResult[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [pulseStoppedIds, setPulseStoppedIds] = useState<Set<number>>(new Set());
+  const [highlightedGrids, setHighlightedGrids] = useState<Set<number>>(new Set());
   const { user } = useUser();
-  const [authHint, setAuthHint] = useState<string | null>(null);
-  const [sseKey, setSseKey] = useState(0);
-  const esRef = useRef<EventSource | null>(null);
+  const [, setLocation] = useLocation();
 
-  const header = useMemo(
-    () => ({
-      title: "HISTORIQUE DES UTILISATEURS",
-      subtitle: "Journal des 200 dernières grilles enregistrées (temps réel)",
-    }),
-    []
-  );
-
-  const load = useCallback(async (reason: "mount" | "manual") => {
+  const loadGrids = async () => {
     try {
-      const res = await fetch("/api/admin/activity?limit=200", { credentials: "include" });
-      if (!res.ok) {
-        if (res.status === 403) {
-          setAuthHint("Accès admin requis (ta session a probablement été remplacée par une connexion non-admin dans le même navigateur).");
-        }
-        throw new Error(String(res.status));
+      setLoading(true);
+      const res = await fetch("/api/admin/grids/with-results", { credentials: "include" });
+      if (!res.ok) throw new Error("Erreur chargement");
+      const data = (await res.json()) as GridWithResult[];
+      setGrids(Array.isArray(data) ? data : []);
+
+      // Vérifier paramètre URL ?wins=1 pour mettre en évidence les grilles gagnantes
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get("wins") === "1") {
+        const winningIds = new Set(data.filter((g) => g.status === "Gagné" && !g.adminSeenAt).map((g) => g.id));
+        setHighlightedGrids(winningIds);
+        urlParams.delete("wins");
+        window.history.replaceState({}, "", window.location.pathname + (urlParams.toString() ? "?" + urlParams.toString() : ""));
+        setTimeout(() => setHighlightedGrids(new Set()), 10000);
       }
-      const data = (await res.json()) as ActivityEvent[];
-      setEvents(Array.isArray(data) ? data : []);
-    } catch (e) {
-      setEvents([]);
+    } catch {
+      setGrids([]);
+    } finally {
+      setLoading(false);
     }
-  }, [user]);
+  };
 
   useEffect(() => {
-    load("mount");
-  }, [load]);
+    loadGrids();
+  }, []);
 
-  useEffect(() => {
-    setStatus("connecting");
-    // Assure qu'on n'a qu'UNE connexion SSE active.
-    if (esRef.current) {
-      try {
-        esRef.current.close();
-      } catch {
-        // ignore
-      }
-      esRef.current = null;
-    }
+  const handleBadgeClick = async (grid: GridWithResult) => {
+    if (grid.status !== "Gagné" || !grid.winningGridId) return;
+    setPulseStoppedIds((prev) => new Set(prev).add(grid.id));
+    await ackAdminWin(grid.winningGridId);
+  };
 
-    const es = new EventSource("/api/admin/activity/stream");
-    esRef.current = es;
-
-    const onActivity = (e: MessageEvent) => {
-      try {
-        const ev = JSON.parse(e.data) as ActivityEvent;
-        if (!ev || typeof ev !== "object") return;
-        setEvents((prev) => {
-          const rawId = (ev as any)?.id;
-          const id = Number(rawId);
-          // Évite les doublons (peut arriver en dev si 2 SSE sont ouvertes)
-          if (Number.isFinite(id) && prev.some((x) => Number((x as any)?.id) === id)) {
-            return prev;
-          }
-          const next = [ev, ...prev];
-          return next.slice(0, 200);
-        });
-      } catch {
-        // ignore
-      }
-    };
-
-    const onOpen = () => setStatus("live");
-
-    es.addEventListener("activity", onActivity as any);
-    es.addEventListener("open", onOpen as any);
-    es.addEventListener("error", (async (evt: any) => {
-      // SSE peut émettre "error" pendant une reconnexion automatique.
-      // On n'affiche "Flux interrompu" QUE si le flux est réellement CLOSED.
-      const readyState = Number((es as any).readyState ?? -1);
-      const nextStatus: "connecting" | "error" = readyState === 2 ? "error" : "connecting";
-      setStatus(nextStatus);
-
-      // Tentative de diagnostic simple: vérifier si on est toujours admin
-      try {
-        const me = await fetch("/api/auth/me", { credentials: "include" });
-        const meJson = await me.json().catch(() => ({}));
-        const role = (meJson as any)?.user?.role ?? null;
-        if (role && role !== "admin") {
-          setAuthHint(`Tu n'es plus connecté en admin (session actuelle: ${role}). Ouvre l'abonné/VIP/invité dans une fenêtre privée séparée.`);
-        }
-      } catch {
-        // ignore
-      }
-    }) as any);
-
-    es.addEventListener("open", (() => {
-      // NOTE: on garde aussi le setStatus via onOpen ci-dessus
-    }) as any);
-
-    return () => {
-      try {
-        es.close();
-      } catch {
-        // ignore
-      }
-      if (esRef.current === es) esRef.current = null;
-    };
-  }, [user, sseKey]);
+  if (loading) {
+    return (
+      <CasinoLayout>
+        <div className="max-w-7xl mx-auto p-4 md:p-8 space-y-6 min-h-screen flex items-center justify-center">
+          <div className="text-center">
+            <div className="inline-block animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-casino-gold mb-4"></div>
+            <p className="text-xl font-orbitron text-white tracking-widest">CHARGEMENT...</p>
+          </div>
+        </div>
+      </CasinoLayout>
+    );
+  }
 
   return (
     <CasinoLayout>
-      <div className="max-w-6xl mx-auto p-4 md:p-8 space-y-6">
+      <div className="max-w-7xl mx-auto p-4 md:p-8 space-y-6">
         <div className="text-center my-10">
-          <h1 className="text-3xl md:text-4xl font-orbitron font-black text-white tracking-widest mb-2">{header.title}</h1>
-          <div className="text-zinc-400 font-rajdhani text-lg">{header.subtitle}</div>
-          <div className="mt-2 text-sm font-bold">
-            {status === "live" && <span className="text-green-400">● Live</span>}
-            {status === "connecting" && <span className="text-amber-400">● Connexion…</span>}
-            {status === "error" && <span className="text-red-400">● Flux interrompu (refresh si besoin)</span>}
-          </div>
-          {authHint && <div className="mt-2 text-sm text-amber-300 font-bold">{authHint}</div>}
+          <h1 className="text-3xl md:text-4xl font-orbitron font-black text-white tracking-widest mb-2">
+            HISTORIQUE DES UTILISATEURS
+          </h1>
+          <div className="text-zinc-400 font-rajdhani text-lg">Grilles jouées par les utilisateurs (hors admin)</div>
+          <div className="h-1 w-48 bg-casino-gold mx-auto rounded-full shadow-[0_0_15px_rgba(255,215,0,0.8)] mt-4" />
         </div>
 
-        <div className="bg-gradient-to-b from-[#1a1a1a] to-[#0a0a0a] border border-zinc-700 rounded-lg p-4 md:p-6">
-          <div className="flex items-center justify-between mb-3">
-            <div className="font-orbitron text-casino-gold tracking-widest text-sm">DERNIÈRES ACTIVITÉS</div>
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                className="px-3 py-2 rounded-md bg-zinc-800 text-zinc-200 text-sm font-bold hover:bg-zinc-700 transition-colors"
-                onClick={() => {
-                  setAuthHint(null);
-                  setSseKey((x) => x + 1);
-                }}
-              >
-                RECONNECTER LE LIVE
-              </button>
-              <button
-                type="button"
-                className="px-3 py-2 rounded-md bg-zinc-800 text-zinc-200 text-sm font-bold hover:bg-zinc-700 transition-colors"
-                onClick={() => {
-                  load("manual");
-                }}
-              >
-                RAFRAÎCHIR
-              </button>
-              <div className="text-zinc-500 text-sm">{events.length} / 200</div>
-            </div>
-          </div>
+        <div className="flex justify-end mb-4">
+          <button
+            type="button"
+            className="px-4 py-2 rounded-md bg-zinc-800 text-zinc-200 text-sm font-bold hover:bg-zinc-700 transition-colors"
+            onClick={() => loadGrids()}
+          >
+            RAFRAÎCHIR
+          </button>
+        </div>
 
-          <div className="border border-zinc-800 rounded-lg overflow-hidden">
-            <div className="grid grid-cols-12 gap-2 bg-black/60 text-zinc-400 text-xs md:text-sm font-orbitron uppercase tracking-wider border-b border-zinc-800 px-3 py-2">
-              <div className="col-span-2">Heure</div>
-              <div className="col-span-3">Identifiant</div>
-              <div className="col-span-5">Numéros / Étoiles</div>
-              <div className="col-span-2 text-right">Canal</div>
-            </div>
+        <div className="bg-zinc-900/90 border border-zinc-700 rounded-xl overflow-hidden shadow-2xl backdrop-blur-sm">
+          <div className="overflow-x-auto custom-scrollbar">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-black text-zinc-400 text-sm md:text-base uppercase font-orbitron tracking-wider border-b border-zinc-700">
+                  <th className="p-2">Utilisateur</th>
+                  <th className="p-2">Date Jeu</th>
+                  <th className="p-2">Tirage Visé</th>
+                  <th className="p-2 text-center">Combinaison</th>
+                  <th className="p-2 text-center">Rang</th>
+                  <th className="p-2 text-center">Résultat</th>
+                  <th className="p-2 text-center">Montant</th>
+                </tr>
+              </thead>
+              <tbody className="font-rajdhani text-base md:text-lg">
+                {grids.length === 0 ? (
+                  <tr>
+                    <td colSpan={7} className="p-6 text-center text-zinc-500 font-orbitron text-lg">
+                      AUCUNE GRILLE JOUÉE PAR LES UTILISATEURS
+                    </td>
+                  </tr>
+                ) : (
+                  grids.map((grid) => {
+                    const isHighlighted = highlightedGrids.has(grid.id);
+                    const isPulseStopped = pulseStoppedIds.has(grid.id) || !!grid.adminSeenAt;
+                    const drawNums = grid.drawNumbers ?? [];
+                    const drawStars = grid.drawStars ?? [];
 
-            <div className="divide-y divide-zinc-900">
-              {events.map((ev) => {
-                const nums = ev.payload?.numbers ?? [];
-                const stars = ev.payload?.stars ?? [];
-                const channelLabel = ev.payload?.channel === "email" ? "avec email" : "sans email";
-                const gridId = (ev.payload as any)?.gridId ?? null;
-                return (
-                  <div key={ev.id ?? `${ev.createdAt}-${ev.userId}`} className="grid grid-cols-12 gap-2 px-3 py-2 text-sm md:text-base font-rajdhani bg-black/30 hover:bg-black/40 transition-colors">
-                    <div className="col-span-2 text-zinc-300 font-mono">{formatTime(ev.createdAt)}</div>
-                    <div className="col-span-3">
-                      <Link href={`/user/${ev.userId}`}>
-                        <a className="text-casino-gold hover:underline font-bold">{ev.username}</a>
-                      </Link>
-                      <div className="text-[11px] text-zinc-500 font-mono leading-tight">
-                        #{ev.id}
-                        {gridId != null ? ` · g:${gridId}` : ""}
-                      </div>
-                    </div>
-                    <div className="col-span-5 text-zinc-200">
-                      <span className="text-zinc-400 mr-2">N:</span>
-                      <span className="font-bold">{fmtNumbers(nums)}</span>
-                      <span className="text-zinc-500 mx-2">|</span>
-                      <span className="text-zinc-400 mr-2">E:</span>
-                      <span className="font-bold">{fmtNumbers(stars)}</span>
-                    </div>
-                    <div className="col-span-2 text-right">
-                      <span className={ev.payload?.channel === "email" ? "text-blue-300" : "text-zinc-300"}>{channelLabel}</span>
-                    </div>
-                  </div>
-                );
-              })}
-
-              {events.length === 0 && (
-                <div className="p-6 text-center text-zinc-500">
-                  Aucune activité pour le moment.
-                </div>
-              )}
-            </div>
+                    return (
+                      <tr
+                        key={grid.id}
+                        className={cn(
+                          "border-b border-zinc-800 transition-all duration-500",
+                          "hover:bg-white/5",
+                          isHighlighted && "bg-green-900/30 border-green-500/50 shadow-[0_0_20px_rgba(34,197,94,0.6)]"
+                        )}
+                      >
+                        <td className="p-2">
+                          <Link href={`/user/${grid.userId}`}>
+                            <a className="text-casino-gold hover:underline font-bold">{grid.username}</a>
+                          </Link>
+                        </td>
+                        <td className="p-2 text-zinc-300 whitespace-nowrap text-sm">
+                          {format(new Date(grid.playedAt), "dd/MM HH:mm")}
+                        </td>
+                        <td className="p-2 text-white font-bold text-sm whitespace-nowrap">
+                          {grid.targetDate ? format(new Date(grid.targetDate), "dd MMMM yyyy", { locale: fr }) : "-"}
+                        </td>
+                        <td className="p-2">
+                          <div className="flex justify-center gap-0.5 md:gap-1 scale-75 origin-center">
+                            {grid.numbers.map((n) => (
+                              <LottoBall
+                                key={n}
+                                number={n}
+                                size="sm"
+                                isWinning={grid.status === "Gagné" && drawNums.includes(n)}
+                                pulse={grid.status === "Gagné" && drawNums.includes(n) && !isPulseStopped}
+                              />
+                            ))}
+                            <div className="w-2 flex items-center justify-center text-zinc-600 text-xs">|</div>
+                            {grid.stars.map((n) => (
+                              <LottoBall
+                                key={n}
+                                number={n}
+                                size="sm"
+                                isStar
+                                isWinning={grid.status === "Gagné" && drawStars.includes(n)}
+                                pulse={grid.status === "Gagné" && drawStars.includes(n) && !isPulseStopped}
+                              />
+                            ))}
+                          </div>
+                        </td>
+                        <td className="p-2 text-center text-zinc-400 text-sm">
+                          {grid.status === "Gagné" && grid.matchNum != null && grid.matchStar != null
+                            ? getRankLabel(grid.matchNum, grid.matchStar)
+                            : "-"}
+                        </td>
+                        <td className="p-2 text-center">
+                          {grid.status === "Gagné" ? (
+                            <Badge
+                              onClick={() => handleBadgeClick(grid)}
+                              className={cn(
+                                "cursor-pointer transition-all",
+                                isPulseStopped
+                                  ? "bg-green-900/50 text-green-400/80 border-green-700/50"
+                                  : "bg-green-700 text-green-100 border-green-500 animate-pulse"
+                              )}
+                            >
+                              Gagné
+                            </Badge>
+                          ) : (
+                            <span className="text-zinc-500">-</span>
+                          )}
+                        </td>
+                        <td className="p-2 text-center text-zinc-300 text-sm">
+                          {grid.status === "Gagné"
+                            ? grid.gainCents != null
+                              ? (grid.gainCents / 100).toLocaleString("fr-FR", { style: "currency", currency: "EUR" })
+                              : "?"
+                            : "-"}
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
     </CasinoLayout>
   );
 }
-

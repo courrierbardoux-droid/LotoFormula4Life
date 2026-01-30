@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { CasinoLayout } from "@/components/layout/CasinoLayout";
 import { toast } from "sonner";
-import type { FrequencyConfig, PeriodUnit } from "@/lib/lotoService";
+import type { FrequencyConfig, PeriodUnit, TrendWindowConfig } from "@/lib/lotoService";
 import { motion } from "framer-motion";
 
 const LS_FREQ_CONFIG_KEY = "loto_freqConfig_v1";
@@ -32,16 +32,19 @@ export type SettingsMode = "all" | "pools" | "windows";
 
 export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
   type PoolKey = "high" | "surrepr" | "trend" | "dormeur";
-  type PoolWindowsConfig = Record<PoolKey, FrequencyConfig>;
+  type PoolWindowsConfig = { high: FrequencyConfig; surrepr: FrequencyConfig; trend: TrendWindowConfig; dormeur: FrequencyConfig };
   type WindowPreset = "recent25" | "general70" | "years3" | "years10" | "all" | "custom";
   type PresetNumberKey = "recentDraws" | "generalDraws" | "yearsShort" | "yearsLong";
   type PoolWindowPresetNumbers = Record<PoolKey, Record<PresetNumberKey, number>>;
   type SaveStatus = "saved" | "dirty";
   type SavePulseSource = "apply" | "preset" | "change";
 
-  const describeWindow = (cfg: FrequencyConfig) => {
+  const describeWindow = (cfg: FrequencyConfig | TrendWindowConfig) => {
     if (cfg.type === "all") return "Complet (2004 → aujourd'hui)";
-    if (cfg.type === "custom") return `${cfg.customValue} ${cfg.customUnit}`;
+    if (cfg.type === "custom") {
+      const r = (cfg as TrendWindowConfig).trendPeriodR;
+      return r != null ? `${cfg.customValue} ${cfg.customUnit}, R=${r}` : `${cfg.customValue} ${cfg.customUnit}`;
+    }
     return cfg.type;
   };
 
@@ -92,9 +95,8 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
 
   const defaultPoolWindows: PoolWindowsConfig = {
     high: { type: "custom", customUnit: "draws", customValue: 25 },
-    // Par défaut : même fenêtre que "High (Fréquences)" (paramétrable ensuite)
     surrepr: { type: "custom", customUnit: "draws", customValue: 25 },
-    trend: { type: "custom", customUnit: "draws", customValue: 70 },
+    trend: { type: "custom", customUnit: "draws", customValue: 160, trendPeriodR: 65 },
     dormeur: { type: "custom", customUnit: "years", customValue: 3 },
   };
 
@@ -132,14 +134,13 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
   const safeParsePoolWindows = (raw: string | null): PoolWindowsConfig | null => {
     if (!raw) return null;
     try {
-      const obj = JSON.parse(raw) as Partial<PoolWindowsConfig>;
-
-      // Migration: anciennes versions n'avaient pas "surrepr"
+      const obj = JSON.parse(raw) as Partial<PoolWindowsConfig & { trend?: TrendWindowConfig }>;
       const migrated: Partial<PoolWindowsConfig> = { ...obj };
-      if (!migrated.surrepr && migrated.high) {
-        migrated.surrepr = migrated.high;
+      if (!migrated.surrepr && migrated.high) migrated.surrepr = migrated.high;
+      const trend = migrated.trend as (FrequencyConfig & { trendPeriodR?: number }) | undefined;
+      if (trend && typeof trend.trendPeriodR !== "number") {
+        migrated.trend = { ...trend, trendPeriodR: 65 } as TrendWindowConfig;
       }
-
       const keys: PoolKey[] = ["high", "surrepr", "trend", "dormeur"];
       for (const k of keys) {
         const cfg = migrated?.[k];
@@ -400,11 +401,19 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
                                     const nextPreset = opt.id as WindowPreset;
                                     setPoolWindowPresets((prev) => ({ ...prev, [k]: nextPreset }));
                                     if (nextPreset !== "custom") {
-                                      setPoolWindows((prev) => ({ ...prev, [k]: presetToWindow(k, nextPreset) }));
+                                      const nextCfg = presetToWindow(k, nextPreset);
+                                      setPoolWindows((prev) => ({
+                                        ...prev,
+                                        [k]: k === "trend" ? { ...nextCfg, trendPeriodR: (prev.trend as TrendWindowConfig).trendPeriodR ?? 65 } : nextCfg,
+                                      }));
                                     } else {
-                                      // Keep existing cfg as-is (user edits below)
                                       if (cfg.type !== "custom") {
-                                        setPoolWindows((prev) => ({ ...prev, [k]: { type: "custom", customUnit: "draws", customValue: 50 } }));
+                                        setPoolWindows((prev) => ({
+                                          ...prev,
+                                          [k]: k === "trend"
+                                            ? { type: "custom" as const, customUnit: "draws" as const, customValue: 160, trendPeriodR: (prev.trend as TrendWindowConfig).trendPeriodR ?? 65 }
+                                            : { type: "custom" as const, customUnit: "draws" as const, customValue: 50 },
+                                        }));
                                       }
                                     }
                                   }}
@@ -440,7 +449,7 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
                           {p === "custom" && (
                             <div className="mt-3 flex flex-col md:flex-row gap-3 items-start md:items-end">
                               <div className="flex flex-col gap-1">
-                                <label className="text-zinc-300 text-sm">Valeur</label>
+                                <label className="text-zinc-300 text-sm">{k === "trend" ? "Fenêtre W (tirages)" : "Valeur"}</label>
                                 <input
                                   className="bg-black/40 border border-zinc-700 rounded-md px-3 py-2 text-white w-40"
                                   type="number"
@@ -451,6 +460,7 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
                                     setPoolWindows((prev) => ({
                                       ...prev,
                                       [k]: {
+                                        ...prev[k],
                                         type: "custom",
                                         customUnit: (cfg.type === "custom" ? cfg.customUnit : "draws") ?? "draws",
                                         customValue: v,
@@ -468,6 +478,7 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
                                     setPoolWindows((prev) => ({
                                       ...prev,
                                       [k]: {
+                                        ...prev[k],
                                         type: "custom",
                                         customUnit: e.target.value as PeriodUnit,
                                         customValue: (cfg.type === "custom" ? cfg.customValue : 50) ?? 50,
@@ -481,6 +492,29 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
                                   <option value="years">années</option>
                                 </select>
                               </div>
+                            </div>
+                          )}
+
+                          {k === "trend" && (
+                            <div className="mt-3 pt-3 border-t border-zinc-800">
+                              <label className="text-zinc-300 text-sm block mb-2">Période récente R (tirages)</label>
+                              <input
+                                className="bg-black/40 border border-zinc-700 rounded-md px-3 py-2 text-white w-40"
+                                type="number"
+                                min={15}
+                                max={500}
+                                value={(cfg as TrendWindowConfig).trendPeriodR ?? 65}
+                                onChange={(e) => {
+                                  const v = clampInt(parseInt(e.target.value, 10), 15, 500, 65);
+                                  setPoolWindows((prev) => ({
+                                    ...prev,
+                                    trend: { ...prev.trend, trendPeriodR: v },
+                                  }));
+                                }}
+                              />
+                              <p className="text-zinc-500 text-xs mt-1">
+                                Nombre de tout derniers tirages comparés à la fenêtre W pour calculer haussier / stable / baissier.
+                              </p>
                             </div>
                           )}
                         </div>

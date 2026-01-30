@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8"/>
+  <title>Fenêtre Tendance – Analyse EuroMillions</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.3rem; }
+    h2 { font-size: 1.1rem; margin-top: 1.5rem; }
+    .proposition { background: #e3f2fd; padding: 0.75rem 1rem; border-radius: 8px; margin: 1rem 0; }
+    .vulgarisation { background: #fff3e0; padding: 0.75rem 1rem; border-radius: 8px; margin: 1rem 0; font-size: 0.95rem; }
+    .chart-container { position: relative; height: 280px; margin: 1rem 0; }
+  </style>
+</head>
+<body>
+  <h1>Fenêtre Tendance (sens d’évolution)</h1>
+  <p>Stabilité des étiquettes haussière / stabilisée / baissière quand on varie W et R. Seuil concordance ≥ 85 %.</p>
+
+  <div class="proposition">
+    <strong>Proposition</strong><br>Fenêtre Tendance suggérée: W=160 tirages, période récente R=65 tirages
+  </div>
+
+  <div class="vulgarisation">
+    <strong>En bref (Loto)</strong><br>
+    La Tendance dit si un numéro est « en montée », « stable » ou « en baisse » sur la période récente par rapport à la fenêtre. 
+    On cherche la plus petite fenêtre W et la plus petite période récente R pour lesquelles ce sens d’évolution ne change pas trop 
+    quand on décale un peu la fenêtre (concordance ≥ 85 %). 
+    Ces valeurs (W*, R*) servent dans le tableau des scénarios de probabilité pour filtrer ou pondérer les candidats.
+  </div>
+
+  <h2>Concordance moyenne (étiquettes) par W (%)</h2>
+  <div class="chart-container"><canvas id="chartConcordance"></canvas></div>
+
+  <h2>% de (W,R) valides par W</h2>
+  <div class="chart-container"><canvas id="chartValides"></canvas></div>
+
+  <h2>Meilleur R par W</h2>
+  <div class="chart-container"><canvas id="chartR"></canvas></div>
+
+  <h2>Validation par glissement</h2>
+  <p>Fenêtre W=160, R=65 glissée sur l’historique : 0/58 fenêtres valides (0 %).</p>
+
+  <script>
+    const labels = [50,60,70,80,90,100,110,120,130,140,150,160,170,180,190,200];
+    new Chart(document.getElementById('chartConcordance'), {
+      type: 'line',
+      data: { labels, datasets: [{ label: 'Concordance moy. (%)', data: [67,65,68,69.8,74.4,75.8,77,77.4,78.10000000000001,78.3,76.7,80.9,79.3,79.4,77.60000000000001,78.9], borderColor: '#1976d2', fill: false }] },
+      options: { responsive: true, maintainAspectRatio: false, scales: { x: { title: { display: true, text: 'W (nb tirages)' } }, y: { min: 70, max: 100 } } }
+    });
+    new Chart(document.getElementById('chartValides'), {
+      type: 'line',
+      data: { labels, datasets: [{ label: '% (W,R) valides', data: [0,0,0,0,0,0,0,0,0,0,0,8,0,0,0,0], borderColor: '#2e7d32', fill: false }] },
+      options: { responsive: true, maintainAspectRatio: false, scales: { x: { title: { display: true, text: 'W (nb tirages)' } }, y: { min: 0, max: 100 } } }
+    });
+    new Chart(document.getElementById('chartR'), {
+      type: 'line',
+      data: { labels, datasets: [{ label: 'Meilleur R', data: [20,20,20,20,20,20,20,20,20,20,20,65,20,20,20,20], borderColor: '#7b1fa2', fill: false }] },
+      options: { responsive: true, maintainAspectRatio: false, scales: { x: { title: { display: true, text: 'W (nb tirages)' } } } }
+    });
+  </script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 
-import React from 'react';
+import React, { useEffect } from 'react';
 // import generatedImage from '@assets/generated_images/abstract_tv_studio_background_for_lottery_show.png';
 import { useLocation } from "wouter";
 import { LogOut } from "lucide-react";
@@ -10,6 +10,16 @@ interface CasinoLayoutProps {
 
 export const CasinoLayout = ({ children }: CasinoLayoutProps) => {
   const [location, setLocation] = useLocation();
+
+  // Redirection admin vers historique utilisateurs si pendingAdminWinsRedirect est défini
+  // Cela se déclenche quand l'admin quitte /my-grids après avoir vu ses gains
+  useEffect(() => {
+    const pending = sessionStorage.getItem('pendingAdminWinsRedirect');
+    if (pending === '1' && location !== '/my-grids' && !location.startsWith('/settings/users/history')) {
+      sessionStorage.removeItem('pendingAdminWinsRedirect');
+      setLocation('/settings/users/history?wins=1');
+    }
+  }, [location, setLocation]);
 
   const handleLogout = () => {
     // Clear any local storage auth if we had it

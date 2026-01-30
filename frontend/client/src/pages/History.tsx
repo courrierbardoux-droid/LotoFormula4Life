@@ -2,7 +2,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { Link, useLocation, useSearch } from 'wouter';
 import { CasinoLayout } from '@/components/layout/CasinoLayout';
-import { chargerHistorique, Tirage, mettreAJourCache, getDernierTirage, verifierMiseAJourNecessaire, viderCache } from '@/lib/lotoService';
+import { chargerHistorique, Tirage, mettreAJourCache, getDernierTirage, verifierMiseAJourNecessaire, viderCache, hasUnseenWins, hasAdminUnseenWins } from '@/lib/lotoService';
 import { useUser } from '@/lib/UserContext';
 import { Download, Upload, AlertTriangle, RefreshCw, FileText, CheckCircle, Trash2, Lock, Unlock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -179,7 +179,9 @@ export default function History() {
         return;
       }
       toast.success('Mise à jour automatique effectuée');
-      // Recharger l'historique depuis la source habituelle
+      // Vider le cache pour forcer le rechargement depuis la DB
+      viderCache();
+      // Recharger l'historique depuis la DB
       const refreshed = await chargerHistorique();
       setHistory(refreshed);
       mettreAJourCache(refreshed);
@@ -285,6 +287,7 @@ export default function History() {
           // Merge: le CSV uploadé peut être partiel (ex: uniquement l'année en cours).
           // On fusionne avec l'historique existant (en mémoire) pour éviter de "réduire" l'historique à 5 lignes.
           const baseHistory = history.length > 0 ? history : await chargerHistorique();
+          
           const baseByDate = new Map<string, Tirage>();
           baseHistory.forEach(t => baseByDate.set(normalizeDate(t.date), { ...t, date: normalizeDate(t.date) }));
           const beforeLen = baseByDate.size;
@@ -343,15 +346,44 @@ export default function History() {
                 console.log(`[History] DB sync: ${syncData.processed ?? syncData.inserted ?? 0} traités`);
               }
               
-              // Recharger les données depuis la DB pour être sûr d'avoir les dernières
+              // Recharger depuis la DB seulement si elle renvoie des données (sinon garder le merge local)
               const refreshRes = await fetch('/api/history', { credentials: 'include' });
               if (refreshRes.ok) {
                 const refreshedData = await refreshRes.json();
-                setHistory(refreshedData);
-                mettreAJourCache(refreshedData);
+                if (Array.isArray(refreshedData) && refreshedData.length > 0) {
+                  setHistory(refreshedData);
+                  mettreAJourCache(refreshedData);
+                }
+                // Si la DB est vide, on garde mergedTirages déjà affiché et en cache (pas d'écrasement)
               }
               
               toast.success("Historique et base de données mis à jour !");
+              
+              // Vérifier si l'utilisateur a des gains non vus et rediriger
+              const myUnseen = await hasUnseenWins();
+              const isAdmin = user?.role === 'admin';
+              
+              if (isAdmin) {
+                const usersUnseen = await hasAdminUnseenWins();
+                if (myUnseen) {
+                  // Admin a des gains perso → d'abord ses grilles
+                  if (usersUnseen) {
+                    sessionStorage.setItem('pendingAdminWinsRedirect', '1');
+                  }
+                  setShowUpdateModal(false);
+                  setLocation('/my-grids?wins=1');
+                  return;
+                } else if (usersUnseen) {
+                  // Admin n'a pas de gains perso mais des gains utilisateurs
+                  setShowUpdateModal(false);
+                  setLocation('/settings/users/history?wins=1');
+                  return;
+                }
+              } else if (myUnseen) {
+                setShowUpdateModal(false);
+                setLocation('/my-grids?wins=1');
+                return;
+              }
             } catch (syncErr) {
               console.error('[History] Erreur sync DB:', syncErr);
               toast.warning("Historique local mis à jour, mais erreur sync DB");
@@ -361,9 +393,6 @@ export default function History() {
           }
           
           setShowUpdateModal(false);
-          
-          // IMPORTANT: ne pas recharger la page automatiquement.
-          // La validation/fermeture de la modal de victoire doit être manuelle.
         } catch (err) {
             console.error(err);
             toast.error("Erreur lors de l'analyse du fichier CSV");
@@ -771,12 +800,12 @@ export default function History() {
                                 : lastDraw.date || 'Date inconnue'}
                         </p>
                         <div className="flex flex-wrap justify-center gap-2">
-                            {lastDraw.numeros.map((n) => (
-                                <LottoBall key={`last-n-${n}`} number={n} size="sm" />
+                            {lastDraw.numeros.map((n, idx) => (
+                                <LottoBall key={`last-n-${idx}`} number={n} size="sm" />
                             ))}
                             <div className="w-px bg-zinc-600 mx-1" />
-                            {lastDraw.etoiles.map((n) => (
-                                <LottoBall key={`last-s-${n}`} number={n} isStar size="sm" />
+                            {lastDraw.etoiles.map((n, idx) => (
+                                <LottoBall key={`last-s-${idx}`} number={n} isStar size="sm" />
                             ))}
                         </div>
                     </div>

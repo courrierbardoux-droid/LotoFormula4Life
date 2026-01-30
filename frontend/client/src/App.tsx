@@ -156,6 +156,29 @@ function Router() {
       {/* Page de confirmation pour recevoir les numéros par email */}
       <Route path="/confirm-draw/:token" component={ConfirmDraw} />
 
+      {/* Courbes analyse fenêtre longue (HTML statique dans public/data) */}
+      <Route path="/fenetre-longue-courbes">
+        <iframe
+          src="/data/fenetre-longue-courbes.html"
+          className="fixed inset-0 w-full h-full border-0"
+          title="Fenêtre longue Fréquence – Courbes"
+        />
+      </Route>
+      <Route path="/fenetre-courte-courbes">
+        <iframe
+          src="/data/fenetre-courte-courbes.html"
+          className="fixed inset-0 w-full h-full border-0"
+          title="Fenêtre courte – Courbes"
+        />
+      </Route>
+      <Route path="/fenetre-tendance-courbes">
+        <iframe
+          src="/data/fenetre-tendance-courbes.html"
+          className="fixed inset-0 w-full h-full border-0"
+          title="Fenêtre Tendance – Courbes"
+        />
+      </Route>
+
       <Route component={NotFound} />
     </Switch>
   );
