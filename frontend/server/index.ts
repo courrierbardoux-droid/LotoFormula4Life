@@ -1,12 +1,11 @@
 import path from 'path';
-import { fileURLToPath } from 'url';
 import { existsSync } from 'fs';
 import dotenv from 'dotenv';
 
 // Charger .env depuis le dossier frontend (où se trouve .env), quel que soit le répertoire de lancement
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const envPathFrontend = path.join(__dirname, '..', '.env');
-const envPathFrontendTxt = path.join(__dirname, '..', '.env.txt');
+// Note: On utilise process.cwd() car import.meta.url n'est pas disponible en format CJS (build Render)
+const envPathFrontend = path.join(process.cwd(), '.env');
+const envPathFrontendTxt = path.join(process.cwd(), '.env.txt');
 const envPathCwd = path.join(process.cwd(), '.env');
 if (existsSync(envPathFrontend)) {
   dotenv.config({ path: envPathFrontend });
