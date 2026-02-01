@@ -46,9 +46,25 @@ interface InvitationEmailParams {
 export async function sendInvitationEmail({ to, code, type }: InvitationEmailParams): Promise<boolean> {
   const roleLabel = type === 'vip' ? 'VIP' : 'Invité';
   const roleColor = type === 'vip' ? '#22c55e' : '#ffffff';
+  const startedAt = Date.now();
+  const toDomain = typeof to === 'string' && to.includes('@') ? to.split('@')[1] : null;
+  const codePreview = typeof code === 'string' ? `len:${code.length}` : typeof code;
+
+  // #region agent log
+  console.log('[agent][H1][sendInvitationEmail] start', { type, toDomain, codePreview });
+  // #endregion
   
   // Vérifier que les variables d'environnement sont définies
   if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
+    // #region agent log
+    console.log('[agent][H1][sendInvitationEmail] missing env', {
+      hasGmailUser: !!process.env.GMAIL_USER,
+      hasGmailAppPassword: !!process.env.GMAIL_APP_PASSWORD,
+      ms: Date.now() - startedAt,
+      type,
+      toDomain,
+    });
+    // #endregion
     console.error('[Email] Variables d\'environnement manquantes: GMAIL_USER ou GMAIL_APP_PASSWORD');
     return false;
   }
@@ -56,6 +72,9 @@ export async function sendInvitationEmail({ to, code, type }: InvitationEmailPar
   try {
     // Charger l'URL du site depuis la DB
     const siteUrl = await getSiteUrl();
+    // #region agent log
+    console.log('[agent][H1][sendInvitationEmail] before sendMail', { ms: Date.now() - startedAt, type, toDomain });
+    // #endregion
     
     const result = await transporter.sendMail({
       from: `"LotoFormula4Life" <${process.env.GMAIL_USER}>`,
@@ -135,6 +154,14 @@ export async function sendInvitationEmail({ to, code, type }: InvitationEmailPar
     });
 
     console.log(`[Email] Invitation ${type} envoyée à ${to}`, result.messageId);
+    // #region agent log
+    console.log('[agent][H1][sendInvitationEmail] sendMail ok', {
+      ms: Date.now() - startedAt,
+      type,
+      toDomain,
+      hasMessageId: !!result?.messageId,
+    });
+    // #endregion
     return true;
   } catch (error: any) {
     console.error('[Email] Erreur envoi invitation:', error);
@@ -145,6 +172,17 @@ export async function sendInvitationEmail({ to, code, type }: InvitationEmailPar
       response: error.response,
       responseCode: error.responseCode
     });
+    // #region agent log
+    console.log('[agent][H1][sendInvitationEmail] sendMail error', {
+      ms: Date.now() - startedAt,
+      type,
+      toDomain,
+      code: error?.code ?? null,
+      responseCode: error?.responseCode ?? null,
+      command: error?.command ?? null,
+      message: error?.message ?? null,
+    });
+    // #endregion
     return false;
   }
 }
