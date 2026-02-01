@@ -21,6 +21,90 @@ function shouldUseResend(): boolean {
   return !!process.env.RESEND_API_KEY && (isProd || process.env.FORCE_RESEND === '1');
 }
 
+function shouldUseBrevo(): boolean {
+  const isProd = process.env.NODE_ENV === 'production';
+  return !!process.env.BREVO_API_KEY && (isProd || process.env.FORCE_BREVO === '1');
+}
+
+function getEmailProvider(): 'brevo' | 'resend' | 'gmail' {
+  if (shouldUseBrevo()) return 'brevo';
+  if (shouldUseResend()) return 'resend';
+  return 'gmail';
+}
+
+async function sendWithBrevo({ to, subject, html, replyTo, fromName }: OutgoingEmail): Promise<boolean> {
+  const startedAt = Date.now();
+  const toList = Array.isArray(to) ? to : [to];
+  const toDomains = toList.map(getEmailDomain).filter(Boolean);
+  const senderEmail = process.env.BREVO_SENDER_EMAIL || '';
+  const senderName = fromName || process.env.BREVO_SENDER_NAME || 'LotoFormula4Life';
+
+  // #region agent log
+  console.log('[agent][H6][brevo] start', { toDomains, hasSenderEmail: !!senderEmail });
+  // #endregion
+
+  if (!process.env.BREVO_API_KEY || !senderEmail) {
+    // #region agent log
+    console.log('[agent][H6][brevo] missing config', {
+      hasApiKey: !!process.env.BREVO_API_KEY,
+      hasSenderEmail: !!senderEmail,
+      ms: Date.now() - startedAt,
+    });
+    // #endregion
+    return false;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+      method: 'POST',
+      headers: {
+        accept: 'application/json',
+        'content-type': 'application/json',
+        'api-key': process.env.BREVO_API_KEY,
+      },
+      body: JSON.stringify({
+        sender: { name: senderName, email: senderEmail },
+        to: toList.map((email) => ({ email })),
+        subject,
+        htmlContent: html,
+        ...(replyTo ? { replyTo: { email: replyTo } } : {}),
+      }),
+      signal: controller.signal,
+    });
+
+    let data: any = null;
+    try {
+      data = await res.json();
+    } catch {
+      // ignore
+    }
+
+    // #region agent log
+    console.log('[agent][H6][brevo] response', {
+      ms: Date.now() - startedAt,
+      ok: res.ok,
+      status: res.status,
+      hasMessageId: !!data?.messageId,
+    });
+    // #endregion
+
+    return res.ok && !!data?.messageId;
+  } catch (err: any) {
+    // #region agent log
+    console.log('[agent][H6][brevo] exception', {
+      ms: Date.now() - startedAt,
+      name: err?.name ?? null,
+      message: err?.message ?? String(err),
+    });
+    // #endregion
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function sendWithResend({ to, subject, html, replyTo }: OutgoingEmail): Promise<boolean> {
   const startedAt = Date.now();
   const toList = Array.isArray(to) ? to : [to];
@@ -91,12 +175,23 @@ async function sendWithResend({ to, subject, html, replyTo }: OutgoingEmail): Pr
 }
 
 async function sendWithGmailTransport({ to, subject, html, replyTo, fromName }: OutgoingEmail): Promise<boolean> {
+  const startedAt = Date.now();
   // Vérifier que les variables d'environnement sont définies
   if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
     console.error('[Email] Variables d\'environnement manquantes: GMAIL_USER ou GMAIL_APP_PASSWORD');
+    // #region agent log
+    console.log('[agent][H7][gmail] missing env', {
+      hasGmailUser: !!process.env.GMAIL_USER,
+      hasGmailAppPassword: !!process.env.GMAIL_APP_PASSWORD,
+      ms: Date.now() - startedAt,
+    });
+    // #endregion
     return false;
   }
   try {
+    // #region agent log
+    console.log('[agent][H7][gmail] start', { ms: 0 });
+    // #endregion
     const result = await transporter.sendMail({
       from: `"${fromName || 'LotoFormula4Life'}" <${process.env.GMAIL_USER}>`,
       to,
@@ -105,12 +200,37 @@ async function sendWithGmailTransport({ to, subject, html, replyTo, fromName }: 
       ...(replyTo ? { replyTo } : {}),
     });
     return !!result?.messageId;
-  } catch (e) {
+  } catch (e: any) {
+    // #region agent log
+    console.log('[agent][H7][gmail] error', {
+      ms: Date.now() - startedAt,
+      name: e?.name ?? null,
+      code: e?.code ?? null,
+      command: e?.command ?? null,
+      message: e?.message ?? String(e),
+    });
+    // #endregion
     return false;
   }
 }
 
 async function sendEmail(email: OutgoingEmail): Promise<boolean> {
+  const provider = getEmailProvider();
+  // #region agent log
+  console.log('[agent][H7][email] provider selected', {
+    provider,
+    nodeEnv: process.env.NODE_ENV ?? null,
+    hasBrevoApiKey: !!process.env.BREVO_API_KEY,
+    hasBrevoSenderEmail: !!process.env.BREVO_SENDER_EMAIL,
+    hasResendApiKey: !!process.env.RESEND_API_KEY,
+    hasGmailUser: !!process.env.GMAIL_USER,
+  });
+  // #endregion
+
+  // Priorité : Brevo (HTTPS, pas besoin de domaine), puis Resend, puis Gmail.
+  if (shouldUseBrevo()) {
+    return await sendWithBrevo(email);
+  }
   if (shouldUseResend()) {
     return await sendWithResend(email);
   }
@@ -170,6 +290,7 @@ export async function sendInvitationEmail({ to, code, type }: InvitationEmailPar
   const startedAt = Date.now();
   const toDomain = getEmailDomain(to);
   const codePreview = typeof code === 'string' ? `len:${code.length}` : typeof code;
+  const provider = getEmailProvider();
 
   // #region agent log
   console.log('[agent][H1][sendInvitationEmail] start', { type, toDomain, codePreview });
@@ -259,6 +380,14 @@ export async function sendInvitationEmail({ to, code, type }: InvitationEmailPar
     });
 
     if (!ok) {
+      // #region agent log
+      console.log('[agent][H1][sendInvitationEmail] sendMail returned false', {
+        ms: Date.now() - startedAt,
+        type,
+        toDomain,
+        provider,
+      });
+      // #endregion
       return false;
     }
 
@@ -268,7 +397,7 @@ export async function sendInvitationEmail({ to, code, type }: InvitationEmailPar
       ms: Date.now() - startedAt,
       type,
       toDomain,
-      provider: shouldUseResend() ? 'resend' : 'gmail',
+      provider,
     });
     // #endregion
     return true;
