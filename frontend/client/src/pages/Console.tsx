@@ -48,6 +48,8 @@ const LS_FREQ_CONFIG_KEY = "loto_freqConfig_v1";
 const EVENT_FREQ_CONFIG_CHANGED = "loto:freqConfigChanged";
 const LS_POOL_WINDOWS_KEY = "loto_poolWindows_v1";
 const EVENT_POOL_WINDOWS_CHANGED = "loto:poolWindowsChanged";
+const LS_POOL_WINDOW_PRESET_NUMBERS_KEY = "loto_poolWindowPresetNumbers_v1";
+const EVENT_POOL_WINDOW_PRESET_NUMBERS_CHANGED = "loto:poolWindowPresetNumbersChanged";
 
 // Sounds
 const sounds = {
@@ -218,7 +220,7 @@ type PresetConfig = {
     mode: 'manual' | 'auto';
     
     // NOUVEAUX PARAMÈTRES
-    hazardLevel: number;        // Niveau de CHAOS (0-10)
+    hazardLevel: number;        // Niveau de CHAOS (0-26)
     tendencyLevel: number;      // Niveau de TENDANCE (0-10)
     dormeurBallLevel: number;   // Dormeur Boules (0-10) => 0%..100%
     dormeurStarLevel: number;   // Dormeur Étoiles (0-10) => 0%..100%
@@ -429,11 +431,26 @@ export default function Console() {
   const [avoidFriday, setAvoidFriday] = useState(false);
   const [emailNotify, setEmailNotify] = useState(true);
   const [smsNotify, setSmsNotify] = useState(false);
-  const [hazardLevel, setHazardLevel] = useState(0); // 0 to 9
+  const [hazardLevel, setHazardLevel] = useState(0); // 0..26 (27 scénarios)
   const [tendencyLevel, setTendencyLevel] = useState(0); // 0 to 10, 0 = aucune influence (stat pure)
   const [dormeurBallLevel, setDormeurBallLevel] = useState(0); // 0..10 => 0%..100% de dormeurs (boules)
   const [dormeurStarLevel, setDormeurStarLevel] = useState(0); // 0..10 => 0%..100% de dormeurs (étoiles)
   const [isWeightsEnabled, setIsWeightsEnabled] = useState(true);
+
+  // --- CHAOS (0..26) => libellé lisible (F/S/T) ---
+  const chaosLabel = (() => {
+      const clamp = (x: number, min: number, max: number) => Math.max(min, Math.min(max, x));
+      const c = clamp(Math.floor(hazardLevel), 0, 26);
+      const fIdx = Math.floor(c / 9);
+      const rest = c % 9;
+      const sIdx = Math.floor(rest / 3);
+      const tIdx = rest % 3;
+
+      const f = fIdx === 0 ? "F+" : fIdx === 1 ? "F0" : "F-";
+      const s = sIdx === 0 ? "S+" : sIdx === 1 ? "S0" : "S-";
+      const t = tIdx === 0 ? "T↑" : tIdx === 1 ? "T→" : "T↓";
+      return `${f} ${s} ${t}`;
+  })();
 
   type DormeurProof = {
       at: number;
@@ -494,31 +511,17 @@ export default function Console() {
 
   // (Gagnants) : supprimé — aucune notification/redirect "gagnant"
 
-  // --- SETTINGS STATE ---
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [freqConfig, setFreqConfig] = useState<FrequencyConfig>(() => {
-      try {
-          const raw = localStorage.getItem(LS_FREQ_CONFIG_KEY);
-          if (!raw) return { type: 'all' };
-          const parsed = JSON.parse(raw) as FrequencyConfig;
-          if (!parsed || typeof parsed !== 'object') return { type: 'all' };
-          if (parsed.type === 'custom') {
-              if (!parsed.customUnit || !parsed.customValue) return { type: 'all' };
-          }
-          return parsed;
-      } catch {
-          return { type: 'all' };
-      }
-  });
+  // --- LEGACY “Cycle de calcul des fréquences” ---
+  // Ce réglage global (loto_freqConfig_v1) est désormais déprécié au profit des fenêtres par pôle (poolWindows.*).
 
   // --- POOL WINDOWS (High / Surrepr / Trend / Dormeur) ---
   type PoolKey = "high" | "surrepr" | "trend" | "dormeur";
   type PoolWindowsConfig = { high: FrequencyConfig; surrepr: FrequencyConfig; trend: TrendWindowConfig; dormeur: FrequencyConfig };
   const defaultPoolWindows: PoolWindowsConfig = {
-    high: { type: "custom", customUnit: "draws", customValue: 25 },
+    high: { type: "custom", customUnit: "draws", customValue: 680 },
     surrepr: { type: "custom", customUnit: "draws", customValue: 25 },
     trend: { type: "custom", customUnit: "draws", customValue: 160, trendPeriodR: 65 },
-    dormeur: { type: "custom", customUnit: "years", customValue: 3 },
+    dormeur: { type: "custom", customUnit: "draws", customValue: 60 },
   };
   const [poolWindows, setPoolWindows] = useState<PoolWindowsConfig>(() => {
     try {
@@ -532,7 +535,21 @@ export default function Console() {
         if (migrated?.high && migrated?.surrepr && migrated?.trend && migrated?.dormeur) return migrated as PoolWindowsConfig;
       }
     } catch {}
-    return { ...defaultPoolWindows, high: freqConfig, surrepr: freqConfig };
+    // Migration: si l'ancien réglage global existe encore, on l'utilise uniquement comme fallback initial pour High (et Surrepr = High).
+    let legacyHigh: FrequencyConfig | null = null;
+    try {
+      const rawLegacy = localStorage.getItem(LS_FREQ_CONFIG_KEY);
+      if (rawLegacy) {
+        const parsed = JSON.parse(rawLegacy) as FrequencyConfig;
+        if (parsed?.type === "custom" && (!parsed.customUnit || !parsed.customValue)) {
+          legacyHigh = null;
+        } else if (parsed?.type === "all" || parsed?.type === "last_20" || parsed?.type === "last_year" || parsed?.type === "custom") {
+          legacyHigh = parsed;
+        }
+      }
+    } catch {}
+    const high = legacyHigh ?? defaultPoolWindows.high;
+    return { ...defaultPoolWindows, high, surrepr: high };
   });
 
   // --- POOL SIZE SETTINGS (Top N) ---
@@ -593,35 +610,12 @@ export default function Console() {
         const t = migrated.trend as (FrequencyConfig & { trendPeriodR?: number }) | undefined;
         if (t && typeof t.trendPeriodR !== "number") migrated.trend = { ...t, trendPeriodR: 65 } as TrendWindowConfig;
         if (!migrated?.high || !migrated?.surrepr || !migrated?.trend || !migrated?.dormeur) return;
+
         setPoolWindows(migrated as PoolWindowsConfig);
-        setFreqConfig(migrated.high); // compat: "fenêtre high" visible via l'ancien réglage
       } catch {}
     };
     window.addEventListener(EVENT_POOL_WINDOWS_CHANGED, handler as EventListener);
     return () => window.removeEventListener(EVENT_POOL_WINDOWS_CHANGED, handler as EventListener);
-  }, []);
-
-  // Listen for Settings changes (same-tab)
-  useEffect(() => {
-      const handler = () => {
-          try {
-              const raw = localStorage.getItem(LS_FREQ_CONFIG_KEY);
-              if (!raw) return;
-              const parsed = JSON.parse(raw) as FrequencyConfig;
-              if (parsed?.type === 'custom' && (!parsed.customUnit || !parsed.customValue)) return;
-              setFreqConfig(parsed);
-              setPoolWindows((prev) => {
-                const prevHigh = prev.high;
-                const prevSurrepr = prev.surrepr;
-                const next = { ...prev, high: parsed };
-                // Par défaut, Surrepr suit High tant que l'utilisateur ne l'a pas personnalisée
-                if (isSameFreqConfig(prevSurrepr, prevHigh)) next.surrepr = parsed;
-                return next;
-              }); // compat: legacy => high
-          } catch {}
-      };
-      window.addEventListener(EVENT_FREQ_CONFIG_CHANGED, handler as EventListener);
-      return () => window.removeEventListener(EVENT_FREQ_CONFIG_CHANGED, handler as EventListener);
   }, []);
 
   // Debug (runtime evidence): generation tokens + mismatch detection
@@ -632,40 +626,619 @@ export default function Console() {
   const autoDrawsContainerRef = useRef<HTMLDivElement | null>(null);
   const wasScrollableRef = useRef(false);
 
-  const isSameFreqConfig = (a?: FrequencyConfig, b?: FrequencyConfig) => {
-    if (!a || !b) return false;
-    if (a.type !== b.type) return false;
-    if (a.type !== "custom") return true;
-    return a.customUnit === b.customUnit && a.customValue === b.customValue;
-  };
-
-  // Persist when changed from Console UI too
-  useEffect(() => {
-      try {
-          localStorage.setItem(LS_FREQ_CONFIG_KEY, JSON.stringify(freqConfig));
-          // Compat: si la fenêtre high est modifiée depuis la Console, on maintient aussi la config multi-fenêtres.
-          const raw = localStorage.getItem(LS_POOL_WINDOWS_KEY);
-          let next = { ...defaultPoolWindows, high: freqConfig, surrepr: freqConfig } as PoolWindowsConfig;
-          if (raw) {
-            try {
-              const parsed = JSON.parse(raw) as Partial<PoolWindowsConfig & { trend?: TrendWindowConfig }>;
-              const migrated: Partial<PoolWindowsConfig> = { ...parsed };
-              if (!migrated.surrepr && migrated.high) migrated.surrepr = migrated.high;
-              const t = migrated.trend as (FrequencyConfig & { trendPeriodR?: number }) | undefined;
-              if (t && typeof t.trendPeriodR !== "number") migrated.trend = { ...t, trendPeriodR: 65 } as TrendWindowConfig;
-              if (migrated?.high && migrated?.surrepr && migrated?.trend && migrated?.dormeur) {
-                const prevHigh = migrated.high;
-                const prevSurrepr = migrated.surrepr;
-                next = { ...(migrated as PoolWindowsConfig), high: freqConfig };
-                // Par défaut, Surrepr suit High tant que l'utilisateur ne l'a pas personnalisée
-                if (isSameFreqConfig(prevSurrepr, prevHigh)) next.surrepr = freqConfig;
-              }
-            } catch {}
-          }
-          localStorage.setItem(LS_POOL_WINDOWS_KEY, JSON.stringify(next));
-      } catch {}
-  }, [freqConfig]);
   const [fullHistory, setFullHistory] = useState<Tirage[]>([]);
+
+  // --- HIGH (Fréquences) : valeur Dynamique (calculée automatiquement) ---
+  useEffect(() => {
+    if (!fullHistory || fullHistory.length < 800) return;
+
+    const clamp = (x: number, min: number, max: number) => Math.max(min, Math.min(max, x));
+    const round10 = (x: number) => Math.round(x / 10) * 10;
+    const floor10 = (x: number) => Math.floor(x / 10) * 10;
+    const ceil10 = (x: number) => Math.ceil(x / 10) * 10;
+
+    const computeNStarBothStandard = (history: Tirage[]) => {
+      // Critères "STANDARD" (cohérents projet) :
+      // - DELTA=50, STEP=10, PAS_CONSECUTIFS=3
+      // - Top-K: Boules 12, Étoiles 4
+      // - Seuils: rho >= 0.95 et overlap >= 0.75
+      const DELTA = 50;
+      const STEP_N = 10;
+      const PAS = 3;
+      const K_BALL = 12;
+      const K_STAR = 4;
+      const SEUIL_RHO = 0.95;
+      const SEUIL_OV = 0.75;
+
+      const total = history.length;
+      if (total < 200) return null;
+
+      const maxBall = 50;
+      const maxStar = 12;
+
+      // Cumul des occurrences (prefixes)
+      const cumBalls: number[][] = Array.from({ length: total + 1 }, () => Array(maxBall + 1).fill(0));
+      const cumStars: number[][] = Array.from({ length: total + 1 }, () => Array(maxStar + 1).fill(0));
+      for (let i = 0; i < total; i++) {
+        const prevB = cumBalls[i];
+        const prevS = cumStars[i];
+        const nextB = cumBalls[i + 1];
+        const nextS = cumStars[i + 1];
+        for (let n = 1; n <= maxBall; n++) nextB[n] = prevB[n];
+        for (let s = 1; s <= maxStar; s++) nextS[s] = prevS[s];
+        for (const n of history[i]?.numeros ?? []) if (n >= 1 && n <= maxBall) nextB[n] += 1;
+        for (const s of history[i]?.etoiles ?? []) if (s >= 1 && s <= maxStar) nextS[s] += 1;
+      }
+
+      const ranksByFreq = (freq: number[], max: number) => {
+        const entries = Array.from({ length: max }, (_, idx) => ({ num: idx + 1, f: freq[idx + 1] ?? 0 }));
+        entries.sort((a, b) => (b.f - a.f) || (a.num - b.num));
+        const rank = new Array(max + 1).fill(0);
+        entries.forEach((e, i) => { rank[e.num] = i + 1; });
+        return rank;
+      };
+
+      const spearmanFromRanks = (r1: number[], r2: number[], max: number) => {
+        const n = max;
+        let d2 = 0;
+        for (let i = 1; i <= max; i++) {
+          const a = r1[i] ?? 0;
+          const b = r2[i] ?? 0;
+          const d = a - b;
+          d2 += d * d;
+        }
+        return 1 - (6 * d2) / (n * (n * n - 1));
+      };
+
+      const topKSet = (freq: number[], max: number, K: number) => {
+        const entries = Array.from({ length: max }, (_, idx) => ({ num: idx + 1, f: freq[idx + 1] ?? 0 }));
+        entries.sort((a, b) => (b.f - a.f) || (a.num - b.num));
+        return new Set(entries.slice(0, K).map((e) => e.num));
+      };
+
+      const okBothAtN = (N: number) => {
+        const N2 = N + DELTA;
+        if (N2 > total) return null;
+
+        const fB1 = cumBalls[N];
+        const fB2 = cumBalls[N2];
+        const rB1 = ranksByFreq(fB1, maxBall);
+        const rB2 = ranksByFreq(fB2, maxBall);
+        const rhoB = spearmanFromRanks(rB1, rB2, maxBall);
+        const tB1 = topKSet(fB1, maxBall, K_BALL);
+        const tB2 = topKSet(fB2, maxBall, K_BALL);
+        let ovB = 0;
+        tB1.forEach((x) => { if (tB2.has(x)) ovB++; });
+        const ovBPct = ovB / K_BALL;
+
+        const fS1 = cumStars[N];
+        const fS2 = cumStars[N2];
+        const rS1 = ranksByFreq(fS1, maxStar);
+        const rS2 = ranksByFreq(fS2, maxStar);
+        const rhoS = spearmanFromRanks(rS1, rS2, maxStar);
+        const tS1 = topKSet(fS1, maxStar, K_STAR);
+        const tS2 = topKSet(fS2, maxStar, K_STAR);
+        let ovS = 0;
+        tS1.forEach((x) => { if (tS2.has(x)) ovS++; });
+        const ovSPct = ovS / K_STAR;
+
+        const okB = rhoB >= SEUIL_RHO && ovBPct >= SEUIL_OV;
+        const okS = rhoS >= SEUIL_RHO && ovSPct >= SEUIL_OV;
+        return okB && okS;
+      };
+
+      for (let N = 50; N + DELTA <= total; N += STEP_N) {
+        let ok = true;
+        for (let j = 0; j < PAS; j++) {
+          const v = okBothAtN(N + j * STEP_N);
+          if (!v) { ok = false; break; }
+          if (v !== true) { ok = false; break; }
+        }
+        if (ok) return N;
+      }
+
+      return null;
+    };
+
+    const computeDynamicBounds = (history: Tirage[]) => {
+      const SERIES_STEP = 150;
+      const MIN_TAIL = 600;
+      const values: number[] = [];
+      for (let end = 0; end + MIN_TAIL <= history.length; end += SERIES_STEP) {
+        const subset = history.slice(end);
+        const n = computeNStarBothStandard(subset);
+        if (typeof n === "number" && Number.isFinite(n) && n > 0) values.push(n);
+      }
+      values.sort((a, b) => a - b);
+      if (values.length < 3) return { min: 400, max: 800 };
+      const q = (p: number) => values[Math.floor(p * (values.length - 1))]!;
+      const q20 = q(0.2);
+      const q80 = q(0.8);
+      // Légère marge, puis arrondi par pas de 10 pour rester “réglage console”.
+      const min = clamp(floor10(q20 - 50), 200, 5000);
+      const max = clamp(ceil10(q80 + 50), 200, 5000);
+      if (min >= max) return { min: 400, max: 800 };
+      return { min, max };
+    };
+
+    const standardNStar = computeNStarBothStandard(fullHistory);
+    if (!standardNStar) return;
+
+    const bounds = computeDynamicBounds(fullHistory);
+    const dynamicDraws = clamp(round10(standardNStar), bounds.min, bounds.max);
+
+    // Mettre à jour la valeur "dynamicDraws" dans les presets (utilisé par Settings).
+    try {
+      const raw = localStorage.getItem(LS_POOL_WINDOW_PRESET_NUMBERS_KEY);
+      const parsed = raw ? (JSON.parse(raw) as any) : null;
+      const next = parsed && typeof parsed === "object" ? { ...parsed } : {};
+      next.high = { ...(next.high ?? {}), dynamicDraws };
+      localStorage.setItem(LS_POOL_WINDOW_PRESET_NUMBERS_KEY, JSON.stringify(next));
+      window.dispatchEvent(new Event(EVENT_POOL_WINDOW_PRESET_NUMBERS_CHANGED));
+
+      // Si la fenêtre High actuelle correspondait à l'ancien "dynamicDraws", on la recolle au nouveau.
+      const oldDynamic = typeof parsed?.high?.dynamicDraws === "number" ? parsed.high.dynamicDraws : null;
+      const rawW = localStorage.getItem(LS_POOL_WINDOWS_KEY);
+      if (rawW) {
+        const w = JSON.parse(rawW) as any;
+        const high = w?.high;
+        if (
+          high?.type === "custom" &&
+          high?.customUnit === "draws" &&
+          typeof high?.customValue === "number" &&
+          (oldDynamic != null ? high.customValue === oldDynamic : false)
+        ) {
+          const updated = {
+            ...w,
+            high: { ...high, customValue: dynamicDraws },
+          };
+          localStorage.setItem(LS_POOL_WINDOWS_KEY, JSON.stringify(updated));
+          window.dispatchEvent(new Event(EVENT_POOL_WINDOWS_CHANGED));
+        }
+      }
+    } catch {
+      // si localStorage est indisponible, on ne bloque pas la console
+    }
+  }, [fullHistory]);
+
+  // --- SURRÉPRÉSENTATION (z-score) : valeur Dynamique (calculée automatiquement) ---
+  useEffect(() => {
+    if (!fullHistory || fullHistory.length < 500) return;
+
+    const clamp = (x: number, min: number, max: number) => Math.max(min, Math.min(max, x));
+    const round10 = (x: number) => Math.round(x / 10) * 10;
+    const floor10 = (x: number) => Math.floor(x / 10) * 10;
+    const ceil10 = (x: number) => Math.ceil(x / 10) * 10;
+
+    const computeSurreprNStarBothStandard = (history: Tirage[]) => {
+      // Critères "STANDARD court" pour Surrepr (z-score) :
+      // - DELTA=50, STEP=10, PAS_CONSECUTIFS=2, N_MAX=450
+      // - Top-K: Boules 12, Étoiles 4
+      // - Seuils: rho >= 0.90 et overlap >= 0.70
+      const DELTA = 50;
+      const STEP_N = 10;
+      const PAS = 2;
+      const N_MAX = 450;
+      const K_BALL = 12;
+      const K_STAR = 4;
+      const SEUIL_RHO = 0.9;
+      const SEUIL_OV = 0.7;
+
+      const total = history.length;
+      const nMax = Math.min(N_MAX, total - DELTA);
+      if (nMax < 60) return null;
+
+      const maxBall = 50;
+      const maxStar = 12;
+
+      const pBall = 0.1;
+      const pStar = 1 / 6;
+      const zFromCounts = (k: number, N: number, p0: number) => {
+        const expected = N * p0;
+        const denom = Math.sqrt(N * p0 * (1 - p0));
+        if (!Number.isFinite(denom) || denom <= 0) return 0;
+        return (k - expected) / denom;
+      };
+
+      // Cumul occurrences
+      const cumBalls: number[][] = Array.from({ length: total + 1 }, () => Array(maxBall + 1).fill(0));
+      const cumStars: number[][] = Array.from({ length: total + 1 }, () => Array(maxStar + 1).fill(0));
+      for (let i = 0; i < total; i++) {
+        const prevB = cumBalls[i];
+        const prevS = cumStars[i];
+        const nextB = cumBalls[i + 1];
+        const nextS = cumStars[i + 1];
+        for (let n = 1; n <= maxBall; n++) nextB[n] = prevB[n];
+        for (let s = 1; s <= maxStar; s++) nextS[s] = prevS[s];
+        for (const n of history[i]?.numeros ?? []) if (n >= 1 && n <= maxBall) nextB[n] += 1;
+        for (const s of history[i]?.etoiles ?? []) if (s >= 1 && s <= maxStar) nextS[s] += 1;
+      }
+
+      const ranksByScore = (score: number[], max: number) => {
+        const entries = Array.from({ length: max }, (_, idx) => ({ num: idx + 1, s: score[idx + 1] ?? 0 }));
+        entries.sort((a, b) => (b.s - a.s) || (a.num - b.num));
+        const rank = new Array(max + 1).fill(0);
+        entries.forEach((e, i) => { rank[e.num] = i + 1; });
+        return rank;
+      };
+
+      const spearmanFromRanks = (r1: number[], r2: number[], max: number) => {
+        const n = max;
+        let d2 = 0;
+        for (let i = 1; i <= max; i++) {
+          const a = r1[i] ?? 0;
+          const b = r2[i] ?? 0;
+          const d = a - b;
+          d2 += d * d;
+        }
+        return 1 - (6 * d2) / (n * (n * n - 1));
+      };
+
+      const topKSet = (score: number[], max: number, K: number) => {
+        const entries = Array.from({ length: max }, (_, idx) => ({ num: idx + 1, s: score[idx + 1] ?? 0 }));
+        entries.sort((a, b) => (b.s - a.s) || (a.num - b.num));
+        return new Set(entries.slice(0, K).map((e) => e.num));
+      };
+
+      const okBothAtN = (N: number) => {
+        const N2 = N + DELTA;
+        if (N2 > total) return null;
+
+        const zB1 = new Array(maxBall + 1).fill(0);
+        const zB2 = new Array(maxBall + 1).fill(0);
+        for (let i = 1; i <= maxBall; i++) {
+          zB1[i] = zFromCounts(cumBalls[N][i] ?? 0, N, pBall);
+          zB2[i] = zFromCounts(cumBalls[N2][i] ?? 0, N2, pBall);
+        }
+        const rB1 = ranksByScore(zB1, maxBall);
+        const rB2 = ranksByScore(zB2, maxBall);
+        const rhoB = spearmanFromRanks(rB1, rB2, maxBall);
+        const tB1 = topKSet(zB1, maxBall, K_BALL);
+        const tB2 = topKSet(zB2, maxBall, K_BALL);
+        let ovB = 0;
+        tB1.forEach((x) => { if (tB2.has(x)) ovB++; });
+        const ovBPct = ovB / K_BALL;
+
+        const zS1 = new Array(maxStar + 1).fill(0);
+        const zS2 = new Array(maxStar + 1).fill(0);
+        for (let i = 1; i <= maxStar; i++) {
+          zS1[i] = zFromCounts(cumStars[N][i] ?? 0, N, pStar);
+          zS2[i] = zFromCounts(cumStars[N2][i] ?? 0, N2, pStar);
+        }
+        const rS1 = ranksByScore(zS1, maxStar);
+        const rS2 = ranksByScore(zS2, maxStar);
+        const rhoS = spearmanFromRanks(rS1, rS2, maxStar);
+        const tS1 = topKSet(zS1, maxStar, K_STAR);
+        const tS2 = topKSet(zS2, maxStar, K_STAR);
+        let ovS = 0;
+        tS1.forEach((x) => { if (tS2.has(x)) ovS++; });
+        const ovSPct = ovS / K_STAR;
+
+        const okB = rhoB >= SEUIL_RHO && ovBPct >= SEUIL_OV;
+        const okS = rhoS >= SEUIL_RHO && ovSPct >= SEUIL_OV;
+        return okB && okS;
+      };
+
+      for (let N = 50; N <= nMax; N += STEP_N) {
+        let ok = true;
+        for (let j = 0; j < PAS; j++) {
+          const v = okBothAtN(N + j * STEP_N);
+          if (v !== true) { ok = false; break; }
+        }
+        if (ok) return N;
+      }
+
+      return null;
+    };
+
+    const computeDynamicBounds = (history: Tirage[]) => {
+      const SERIES_STEP = 150;
+      const MIN_TAIL = 400;
+      const values: number[] = [];
+      for (let end = 0; end + MIN_TAIL <= history.length; end += SERIES_STEP) {
+        const subset = history.slice(end);
+        const n = computeSurreprNStarBothStandard(subset);
+        if (typeof n === "number" && Number.isFinite(n) && n > 0) values.push(n);
+      }
+      values.sort((a, b) => a - b);
+      if (values.length < 3) return { min: 80, max: 450 };
+      const q = (p: number) => values[Math.floor(p * (values.length - 1))]!;
+      const q20 = q(0.2);
+      const q80 = q(0.8);
+      const min = clamp(floor10(q20 - 30), 50, 450);
+      const max = clamp(ceil10(q80 + 30), 50, 450);
+      if (min >= max) return { min: 80, max: 450 };
+
+      return { min, max };
+    };
+
+    const standardNStar = computeSurreprNStarBothStandard(fullHistory);
+    if (!standardNStar) return;
+
+    const bounds = computeDynamicBounds(fullHistory);
+    const dynamicDraws = clamp(round10(standardNStar), bounds.min, bounds.max);
+
+    try {
+      const raw = localStorage.getItem(LS_POOL_WINDOW_PRESET_NUMBERS_KEY);
+      const parsed = raw ? (JSON.parse(raw) as any) : null;
+      const next = parsed && typeof parsed === "object" ? { ...parsed } : {};
+      next.surrepr = { ...(next.surrepr ?? {}), dynamicDraws };
+      localStorage.setItem(LS_POOL_WINDOW_PRESET_NUMBERS_KEY, JSON.stringify(next));
+      window.dispatchEvent(new Event(EVENT_POOL_WINDOW_PRESET_NUMBERS_CHANGED));
+
+      const oldDynamic = typeof parsed?.surrepr?.dynamicDraws === "number" ? parsed.surrepr.dynamicDraws : null;
+
+      const rawW = localStorage.getItem(LS_POOL_WINDOWS_KEY);
+      if (rawW) {
+        const w = JSON.parse(rawW) as any;
+        const sur = w?.surrepr;
+        if (
+          sur?.type === "custom" &&
+          sur?.customUnit === "draws" &&
+          typeof sur?.customValue === "number" &&
+          (oldDynamic != null ? sur.customValue === oldDynamic : false)
+        ) {
+          const updated = {
+            ...w,
+            surrepr: { ...sur, customValue: dynamicDraws },
+          };
+          localStorage.setItem(LS_POOL_WINDOWS_KEY, JSON.stringify(updated));
+          window.dispatchEvent(new Event(EVENT_POOL_WINDOWS_CHANGED));
+        }
+      }
+    } catch {
+      // no-op
+    }
+  }, [fullHistory]);
+
+  // --- TENDANCE (W,R) : valeur Dynamique (calculée automatiquement) ---
+  useEffect(() => {
+    if (!fullHistory || fullHistory.length < 450) return;
+
+    const clamp = (x: number, min: number, max: number) => Math.max(min, Math.min(max, x));
+    const round10 = (x: number) => Math.round(x / 10) * 10;
+    const floor10 = (x: number) => Math.floor(x / 10) * 10;
+    const ceil10 = (x: number) => Math.ceil(x / 10) * 10;
+    const round5 = (x: number) => Math.round(x / 5) * 5;
+
+    type Direction = -1 | 0 | 1; // baisse / stable / hausse
+
+    const labelFromRatio = (ratio: number): Direction => {
+      if (ratio > 1.2) return 1;
+      if (ratio < 0.8) return -1;
+      return 0;
+    };
+
+    const freqs = (tirages: Tirage[], kind: "balls" | "stars") => {
+      const max = kind === "balls" ? 50 : 12;
+      const f = new Array(max + 1).fill(0);
+      for (const t of tirages) {
+        const arr = kind === "balls" ? (t.numeros ?? []) : (t.etoiles ?? []);
+        for (const n of arr) if (n >= 1 && n <= max) f[n] += 1;
+      }
+      return f;
+    };
+
+    const tendanceLabels = (tirages: Tirage[], W: number, R: number, kind: "balls" | "stars") => {
+      const total = tirages.slice(0, W);
+      const recent = tirages.slice(0, R);
+      const freqTot = freqs(total, kind);
+      const freqRec = freqs(recent, kind);
+      const max = kind === "balls" ? 50 : 12;
+      const out = new Array<Direction>(max + 1).fill(0);
+      for (let num = 1; num <= max; num++) {
+        const att = W > 0 ? ((freqTot[num] ?? 0) / W) * R : 0;
+        const re = freqRec[num] ?? 0;
+        const ratio = att > 0 ? re / att : 0;
+        out[num] = labelFromRatio(ratio);
+      }
+      return out;
+    };
+
+    const concordance = (a: Direction[], b: Direction[], max: number) => {
+      let same = 0;
+      for (let i = 1; i <= max; i++) if ((a[i] ?? 0) === (b[i] ?? 0)) same++;
+      return same / max;
+    };
+
+    // Critère STANDARD Tendance:
+    // - Chercher le plus petit W (50..200 pas 10), puis le plus petit R (15..min(80,W/2) pas 5)
+    // - validité = stabilité quand on décale R (+5 puis +10), sur Boules ET Étoiles (min des concordances).
+    const computeTrendWRStarStandard = (history: Tirage[]) => {
+      const STEP_W = 10;
+      const W_MIN = 50;
+      const W_MAX = 200;
+      const R_MIN = 15;
+      const DELTA_R = 5;
+      const SEUIL = 0.82;
+
+      const total = history.length;
+      for (let W = W_MIN; W <= W_MAX && W <= total - 20; W += STEP_W) {
+        const Rmax = Math.min(80, Math.floor(W * 0.5));
+        for (let R = R_MIN; R + 10 <= Rmax && R + 10 <= W; R += DELTA_R) {
+          const bR = tendanceLabels(history, W, R, "balls");
+          const bR5 = tendanceLabels(history, W, R + 5, "balls");
+          const bR10 = tendanceLabels(history, W, R + 10, "balls");
+          const sR = tendanceLabels(history, W, R, "stars");
+          const sR5 = tendanceLabels(history, W, R + 5, "stars");
+          const sR10 = tendanceLabels(history, W, R + 10, "stars");
+          const concMin = Math.min(
+            concordance(bR, bR5, 50),
+            concordance(bR5, bR10, 50),
+            concordance(sR, sR5, 12),
+            concordance(sR5, sR10, 12),
+          );
+          if (concMin >= SEUIL) {
+            // R "milieu" (comme dans le script multi) pour représenter la zone stable
+            return { WStar: W, RStar: R + 5 };
+          }
+        }
+      }
+      return null;
+    };
+
+    const computeDynamicBounds = (history: Tirage[]) => {
+      const SERIES_STEP = 150;
+      const MIN_TAIL = 400;
+      const WVals: number[] = [];
+      const RVals: number[] = [];
+      for (let end = 0; end + MIN_TAIL <= history.length; end += SERIES_STEP) {
+        const subset = history.slice(end);
+        const p = computeTrendWRStarStandard(subset);
+        if (p?.WStar && p?.RStar) {
+          WVals.push(p.WStar);
+          RVals.push(p.RStar);
+        }
+      }
+      WVals.sort((a, b) => a - b);
+      RVals.sort((a, b) => a - b);
+      if (WVals.length < 3 || RVals.length < 3) {
+        return { W: { min: 80, max: 200 }, R: { min: 15, max: 80 } };
+      }
+      const q = (arr: number[], p: number) => arr[Math.floor(p * (arr.length - 1))]!;
+      const w20 = q(WVals, 0.2);
+      const w80 = q(WVals, 0.8);
+      const r20 = q(RVals, 0.2);
+      const r80 = q(RVals, 0.8);
+      const wMin = clamp(floor10(w20 - 10), 50, 200);
+      const wMax = clamp(ceil10(w80 + 10), 50, 200);
+      const rMin = clamp(round5(r20 - 5), 15, 80);
+      const rMax = clamp(round5(r80 + 5), 15, 80);
+      if (wMin >= wMax || rMin >= rMax) return { W: { min: 80, max: 200 }, R: { min: 15, max: 80 } };
+      return { W: { min: wMin, max: wMax }, R: { min: rMin, max: rMax } };
+    };
+
+    const standard = computeTrendWRStarStandard(fullHistory);
+    if (!standard) return;
+    const bounds = computeDynamicBounds(fullHistory);
+    const dynamicW = clamp(round10(standard.WStar), bounds.W.min, bounds.W.max);
+    const dynamicR = clamp(round5(standard.RStar), bounds.R.min, bounds.R.max);
+
+    try {
+      const raw = localStorage.getItem(LS_POOL_WINDOW_PRESET_NUMBERS_KEY);
+      const parsed = raw ? (JSON.parse(raw) as any) : null;
+      const next = parsed && typeof parsed === "object" ? { ...parsed } : {};
+      const oldW = typeof parsed?.trend?.dynamicDraws === "number" ? parsed.trend.dynamicDraws : null;
+      const oldR = typeof parsed?.trend?.dynamicTrendR === "number" ? parsed.trend.dynamicTrendR : null;
+
+      next.trend = { ...(next.trend ?? {}), dynamicDraws: dynamicW, dynamicTrendR: dynamicR };
+      localStorage.setItem(LS_POOL_WINDOW_PRESET_NUMBERS_KEY, JSON.stringify(next));
+      window.dispatchEvent(new Event(EVENT_POOL_WINDOW_PRESET_NUMBERS_CHANGED));
+
+      // Si la fenêtre Trend actuelle correspondait à l'ancien couple dynamique, on la recolle au nouveau.
+      const rawW = localStorage.getItem(LS_POOL_WINDOWS_KEY);
+      if (rawW) {
+        const w = JSON.parse(rawW) as any;
+        const t = w?.trend;
+        if (
+          t?.type === "custom" &&
+          t?.customUnit === "draws" &&
+          typeof t?.customValue === "number" &&
+          typeof t?.trendPeriodR === "number" &&
+          (oldW != null && oldR != null ? (t.customValue === oldW && t.trendPeriodR === oldR) : false)
+        ) {
+          const updated = {
+            ...w,
+            trend: { ...t, customValue: dynamicW, trendPeriodR: dynamicR },
+          };
+          localStorage.setItem(LS_POOL_WINDOWS_KEY, JSON.stringify(updated));
+          window.dispatchEvent(new Event(EVENT_POOL_WINDOWS_CHANGED));
+        }
+      }
+    } catch {
+      // no-op
+    }
+  }, [fullHistory]);
+
+  // --- DORMEUR (absence / retard) : valeur Dynamique (calculée automatiquement) ---
+  useEffect(() => {
+    if (!fullHistory || fullHistory.length < 200) return;
+
+    const clamp = (x: number, min: number, max: number) => Math.max(min, Math.min(max, x));
+    const round10 = (x: number) => Math.round(x / 10) * 10;
+
+    // Pour le Dormeur (absence depuis dernière sortie), la “fenêtre” sert surtout à éviter le cap (=N)
+    // quand un numéro/étoile n’a pas été vu dans la fenêtre. Une fenêtre “utile” est donc:
+    // - assez grande pour voir chaque élément au moins une fois (Boules + Étoiles),
+    // - mais pas inutilement gigantesque (sinon redondant).
+    const computeDormeurNStarBothStandard = (history: Tirage[]) => {
+      const maxBall = 50;
+      const maxStar = 12;
+      const seenAllWithin = (N: number) => {
+        const seenB = new Array(maxBall + 1).fill(false);
+        const seenS = new Array(maxStar + 1).fill(false);
+        const w = history.slice(0, N);
+        for (const t of w) {
+          for (const n of t.numeros ?? []) if (n >= 1 && n <= maxBall) seenB[n] = true;
+          for (const s of t.etoiles ?? []) if (s >= 1 && s <= maxStar) seenS[s] = true;
+        }
+        for (let i = 1; i <= maxBall; i++) if (!seenB[i]) return false;
+        for (let i = 1; i <= maxStar; i++) if (!seenS[i]) return false;
+        return true;
+      };
+
+      // Recherche sur une plage “raisonnable” (dormeur = présent/récent):
+      // 20..200 tirages, pas de 5. On arrondit ensuite à 10 pour rester “réglage console”.
+      for (let N = 20; N <= 200; N += 5) {
+        if (seenAllWithin(N)) return N;
+      }
+      return null;
+    };
+
+    const computeDynamicBounds = (history: Tirage[]) => {
+      const SERIES_STEP = 150;
+      const MIN_TAIL = 400;
+      const values: number[] = [];
+      for (let end = 0; end + MIN_TAIL <= history.length; end += SERIES_STEP) {
+        const subset = history.slice(end);
+        const n = computeDormeurNStarBothStandard(subset);
+        if (typeof n === "number" && Number.isFinite(n) && n > 0) values.push(n);
+      }
+      values.sort((a, b) => a - b);
+      if (values.length < 3) return { min: 40, max: 120 };
+      const q = (p: number) => values[Math.floor(p * (values.length - 1))]!;
+      const q20 = q(0.2);
+      const q80 = q(0.8);
+      const min = clamp(round10(q20 - 10), 20, 500);
+      const max = clamp(round10(q80 + 10), 20, 500);
+      if (min >= max) return { min: 40, max: 120 };
+      return { min, max };
+    };
+
+    const standardNStar = computeDormeurNStarBothStandard(fullHistory);
+    if (!standardNStar) return;
+
+    const bounds = computeDynamicBounds(fullHistory);
+    const dynamicDraws = clamp(round10(standardNStar), bounds.min, bounds.max);
+
+    try {
+      const raw = localStorage.getItem(LS_POOL_WINDOW_PRESET_NUMBERS_KEY);
+      const parsed = raw ? (JSON.parse(raw) as any) : null;
+      const next = parsed && typeof parsed === "object" ? { ...parsed } : {};
+      next.dormeur = { ...(next.dormeur ?? {}), dynamicDraws };
+      localStorage.setItem(LS_POOL_WINDOW_PRESET_NUMBERS_KEY, JSON.stringify(next));
+      window.dispatchEvent(new Event(EVENT_POOL_WINDOW_PRESET_NUMBERS_CHANGED));
+
+      const oldDynamic = typeof parsed?.dormeur?.dynamicDraws === "number" ? parsed.dormeur.dynamicDraws : null;
+      const rawW = localStorage.getItem(LS_POOL_WINDOWS_KEY);
+      if (rawW) {
+        const w = JSON.parse(rawW) as any;
+        const d = w?.dormeur;
+        if (
+          d?.type === "custom" &&
+          d?.customUnit === "draws" &&
+          typeof d?.customValue === "number" &&
+          (oldDynamic != null ? d.customValue === oldDynamic : false)
+        ) {
+          const updated = { ...w, dormeur: { ...d, customValue: dynamicDraws } };
+          localStorage.setItem(LS_POOL_WINDOWS_KEY, JSON.stringify(updated));
+          window.dispatchEvent(new Event(EVENT_POOL_WINDOWS_CHANGED));
+        }
+      }
+    } catch {
+      // no-op
+    }
+  }, [fullHistory]);
 
   // PURE MODE STATE REMOVED
   
@@ -1237,7 +1810,7 @@ export default function Console() {
           bySurrepr: [...allBalls].sort((a, b) => (b.surreprZ - a.surreprZ) || (a.number - b.number))
       };
   }, [stats, statsTrend, statsDormeur, statsSurrepr, surreprWindowCount]);
-  
+
   // Pre-calculated pools for STARS (12 numbers)
   const starPools = useMemo(() => {
       if (!stats || !statsTrend || !statsDormeur || !statsSurrepr) return null;
@@ -1279,6 +1852,13 @@ export default function Console() {
           bySurrepr: [...allStars].sort((a, b) => (b.surreprZ - a.surreprZ) || (a.number - b.number))
       };
   }, [stats, statsTrend, statsDormeur, statsSurrepr, surreprWindowCount]);
+
+  useEffect(() => {
+    if (!ballPools || !starPools) return;
+    const top3 = (arr: { number: number }[] | undefined) => (arr ?? []).slice(0, 3).map((x) => x.number);
+
+    void top3;
+  }, [ballPools, starPools]);
 
   const formatZ = (z: number) => {
     const v = Number.isFinite(z) ? z : 0;
@@ -1845,7 +2425,7 @@ export default function Console() {
                 // Mode is NOT restored from preset - it's always based on user role
                 
                 // Restore nouveaux paramètres (avec valeurs par défaut pour rétrocompatibilité)
-                if (presetData.hazardLevel !== undefined) setHazardLevel(presetData.hazardLevel);
+                if (presetData.hazardLevel !== undefined) setHazardLevel(Math.max(0, Math.min(26, presetData.hazardLevel)));
                 if (presetData.tendencyLevel !== undefined) setTendencyLevel(presetData.tendencyLevel);
                 if (presetData.emailNotify !== undefined) setEmailNotify(presetData.emailNotify);
                 if (presetData.smsNotify !== undefined) setSmsNotify(presetData.smsNotify);
@@ -2042,7 +2622,7 @@ export default function Console() {
               // Mode is NOT restored from config - it's always based on user role
               
               // Restore nouveaux paramètres (avec vérification pour rétrocompatibilité)
-              if (config.hazardLevel !== undefined) setHazardLevel(config.hazardLevel);
+              if (config.hazardLevel !== undefined) setHazardLevel(Math.max(0, Math.min(26, config.hazardLevel)));
               if (config.tendencyLevel !== undefined) setTendencyLevel(config.tendencyLevel);
               if (config.emailNotify !== undefined) setEmailNotify(config.emailNotify);
               if (config.smsNotify !== undefined) setSmsNotify(config.smsNotify);
@@ -2179,7 +2759,7 @@ export default function Console() {
             const safeHighStarStats = highStarStats || [];
             const safeDormeurStarStats = dormeurStarStats || [];
 
-            const chaosCandidateRatio = Math.min(1, Math.max(0, hazardLevel / 10)); // 0..1
+            const chaosCandidateRatio = Math.min(1, Math.max(0, hazardLevel / 26)); // 0..1 (CHAOS 0..26)
             // The user can cap the max candidate pool size per pool in Settings (Top N).
             // CHAOS then expands from a minimum baseline (10 balls / 4 stars) up to that max.
             const highCountNums = Math.max(10, Math.min(50, Math.round(10 + chaosCandidateRatio * (poolSizes.balls.high - 10))));
@@ -2208,19 +2788,11 @@ export default function Console() {
 
             // (debug logging removed)
 
-            // HAZARD SORT LOGIC
-            const hazardMultipliers = [0, 5, 10, 20, 35, 50, 75, 100, 150, 250];
-            const currentMultiplier = hazardMultipliers[hazardLevel] || 0;
-
-            // Leak Probability REMOVED
-            // const leakProbability = hazardLevel * 0.1;
-
             // Combined pools for stat-based selection:
             // IMPORTANT (user rule): the base must always be FREQUENCY (High).
             // TENDANCES must NOT mean "100% pool tendance". It only influences ordering/scoring inside the frequency pool.
             // DORMEUR is a separate pool (exploration or post-processing replacement).
-            const includeTrend = tendencyLevel > 0; // used for scoring only
-            const includeDormeur = hazardLevel > 0 || dormeurBallLevel > 0 || dormeurStarLevel > 0;
+            const includeDormeur = dormeurBallLevel > 0 || dormeurStarLevel > 0;
             const combinedNumPool = [
               ...poolHigh,
               ...(includeDormeur ? poolDormeur : []),
@@ -2230,73 +2802,101 @@ export default function Console() {
               ...(includeDormeur ? poolStarDormeur : []),
             ];
                 
-            // Get full stats for scoring (so ANY candidate has real frequency/trend values)
-            const allNumStats: DisplayStat[] = (ballPools?.byNumeric || []).map(item => ({
-                number: item.number,
-                frequency: item.frequency,
-                trendScore: item.trend,
-                trendDirection: item.trendDirection
-            }));
-            const allStarStats: DisplayStat[] = (starPools?.byNumeric || []).map(item => ({
-                number: item.number,
-                frequency: item.frequency,
-                trendScore: item.trend,
-                trendDirection: item.trendDirection
-            }));
+            // Full stats for scoring (so ANY candidate has frequency + tendance + surreprZ)
+            const allNumStats: PoolItem[] = ballPools?.byNumeric ?? [];
+            const allStarStats: PoolItem[] = starPools?.byNumeric ?? [];
 
-            // Helper to pick based on CHAOS, TENDANCES and DORMEUR
-            let loggedPickNums = false;
-            let loggedPickStars = false;
+            // Rank maps for Fréquence (used to compute F_score in [0..1])
+            const numFreqRank = new Map<number, number>();
+            const starFreqRank = new Map<number, number>();
+            (ballPools?.byFrequency ?? []).forEach((it, idx) => numFreqRank.set(it.number, idx + 1));
+            (starPools?.byFrequency ?? []).forEach((it, idx) => starFreqRank.set(it.number, idx + 1));
+            const numFreqCount = Math.max(1, ballPools?.byFrequency?.length ?? 1);
+            const starFreqCount = Math.max(1, starPools?.byFrequency?.length ?? 1);
+
+            // CHAOS 0..26 => 3×3×3 poids (F, S, T) dans {-1,0,+1}
+            const clamp = (x: number, min: number, max: number) => Math.max(min, Math.min(max, x));
+            const getChaosWeights = (chaos: number) => {
+                const c = clamp(Math.floor(chaos), 0, 26);
+                const fIdx = Math.floor(c / 9);
+                const rest = c % 9;
+                const sIdx = Math.floor(rest / 3);
+                const tIdx = rest % 3;
+                const idxToWeight = (idx: number) => (idx === 0 ? 1 : idx === 1 ? 0 : -1);
+                return { wF: idxToWeight(fIdx), wS: idxToWeight(sIdx), wT: idxToWeight(tIdx) };
+            };
+            const { wF, wS, wT } = getChaosWeights(hazardLevel);
+
+            // Coefficients (pur calcul) + garde-fou pour la Tendance
+            const aF = 1.0;
+            const aS = 0.4;
+            const aT = 0.25;
+            const cap = 0.25;
+            const tendencyW = clamp(tendencyLevel / 10, 0, 1);
+            const zCap = 2.5;
+
+            const scoreFromStat = (stat: PoolItem | undefined, isStar: boolean) => {
+                if (!stat) return Number.NEGATIVE_INFINITY;
+
+                // F_score ∈ [0..1] via rang de fréquence (1 = meilleur)
+                const rankMap = isStar ? starFreqRank : numFreqRank;
+                const rankCount = isStar ? starFreqCount : numFreqCount;
+                const rank = rankMap.get(stat.number) ?? rankCount; // fallback = pire rang
+                const denom = Math.max(1, rankCount - 1);
+                const F_score = 1 - (rank - 1) / denom;
+
+                // S_score ∈ [-1..+1] via tanh(z/zCap)
+                const z = stat.surreprZ ?? 0;
+                const S_score = Math.tanh(z / zCap);
+
+                // T_score ∈ [-1..+1] via direction × (trend/10)
+                const dir = stat.trendDirection === 'hausse' ? 1 : stat.trendDirection === 'baisse' ? -1 : 0;
+                const T_score = dir * clamp((stat.trend ?? 0) / 10, 0, 1);
+
+                const base = (aF * wF * F_score) + (aS * wS * S_score);
+                const trendRaw = (aT * tendencyW * wT * T_score);
+
+                // Cap relatif (mais robuste même si wF/wS=0)
+                const reference = Math.abs(aF * F_score) + Math.abs(aS * S_score);
+                const capAbs = cap * Math.max(0.0001, reference);
+                const trend = clamp(trendRaw, -capAbs, +capAbs);
+
+                return base + trend;
+            };
+
+            // Helper to pick based on CHAOS (scénario), TENDANCES (capée) et DORMEUR
             // Track "selection score" (finalScore) used during picks for later dormeur replacement.
             const selectionScoreNums: Record<number, number> = {};
             const selectionScoreStars: Record<number, number> = {};
-            const pickWithStats = (pool: number[], stats: typeof allNumStats, count: number, exclude: number[] = [], dormeurPool: number[] = []) => {
+            const pickWithStats = (pool: number[], stats: PoolItem[], count: number, exclude: number[] = [], dormeurPool: number[] = [], isStarContext: boolean = false) => {
                 const uniquePool = Array.from(new Set(pool)).filter(n => !exclude.includes(n));
                 
-                // Map pool numbers to their stats
+                const statByNumber = new Map(stats.map(s => [s.number, s] as const));
                 const poolWithStats = uniquePool.map(num => {
-                    const stat = stats.find(s => s.number === num);
+                    const stat = statByNumber.get(num);
                     const isDormeur = dormeurPool.includes(num);
+                    const finalScore = scoreFromStat(stat, isStarContext);
                     return {
                         num,
-                        frequency: stat?.frequency || 0,
-                        trendScore: stat?.trendScore || 0,
-                        isDormeur
+                        frequency: stat?.frequency ?? 0,
+                        trendScore: stat?.trend ?? 0,
+                        surreprZ: stat?.surreprZ ?? 0,
+                        isDormeur,
+                        finalScore
                     };
                 });
                     
-                // Sort based on CHAOS and TENDANCES
-                // - Base MUST remain frequency-first.
-                // - TENDANCES influences ordering inside close/identical frequencies (tie-break / bonus),
-                //   but must not replace frequency as the primary signal even at TENDANCES=10.
-                // Chaos réduit de moitié : max 0.5 à Chaos 10 (équilibre stats/hasard)
-                const chaosRatio = hazardLevel / 20; // 0..0.5
-                const tendanceWeight = tendencyLevel / 10; // 0..1
-
-                const poolFreqs = poolWithStats.map(it => it.frequency);
-                const poolMinFreq = poolFreqs.length ? Math.min(...poolFreqs) : 0;
-                const poolMaxFreq = poolFreqs.length ? Math.max(...poolFreqs) : 0;
-                const poolFreqRange = poolMaxFreq - poolMinFreq || 1;
-
                 const sorted = poolWithStats
-                    .map(item => {
-                        // Trend bonus bounded to <= 0.5 * freqRange at TENDANCES=10
-                        const trendBonus = (tendanceWeight * (item.trendScore / 10)) * (poolFreqRange * 0.5);
-                        // Chaos noise bounded to <= 0.5 * freqRange at CHAOS=10 (since chaosRatio max 0.5)
-                        const randomFactor = Math.random() * poolFreqRange * chaosRatio;
-                        const finalScore = item.frequency + trendBonus + randomFactor;
-                        return { ...item, finalScore };
-                    })
                     .sort((a, b) =>
                         (b.finalScore - a.finalScore) ||
-                        // deterministic fallback to reduce flicker when scores are equal
+                        // fallback deterministic (important for stabilité UI)
                         (b.frequency - a.frequency) ||
+                        (b.surreprZ - a.surreprZ) ||
                         (b.trendScore - a.trendScore) ||
                         (a.num - b.num)
                     );
 
                 const pickedSlice = sorted.slice(0, count);
-                const isStarContext = stats === allStarStats;
                 pickedSlice.forEach(s => {
                     if (isStarContext) selectionScoreStars[s.num] = s.finalScore;
                     else selectionScoreNums[s.num] = s.finalScore;
@@ -2322,13 +2922,13 @@ export default function Console() {
 
             if (!isWeightsEnabled || weightsAreZero) {
                 // --- PURE STATISTICS MODE ---
-                calculatedNums = pickWithStats(combinedNumPool, allNumStats, totalNums, [], poolDormeur).sort((a, b) => a - b);
+                calculatedNums = pickWithStats(combinedNumPool, allNumStats, totalNums, [], poolDormeur, false).sort((a, b) => a - b);
                 calculatedNums.forEach(num => {
                     calcNumSources[num] = getSourceCategory(num, false);
                 });
                 
                 // Stars: always pure stats (no dormeur forcing for stars)
-                calculatedStars = pickWithStats(combinedStarPool, allStarStats, totalStars, [], poolStarDormeur).sort((a, b) => a - b);
+                calculatedStars = pickWithStats(combinedStarPool, allStarStats, totalStars, [], poolStarDormeur, true).sort((a, b) => a - b);
                 calculatedStars.forEach(num => {
                     calcStarSources[num] = getSourceCategory(num, true);
                 });
@@ -2354,7 +2954,7 @@ export default function Console() {
                 const pickedNums: number[] = [];
                 const pickCategory = (pool: number[], count: number) => {
                     if (count <= 0) return;
-                    const chosen = pickWithStats(pool, allNumStats, count, pickedNums, poolDormeur);
+                    const chosen = pickWithStats(pool, allNumStats, count, pickedNums, poolDormeur, false);
                     chosen.forEach(n => {
                         if (!pickedNums.includes(n)) pickedNums.push(n);
                     });
@@ -2366,7 +2966,7 @@ export default function Console() {
                 // 3) Complete remaining numbers with best overall weighted picks.
                 const remainingNumsCount = totalNums - pickedNums.length;
                 if (remainingNumsCount > 0) {
-                    const extra = pickWithStats(combinedNumPool, allNumStats, remainingNumsCount, pickedNums, poolDormeur);
+                    const extra = pickWithStats(combinedNumPool, allNumStats, remainingNumsCount, pickedNums, poolDormeur, false);
                     extra.forEach(n => {
                         if (!pickedNums.includes(n)) pickedNums.push(n);
                     });
@@ -2391,7 +2991,7 @@ export default function Console() {
                 const pickedStars: number[] = [];
                 const pickStarCategory = (pool: number[], count: number) => {
                     if (count <= 0) return;
-                    const chosen = pickWithStats(pool, allStarStats, count, pickedStars, poolStarDormeur);
+                    const chosen = pickWithStats(pool, allStarStats, count, pickedStars, poolStarDormeur, true);
                     chosen.forEach(n => {
                         if (!pickedStars.includes(n)) pickedStars.push(n);
                     });
@@ -2402,7 +3002,7 @@ export default function Console() {
 
                 const remainingStarsCount = totalStars - pickedStars.length;
                 if (remainingStarsCount > 0) {
-                    const extraStars = pickWithStats(combinedStarPool, allStarStats, remainingStarsCount, pickedStars, poolStarDormeur);
+                    const extraStars = pickWithStats(combinedStarPool, allStarStats, remainingStarsCount, pickedStars, poolStarDormeur, true);
                     extraStars.forEach(n => {
                         if (!pickedStars.includes(n)) pickedStars.push(n);
                     });
@@ -4127,13 +4727,19 @@ export default function Console() {
                                         label="" 
                                         value={hazardLevel} 
                                         onChange={(v) => { setHazardLevel(v); playSound('knob'); }} 
-                                        max={10} 
+                                        max={26} 
                                         size="xl"
                                         knobColor="border-amber-700 shadow-[0_0_15px_rgba(180,83,9,0.3)] bg-zinc-900"
                                         indicatorColor="bg-amber-600"
                                         labelClassName="hidden"
                                         valueClassName="text-amber-500"
                                     />
+                                </div>
+                                <div
+                                    className="h-4 -mt-3 flex items-center justify-center w-full text-center font-mono text-[11px] tracking-wider text-amber-400/90 select-none"
+                                    title={`Scénario CHAOS: ${chaosLabel}`}
+                                >
+                                    {chaosLabel}
                                 </div>
                             </div>
 
@@ -4613,108 +5219,6 @@ export default function Console() {
             lastDrawDate={dernierTirage && dernierTirage.date && !isNaN(new Date(dernierTirage.date).getTime()) ? format(new Date(dernierTirage.date), 'yyyy-MM-dd') : '...'}
             totalDraws={stats ? 1899 : 0} 
         />
-
-        {/* SETTINGS MODAL */}
-        {isSettingsOpen && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
-                <div className="bg-zinc-900 border border-zinc-700 rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col">
-                    <div className="p-6 border-b border-zinc-800 flex justify-between items-center bg-zinc-950/50">
-                        <div className="flex items-center gap-3">
-                            <Settings className="text-casino-gold" size={24} />
-                            <h2 className="text-2xl font-orbitron text-white tracking-widest">PARAMÈTRES</h2>
-                        </div>
-                        <button onClick={() => setIsSettingsOpen(false)} className="text-zinc-500 hover:text-white transition-colors">
-                            <div className="bg-zinc-800 rounded-full p-1 hover:bg-zinc-700">
-                                <Minus size={20} className="rotate-45" /> {/* Close Icon */}
-                            </div>
-                        </button>
-                    </div>
-                    
-                    <div className="p-6 space-y-8">
-                        {/* SECTION: FREQUENCY CYCLE */}
-                        <div className="space-y-4">
-                            <h3 className="text-lg font-bold text-casino-gold flex items-center gap-2">
-                                <Calendar size={18} />
-                                CYCLE DE CALCUL DES FRÉQUENCES
-                            </h3>
-                            <div className="bg-black/40 p-4 rounded-xl border border-zinc-800 space-y-3">
-                                <p className="text-zinc-400 text-sm mb-4">
-                                    Définissez la période historique utilisée pour calculer les fréquences (Chaud/Froid) et les tendances.
-                                </p>
-                                
-                                {/* Option 1: Full History */}
-                                <label className="flex items-center gap-3 cursor-pointer group p-2 rounded hover:bg-white/5 transition-colors">
-                                    <div className={cn("w-5 h-5 rounded-full border-2 flex items-center justify-center", freqConfig.type === 'all' ? "border-casino-gold" : "border-zinc-600")}>
-                                        {freqConfig.type === 'all' && <div className="w-2.5 h-2.5 bg-casino-gold rounded-full" />}
-                                    </div>
-                                    <input type="radio" className="hidden" checked={freqConfig.type === 'all'} onChange={() => setFreqConfig({ type: 'all' })} />
-                                    <span className={cn("font-bold", freqConfig.type === 'all' ? "text-white" : "text-zinc-500")}>Historique Complet (2004 - Aujourd'hui)</span>
-                                </label>
-
-                                {/* Option 2: Last Year */}
-                                <label className="flex items-center gap-3 cursor-pointer group p-2 rounded hover:bg-white/5 transition-colors">
-                                    <div className={cn("w-5 h-5 rounded-full border-2 flex items-center justify-center", freqConfig.type === 'last_year' ? "border-casino-gold" : "border-zinc-600")}>
-                                        {freqConfig.type === 'last_year' && <div className="w-2.5 h-2.5 bg-casino-gold rounded-full" />}
-                                    </div>
-                                    <input type="radio" className="hidden" checked={freqConfig.type === 'last_year'} onChange={() => setFreqConfig({ type: 'last_year' })} />
-                                    <span className={cn("font-bold", freqConfig.type === 'last_year' ? "text-white" : "text-zinc-500")}>Dernière Année (52 semaines)</span>
-                                </label>
-
-                                {/* Option 3: Last 20 Draws */}
-                                <label className="flex items-center gap-3 cursor-pointer group p-2 rounded hover:bg-white/5 transition-colors">
-                                    <div className={cn("w-5 h-5 rounded-full border-2 flex items-center justify-center", freqConfig.type === 'last_20' ? "border-casino-gold" : "border-zinc-600")}>
-                                        {freqConfig.type === 'last_20' && <div className="w-2.5 h-2.5 bg-casino-gold rounded-full" />}
-                                    </div>
-                                    <input type="radio" className="hidden" checked={freqConfig.type === 'last_20'} onChange={() => setFreqConfig({ type: 'last_20' })} />
-                                    <span className={cn("font-bold", freqConfig.type === 'last_20' ? "text-white" : "text-zinc-500")}>20 Derniers Tirages (Tendance Court Terme)</span>
-                                </label>
-
-                                {/* Option 4: Custom */}
-                                <div className="space-y-3">
-                                    <label className="flex items-center gap-3 cursor-pointer group p-2 rounded hover:bg-white/5 transition-colors">
-                                        <div className={cn("w-5 h-5 rounded-full border-2 flex items-center justify-center", freqConfig.type === 'custom' ? "border-casino-gold" : "border-zinc-600")}>
-                                            {freqConfig.type === 'custom' && <div className="w-2.5 h-2.5 bg-casino-gold rounded-full" />}
-                                        </div>
-                                        <input type="radio" className="hidden" checked={freqConfig.type === 'custom'} onChange={() => setFreqConfig({ ...freqConfig, type: 'custom', customValue: freqConfig.customValue || 10, customUnit: freqConfig.customUnit || 'weeks' })} />
-                                        <span className={cn("font-bold", freqConfig.type === 'custom' ? "text-white" : "text-zinc-500")}>Période Personnalisée</span>
-                                    </label>
-                                    
-                                    {freqConfig.type === 'custom' && (
-                                        <div className="ml-8 flex items-center gap-2 bg-black/20 p-2 rounded border border-zinc-700 animate-in fade-in slide-in-from-top-2">
-                                            <span className="text-zinc-400 text-sm">Derniers</span>
-                                            <input 
-                                                type="number" 
-                                                min="1" 
-                                                max="1000"
-                                                value={freqConfig.customValue || ''} 
-                                                onChange={(e) => setFreqConfig({ ...freqConfig, customValue: parseInt(e.target.value) || 1 })}
-                                                className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 w-20 text-center text-white font-mono focus:border-casino-gold outline-none"
-                                            />
-                                            <select 
-                                                value={freqConfig.customUnit || 'weeks'}
-                                                onChange={(e) => setFreqConfig({ ...freqConfig, customUnit: e.target.value as PeriodUnit })}
-                                                className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-white focus:border-casino-gold outline-none"
-                                            >
-                                                <option value="weeks">Semaines</option>
-                                                <option value="months">Mois</option>
-                                                <option value="years">Années</option>
-                                                <option value="draws">Tirages</option>
-                                            </select>
-                                        </div>
-                                    )}
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div className="p-6 border-t border-zinc-800 bg-zinc-950/50 flex justify-end">
-                        <CasinoButton onClick={() => setIsSettingsOpen(false)} variant="primary" size="lg" className="px-8">
-                            FERMER & APPLIQUER
-                        </CasinoButton>
-                    </div>
-                </div>
-            </div>
-        )}
 
         </div>
       </div>

@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useLocation } from "wouter";
 import { CasinoLayout } from "@/components/layout/CasinoLayout";
 import { CasinoButton } from "@/components/casino/CasinoButton";
@@ -108,23 +108,11 @@ const CountdownTimer = () => {
 
 export default function Login() {
   const [, setLocation] = useLocation();
-  const { login, register, allUsers } = useUser();
-  const [username, setUsername] = useState("AntoAbso");
-  const [password, setPassword] = useState("AntoAbso");
-  const [selectedPresetUser, setSelectedPresetUser] = useState("");
-
-  useEffect(() => {
-    if (selectedPresetUser) {
-        setUsername(selectedPresetUser);
-        if (selectedPresetUser === "Guest123") {
-            setPassword("guest");
-        } else if (selectedPresetUser === "AntoAbso") {
-            setPassword("AntoAbso");
-        } else {
-            setPassword("");
-        }
-    }
-  }, [selectedPresetUser]);
+  const { login, register } = useUser();
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const usernameInputRef = useRef<HTMLInputElement | null>(null);
+  const passwordInputRef = useRef<HTMLInputElement | null>(null);
   
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -138,6 +126,14 @@ export default function Login() {
   const [lastDraw, setLastDraw] = useState<Tirage | null>(null);
   const [updateNeeded, setUpdateNeeded] = useState(false);
   const [updateMessage, setUpdateMessage] = useState("");
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!username && !password) return;
+  }, [username, password, isRegistering]);
 
   useEffect(() => {
     const loadDraw = async () => {
@@ -330,24 +326,16 @@ export default function Login() {
             {!isRegistering ? (
               <form onSubmit={handleLogin} className="space-y-4">
                 <div className="space-y-1">
-                  <label className="text-xs font-orbitron text-casino-gold uppercase tracking-widest">Accès Rapide</label>
-                  <select 
-                    value={selectedPresetUser}
-                    onChange={(e) => setSelectedPresetUser(e.target.value)}
-                    className="w-full bg-black/80 border border-zinc-600 rounded-lg p-3 text-base text-white font-rajdhani focus:border-casino-gold focus:ring-1 focus:ring-casino-gold outline-none transition-all cursor-pointer"
-                  >
-                    <option value="">-- Choisir un compte --</option>
-                    <option value="AntoAbso">AntoAbso (Admin)</option>
-                    <option value="Guest123">Guest123 (Invité)</option>
-                  </select>
-                </div>
-
-                <div className="space-y-1">
                   <label className="text-xs font-orbitron text-casino-gold uppercase tracking-widest">Identifiant</label>
                   <input 
                     type="text" 
+                    name="username"
+                    autoComplete="username"
+                    ref={usernameInputRef}
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
+                    onFocus={() => {
+                    }}
                     className="w-full bg-black/80 border border-zinc-600 rounded-lg p-3 text-base text-white font-rajdhani focus:border-casino-gold focus:ring-1 focus:ring-casino-gold outline-none transition-all"
                     placeholder="Votre identifiant"
                   />
@@ -358,8 +346,13 @@ export default function Login() {
                   <div className="relative">
                     <input 
                       type={showPassword ? "text" : "password"} 
+                      name="password"
+                      autoComplete="current-password"
+                      ref={passwordInputRef}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
+                      onFocus={() => {
+                      }}
                       className="w-full bg-black/80 border border-zinc-600 rounded-lg p-3 text-base text-white font-rajdhani focus:border-casino-gold focus:ring-1 focus:ring-casino-gold outline-none transition-all pr-11"
                       placeholder="••••••••"
                     />
@@ -397,10 +390,12 @@ export default function Login() {
                   <label className="text-xs font-orbitron text-casino-gold uppercase tracking-widest">Identifiant</label>
                   <input 
                     type="text" 
+                    name="username"
+                    autoComplete="username"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     className="w-full bg-black/80 border border-zinc-600 rounded-lg p-3 text-base text-white font-rajdhani focus:border-casino-gold focus:ring-1 focus:ring-casino-gold outline-none transition-all"
-                    placeholder="Choisissez un pseudo"
+                    placeholder="Le pseudo sera demandé pour la connexion"
                     required
                   />
                 </div>
@@ -422,6 +417,8 @@ export default function Login() {
                   <div className="relative">
                     <input 
                       type={showPassword ? "text" : "password"} 
+                      name="new-password"
+                      autoComplete="new-password"
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       className="w-full bg-black/80 border border-zinc-600 rounded-lg p-3 text-base text-white font-rajdhani focus:border-casino-gold focus:ring-1 focus:ring-casino-gold outline-none transition-all pr-11"
@@ -443,6 +440,8 @@ export default function Login() {
                   <div className="relative">
                     <input 
                       type={showConfirmPassword ? "text" : "password"} 
+                      name="confirm-password"
+                      autoComplete="new-password"
                       value={confirmPassword}
                       onChange={(e) => setConfirmPassword(e.target.value)}
                       className="w-full bg-black/80 border border-zinc-600 rounded-lg p-3 text-base text-white font-rajdhani focus:border-casino-gold focus:ring-1 focus:ring-casino-gold outline-none transition-all pr-11"
@@ -470,7 +469,7 @@ export default function Login() {
                         ? 'border-red-500 focus:border-red-500 focus:ring-1 focus:ring-red-500' 
                         : 'border-zinc-600 focus:border-casino-gold focus:ring-1 focus:ring-casino-gold'
                     }`}
-                    placeholder="CODE À 6 CARACTÈRES"
+                    placeholder="CODE VIP/INVITÉ"
                     maxLength={6}
                     required
                   />
@@ -522,7 +521,8 @@ export default function Login() {
                   {lastDraw.numeros.map((n) => (
                     <LottoBall key={`n-${n}`} number={n} size="md" />
                   ))}
-                  <div className="w-px bg-zinc-600 mx-1" />
+                  {/* Spacer (remplace le séparateur vertical) */}
+                  <div className="w-px mx-1" />
                   {lastDraw.etoiles.map((n) => (
                     <LottoBall key={`s-${n}`} number={n} isStar size="md" />
                   ))}

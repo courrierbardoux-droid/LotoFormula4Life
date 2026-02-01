@@ -11,6 +11,7 @@ const EVENT_POOL_SIZES_CHANGED = "loto:poolSizesChanged";
 const LS_POOL_WINDOWS_KEY = "loto_poolWindows_v1";
 const EVENT_POOL_WINDOWS_CHANGED = "loto:poolWindowsChanged";
 const LS_POOL_WINDOW_PRESET_NUMBERS_KEY = "loto_poolWindowPresetNumbers_v1";
+const EVENT_POOL_WINDOW_PRESET_NUMBERS_CHANGED = "loto:poolWindowPresetNumbersChanged";
 
 function safeParseFreqConfig(raw: string | null): FrequencyConfig | null {
   if (!raw) return null;
@@ -33,11 +34,47 @@ export type SettingsMode = "all" | "pools" | "windows";
 export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
   type PoolKey = "high" | "surrepr" | "trend" | "dormeur";
   type PoolWindowsConfig = { high: FrequencyConfig; surrepr: FrequencyConfig; trend: TrendWindowConfig; dormeur: FrequencyConfig };
-  type WindowPreset = "recent25" | "general70" | "years3" | "years10" | "all" | "custom";
-  type PresetNumberKey = "recentDraws" | "generalDraws" | "yearsShort" | "yearsLong";
+  type WindowPreset =
+    | "strict"
+    | "standard"
+    | "souple"
+    | "dynamic"
+    | "all"
+    | "custom";
+  type PresetNumberKey =
+    | "strictDraws"
+    | "standardDraws"
+    | "soupleDraws"
+    | "dynamicDraws"
+    // Tendance: période récente R (tirages) associée aux presets Strict/Standard/Souple/Dynamique
+    | "strictTrendR"
+    | "standardTrendR"
+    | "soupleTrendR"
+    | "dynamicTrendR"
+    | "yearsShort"
+    | "yearsLong";
   type PoolWindowPresetNumbers = Record<PoolKey, Record<PresetNumberKey, number>>;
   type SaveStatus = "saved" | "dirty";
   type SavePulseSource = "apply" | "preset" | "change";
+
+  const approxTimeFromDraws = (draws: number) => {
+    // EuroMillions: ~2 tirages/semaine => 1 tirage ≈ 3,5 jours.
+    // On affiche une estimation lisible uniquement si >= ~1 an.
+    const d = Math.max(0, Math.trunc(draws));
+    const days = d * 3.5;
+    if (days < 365) return null;
+    const years = Math.floor(days / 365);
+    const remDaysAfterYears = days - years * 365;
+    const months = Math.floor(remDaysAfterYears / 30);
+    const remDaysAfterMonths = remDaysAfterYears - months * 30;
+    const weeks = Math.floor(remDaysAfterMonths / 7);
+    const parts: string[] = [];
+    if (years > 0) parts.push(`${years} an${years > 1 ? "s" : ""}`);
+    if (months > 0) parts.push(`${months} mois`);
+    if (years === 0 && weeks > 0) parts.push(`${weeks} sem`);
+    if (parts.length === 0) return null;
+    return `≈ ${parts.join(" ")}`;
+  };
 
   const describeWindow = (cfg: FrequencyConfig | TrendWindowConfig) => {
     if (cfg.type === "all") return "Complet (2004 → aujourd'hui)";
@@ -55,10 +92,21 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
   };
 
   const defaultPresetNumbers: PoolWindowPresetNumbers = {
-    high: { recentDraws: 25, generalDraws: 70, yearsShort: 3, yearsLong: 10 },
-    surrepr: { recentDraws: 25, generalDraws: 70, yearsShort: 3, yearsLong: 10 },
-    trend: { recentDraws: 25, generalDraws: 70, yearsShort: 3, yearsLong: 10 },
-    dormeur: { recentDraws: 25, generalDraws: 70, yearsShort: 3, yearsLong: 10 },
+    // High (Fréquences) — presets dédiés (tirages)
+    // Strict / Standard / Souple sont modifiables, Dynamique est calculé automatiquement.
+    high: { strictDraws: 1150, standardDraws: 680, soupleDraws: 430, dynamicDraws: 680, strictTrendR: 0, standardTrendR: 0, soupleTrendR: 0, dynamicTrendR: 0, yearsShort: 3, yearsLong: 10 },
+    // Surreprésentation (z-score) — "courte utile"
+    // - Strict / Standard stabilisent Boules+Étoiles
+    // - Souple accepte plus de mouvement (plus réactif)
+    // - Dynamique se recalcule après MAJ d'historique
+    surrepr: { strictDraws: 430, standardDraws: 420, soupleDraws: 170, dynamicDraws: 420, strictTrendR: 0, standardTrendR: 0, soupleTrendR: 0, dynamicTrendR: 0, yearsShort: 3, yearsLong: 10 },
+    // Tendance (W,R) — presets dédiés (tirages)
+    // - W = fenêtre totale (référence)
+    // - R = période récente comparée à W
+    // - Dynamique se recalcule après MAJ d'historique
+    trend: { strictDraws: 150, standardDraws: 140, soupleDraws: 100, dynamicDraws: 140, strictTrendR: 70, standardTrendR: 65, soupleTrendR: 45, dynamicTrendR: 65, yearsShort: 3, yearsLong: 10 },
+    // Dormeur (retard / absence) — fenêtre "utile" = assez grande pour éviter les caps/ties (tous vus au moins une fois)
+    dormeur: { strictDraws: 90, standardDraws: 60, soupleDraws: 40, dynamicDraws: 60, strictTrendR: 0, standardTrendR: 0, soupleTrendR: 0, dynamicTrendR: 0, yearsShort: 3, yearsLong: 10 },
   };
 
   const safeParsePresetNumbers = (raw: string | null): PoolWindowPresetNumbers | null => {
@@ -70,8 +118,14 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
       for (const k of keys) {
         const v = obj?.[k] as Partial<Record<PresetNumberKey, unknown>> | undefined;
         out[k] = {
-          recentDraws: clampInt(v?.recentDraws, 1, 5000, defaultPresetNumbers[k].recentDraws),
-          generalDraws: clampInt(v?.generalDraws, 1, 5000, defaultPresetNumbers[k].generalDraws),
+          strictDraws: clampInt(v?.strictDraws, 1, 5000, defaultPresetNumbers[k].strictDraws),
+          standardDraws: clampInt(v?.standardDraws, 1, 5000, defaultPresetNumbers[k].standardDraws),
+          soupleDraws: clampInt(v?.soupleDraws, 1, 5000, defaultPresetNumbers[k].soupleDraws),
+          dynamicDraws: clampInt(v?.dynamicDraws, 1, 5000, defaultPresetNumbers[k].dynamicDraws),
+          strictTrendR: clampInt(v?.strictTrendR, 5, 500, defaultPresetNumbers[k].strictTrendR),
+          standardTrendR: clampInt(v?.standardTrendR, 5, 500, defaultPresetNumbers[k].standardTrendR),
+          soupleTrendR: clampInt(v?.soupleTrendR, 5, 500, defaultPresetNumbers[k].soupleTrendR),
+          dynamicTrendR: clampInt(v?.dynamicTrendR, 5, 500, defaultPresetNumbers[k].dynamicTrendR),
           yearsShort: clampInt(v?.yearsShort, 1, 100, defaultPresetNumbers[k].yearsShort),
           yearsLong: clampInt(v?.yearsLong, 1, 100, defaultPresetNumbers[k].yearsLong),
         };
@@ -87,6 +141,21 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
     return existing ?? defaultPresetNumbers;
   });
 
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const handler = () => {
+      const existing = safeParsePresetNumbers(localStorage.getItem(LS_POOL_WINDOW_PRESET_NUMBERS_KEY));
+      if (existing) {
+        setPresetNumbers(existing);
+      }
+    };
+    window.addEventListener(EVENT_POOL_WINDOW_PRESET_NUMBERS_CHANGED, handler as EventListener);
+    return () => window.removeEventListener(EVENT_POOL_WINDOW_PRESET_NUMBERS_CHANGED, handler as EventListener);
+  }, []);
+
   // Save status is now for "Taille des pools" only (Tableau 2).
   // "Fenêtre de calcul" (Tableau 1) is auto-applied on change.
   const [poolSizesSaveStatus, setPoolSizesSaveStatus] = useState<SaveStatus>("saved");
@@ -94,39 +163,75 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
   const [poolSizesSavePulseSource, setPoolSizesSavePulseSource] = useState<SavePulseSource>("apply");
 
   const defaultPoolWindows: PoolWindowsConfig = {
-    high: { type: "custom", customUnit: "draws", customValue: 25 },
+    high: { type: "custom", customUnit: "draws", customValue: 680 },
     surrepr: { type: "custom", customUnit: "draws", customValue: 25 },
-    trend: { type: "custom", customUnit: "draws", customValue: 160, trendPeriodR: 65 },
-    dormeur: { type: "custom", customUnit: "years", customValue: 3 },
+    trend: { type: "custom", customUnit: "draws", customValue: 140, trendPeriodR: 65 },
+    dormeur: { type: "custom", customUnit: "draws", customValue: 60 },
   };
 
-  const presetToWindow = (k: PoolKey, p: WindowPreset): FrequencyConfig => {
+  const presetToWindow = (k: PoolKey, p: WindowPreset): PoolWindowsConfig[PoolKey] => {
     const nums = presetNumbers[k];
-    if (p === "recent25") return { type: "custom", customUnit: "draws", customValue: nums.recentDraws };
-    if (p === "general70") return { type: "custom", customUnit: "draws", customValue: nums.generalDraws };
-    if (p === "years3") return { type: "custom", customUnit: "years", customValue: nums.yearsShort };
-    if (p === "years10") return { type: "custom", customUnit: "years", customValue: nums.yearsLong };
+    if (k === "high" || k === "surrepr") {
+      if (p === "strict") return { type: "custom", customUnit: "draws", customValue: nums.strictDraws };
+      if (p === "standard") return { type: "custom", customUnit: "draws", customValue: nums.standardDraws };
+      if (p === "souple") return { type: "custom", customUnit: "draws", customValue: nums.soupleDraws };
+      if (p === "dynamic") return { type: "custom", customUnit: "draws", customValue: nums.dynamicDraws };
+    }
+    if (k === "trend") {
+      if (p === "strict") return { type: "custom", customUnit: "draws", customValue: nums.strictDraws, trendPeriodR: nums.strictTrendR };
+      if (p === "standard") return { type: "custom", customUnit: "draws", customValue: nums.standardDraws, trendPeriodR: nums.standardTrendR };
+      if (p === "souple") return { type: "custom", customUnit: "draws", customValue: nums.soupleDraws, trendPeriodR: nums.soupleTrendR };
+      if (p === "dynamic") return { type: "custom", customUnit: "draws", customValue: nums.dynamicDraws, trendPeriodR: nums.dynamicTrendR };
+    }
+    if (k === "dormeur") {
+      if (p === "strict") return { type: "custom", customUnit: "draws", customValue: nums.strictDraws };
+      if (p === "standard") return { type: "custom", customUnit: "draws", customValue: nums.standardDraws };
+      if (p === "souple") return { type: "custom", customUnit: "draws", customValue: nums.soupleDraws };
+      if (p === "dynamic") return { type: "custom", customUnit: "draws", customValue: nums.dynamicDraws };
+    }
     if (p === "all") return { type: "all" };
     return { type: "custom", customUnit: "draws", customValue: 50 };
   };
 
-  const presetToWindowFromNumbers = (nums: Record<PresetNumberKey, number>, p: WindowPreset): FrequencyConfig => {
-    if (p === "recent25") return { type: "custom", customUnit: "draws", customValue: nums.recentDraws };
-    if (p === "general70") return { type: "custom", customUnit: "draws", customValue: nums.generalDraws };
-    if (p === "years3") return { type: "custom", customUnit: "years", customValue: nums.yearsShort };
-    if (p === "years10") return { type: "custom", customUnit: "years", customValue: nums.yearsLong };
+  const presetToWindowFromNumbers = (k: PoolKey, nums: Record<PresetNumberKey, number>, p: WindowPreset): PoolWindowsConfig[PoolKey] => {
+    // NOTE: cette fonction est utilisée pour recalculer la fenêtre active quand on modifie un chiffre.
+    if (k === "trend") {
+      if (p === "strict") return { type: "custom", customUnit: "draws", customValue: nums.strictDraws, trendPeriodR: nums.strictTrendR };
+      if (p === "standard") return { type: "custom", customUnit: "draws", customValue: nums.standardDraws, trendPeriodR: nums.standardTrendR };
+      if (p === "souple") return { type: "custom", customUnit: "draws", customValue: nums.soupleDraws, trendPeriodR: nums.soupleTrendR };
+      if (p === "dynamic") return { type: "custom", customUnit: "draws", customValue: nums.dynamicDraws, trendPeriodR: nums.dynamicTrendR };
+    }
+    if (p === "strict") return { type: "custom", customUnit: "draws", customValue: nums.strictDraws };
+    if (p === "standard") return { type: "custom", customUnit: "draws", customValue: nums.standardDraws };
+    if (p === "souple") return { type: "custom", customUnit: "draws", customValue: nums.soupleDraws };
+    if (p === "dynamic") return { type: "custom", customUnit: "draws", customValue: nums.dynamicDraws };
     if (p === "all") return { type: "all" };
     return { type: "custom", customUnit: "draws", customValue: 50 };
   };
 
-  const windowToPreset = (k: PoolKey, cfg: FrequencyConfig): WindowPreset => {
+  const windowToPreset = (k: PoolKey, cfg: FrequencyConfig | TrendWindowConfig): WindowPreset => {
     const nums = presetNumbers[k];
     if (cfg.type === "all") return "all";
     if (cfg.type === "custom") {
-      if (cfg.customUnit === "draws" && cfg.customValue === nums.recentDraws) return "recent25";
-      if (cfg.customUnit === "draws" && cfg.customValue === nums.generalDraws) return "general70";
-      if (cfg.customUnit === "years" && cfg.customValue === nums.yearsShort) return "years3";
-      if (cfg.customUnit === "years" && cfg.customValue === nums.yearsLong) return "years10";
+      if ((k === "high" || k === "surrepr") && cfg.customUnit === "draws") {
+        if (cfg.customValue === nums.strictDraws) return "strict";
+        if (cfg.customValue === nums.standardDraws) return "standard";
+        if (cfg.customValue === nums.soupleDraws) return "souple";
+        if (cfg.customValue === nums.dynamicDraws) return "dynamic";
+      }
+      if (k === "trend" && cfg.customUnit === "draws") {
+        const r = (cfg as TrendWindowConfig).trendPeriodR ?? null;
+        if (cfg.customValue === nums.strictDraws && r === nums.strictTrendR) return "strict";
+        if (cfg.customValue === nums.standardDraws && r === nums.standardTrendR) return "standard";
+        if (cfg.customValue === nums.soupleDraws && r === nums.soupleTrendR) return "souple";
+        if (cfg.customValue === nums.dynamicDraws && r === nums.dynamicTrendR) return "dynamic";
+      }
+      if (k === "dormeur" && cfg.customUnit === "draws") {
+        if (cfg.customValue === nums.strictDraws) return "strict";
+        if (cfg.customValue === nums.standardDraws) return "standard";
+        if (cfg.customValue === nums.soupleDraws) return "souple";
+        if (cfg.customValue === nums.dynamicDraws) return "dynamic";
+      }
     }
     return "custom";
   };
@@ -165,10 +270,6 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
 
   // AUTO-APPLY (Tableau 1): on persiste et on notifie dès que la fenêtre change.
   useEffect(() => {
-    // Fenêtre de calcul "legacy" = fenêtre High (fréquences) pour compat avec la Console
-    localStorage.setItem(LS_FREQ_CONFIG_KEY, JSON.stringify(poolWindows.high));
-    window.dispatchEvent(new Event(EVENT_FREQ_CONFIG_CHANGED));
-
     localStorage.setItem(LS_POOL_WINDOWS_KEY, JSON.stringify(poolWindows));
     window.dispatchEvent(new Event(EVENT_POOL_WINDOWS_CHANGED));
   }, [poolWindows]);
@@ -179,6 +280,9 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
     trend: windowToPreset("trend", poolWindows.trend),
     dormeur: windowToPreset("dormeur", poolWindows.dormeur),
   }));
+
+  useEffect(() => {
+  }, [poolWindowPresets.surrepr, presetNumbers.surrepr?.dynamicDraws, presetNumbers.surrepr?.standardDraws]);
 
   type PoolSizeConfig = {
     balls: { high: number; trend: number; dormeur: number };
@@ -235,12 +339,15 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
 
   const persistPresetNumbers = (next: PoolWindowPresetNumbers) => {
     localStorage.setItem(LS_POOL_WINDOW_PRESET_NUMBERS_KEY, JSON.stringify(next));
+    window.dispatchEvent(new Event(EVENT_POOL_WINDOW_PRESET_NUMBERS_CHANGED));
   };
 
   const commitPresetNumber = (k: PoolKey, key: PresetNumberKey, nextValue: number) => {
     const sanitized =
       key === "yearsShort" || key === "yearsLong"
         ? clampInt(nextValue, 1, 100, presetNumbers[k][key])
+        : key === "strictTrendR" || key === "standardTrendR" || key === "soupleTrendR" || key === "dynamicTrendR"
+          ? clampInt(nextValue, 5, 500, presetNumbers[k][key])
         : clampInt(nextValue, 1, 5000, presetNumbers[k][key]);
 
     setPresetNumbers((prev) => {
@@ -255,11 +362,27 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
     // Si le preset modifié est celui actuellement sélectionné, on met aussi à jour la fenêtre active.
     const selected = poolWindowPresets[k];
     const editedPreset: WindowPreset =
-      key === "recentDraws" ? "recent25" : key === "generalDraws" ? "general70" : key === "yearsShort" ? "years3" : "years10";
+      key === "strictDraws"
+        ? "strict"
+        : key === "standardDraws"
+          ? "standard"
+          : key === "soupleDraws"
+            ? "souple"
+            : key === "dynamicDraws"
+              ? "dynamic"
+              : key === "strictTrendR"
+                ? "strict"
+                : key === "standardTrendR"
+                  ? "standard"
+                  : key === "soupleTrendR"
+                    ? "souple"
+                    : key === "dynamicTrendR"
+                      ? "dynamic"
+                      : "custom";
     if (selected === editedPreset) {
       // IMPORTANT: presetNumbers (state) n'est pas encore à jour ici -> on calcule avec la valeur saisie.
       const nextNums: Record<PresetNumberKey, number> = { ...presetNumbers[k], [key]: sanitized };
-      const windowComputed = presetToWindowFromNumbers(nextNums, selected);
+      const windowComputed = presetToWindowFromNumbers(k, nextNums, selected);
       setPoolWindows((prev) => ({ ...prev, [k]: windowComputed }));
     }
 
@@ -374,22 +497,49 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
                         <div key={`pool-window-${k}`} className="border border-zinc-800 rounded-lg p-4">
                           <div className="text-white font-rajdhani text-lg">{title}</div>
                           <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2">
-                            {(k === "dormeur"
+                            {(k === "high"
                               ? [
-                                  { id: "years3", label: "ansShort" as const },
-                                  { id: "years10", label: "ansLong" as const },
-                                  { id: "all", label: "Complet (2004 → aujourd'hui)" },
-                                  { id: "custom", label: "Autre / Custom" },
+                                  { id: "strict", presetKey: "strictDraws" as const },
+                                  { id: "standard", presetKey: "standardDraws" as const },
+                                  { id: "souple", presetKey: "soupleDraws" as const },
+                                  { id: "dynamic", presetKey: "dynamicDraws" as const },
+                                  { id: "all", presetKey: null },
+                                  { id: "custom", presetKey: null },
                                 ]
-                              : [
-                                  { id: "recent25", label: "recentDraws" as const },
-                                  { id: "general70", label: "generalDraws" as const },
-                                  { id: "years3", label: "yearsShort" as const },
-                                  { id: "years10", label: "yearsLong" as const },
-                                  { id: "all", label: "Complet (2004 → aujourd'hui)" },
-                                  { id: "custom", label: "Autre / Custom" },
-                                ]
-                            ).map((opt) => (
+                              : k === "surrepr"
+                                ? [
+                                    { id: "strict", presetKey: "strictDraws" as const },
+                                    { id: "standard", presetKey: "standardDraws" as const },
+                                    { id: "souple", presetKey: "soupleDraws" as const },
+                                    { id: "dynamic", presetKey: "dynamicDraws" as const },
+                                    { id: "all", presetKey: null },
+                                    { id: "custom", presetKey: null },
+                                  ]
+                              : k === "trend"
+                                ? [
+                                    { id: "strict", presetKey: "strictDraws" as const },
+                                    { id: "standard", presetKey: "standardDraws" as const },
+                                    { id: "souple", presetKey: "soupleDraws" as const },
+                                    { id: "dynamic", presetKey: "dynamicDraws" as const },
+                                    { id: "all", presetKey: null },
+                                    { id: "custom", presetKey: null },
+                                  ]
+                              : k === "dormeur"
+                                ? [
+                                    { id: "strict", presetKey: "strictDraws" as const },
+                                    { id: "standard", presetKey: "standardDraws" as const },
+                                    { id: "souple", presetKey: "soupleDraws" as const },
+                                    { id: "dynamic", presetKey: "dynamicDraws" as const },
+                                    { id: "all", presetKey: null },
+                                    { id: "custom", presetKey: null },
+                                  ]
+                                : [
+                                    { id: "years3", label: "yearsShort" as const },
+                                    { id: "years10", label: "yearsLong" as const },
+                                    { id: "all", label: "Complet (2004 → aujourd'hui)" },
+                                    { id: "custom", label: "Autre / Custom" },
+                                  ]
+                            ).map((opt: any) => (
                               <label
                                 key={`${k}-${opt.id}`}
                                 className="flex items-center gap-3 p-3 rounded-lg border border-zinc-800 hover:border-zinc-600 cursor-pointer"
@@ -404,14 +554,14 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
                                       const nextCfg = presetToWindow(k, nextPreset);
                                       setPoolWindows((prev) => ({
                                         ...prev,
-                                        [k]: k === "trend" ? { ...nextCfg, trendPeriodR: (prev.trend as TrendWindowConfig).trendPeriodR ?? 65 } : nextCfg,
+                                        [k]: nextCfg,
                                       }));
                                     } else {
                                       if (cfg.type !== "custom") {
                                         setPoolWindows((prev) => ({
                                           ...prev,
                                           [k]: k === "trend"
-                                            ? { type: "custom" as const, customUnit: "draws" as const, customValue: 160, trendPeriodR: (prev.trend as TrendWindowConfig).trendPeriodR ?? 65 }
+                                            ? { type: "custom" as const, customUnit: "draws" as const, customValue: 140, trendPeriodR: (prev.trend as TrendWindowConfig).trendPeriodR ?? 65 }
                                             : { type: "custom" as const, customUnit: "draws" as const, customValue: 50 },
                                         }));
                                       }
@@ -419,14 +569,100 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
                                   }}
                                 />
                                 <div className="text-zinc-300 text-sm">
-                                  {opt.id === "recent25" && (
+                                  {(k === "high" || k === "surrepr") && opt.id === "strict" && (
                                     <>
-                                      <EditablePresetNumber pool={k} presetKey="recentDraws" value={nums.recentDraws} /> tirages (forme récente)
+                                      <span className="font-bold">Strict</span>{" "}
+                                      <EditablePresetNumber pool={k} presetKey="strictDraws" value={nums.strictDraws} /> tirages{" "}
+                                      {approxTimeFromDraws(nums.strictDraws) ? <span className="text-zinc-500">({approxTimeFromDraws(nums.strictDraws)})</span> : null}
                                     </>
                                   )}
-                                  {opt.id === "general70" && (
+                                  {(k === "high" || k === "surrepr") && opt.id === "standard" && (
                                     <>
-                                      <EditablePresetNumber pool={k} presetKey="generalDraws" value={nums.generalDraws} /> tirages (forme générale)
+                                      <span className="font-bold">Standard</span>{" "}
+                                      <EditablePresetNumber pool={k} presetKey="standardDraws" value={nums.standardDraws} /> tirages{" "}
+                                      {approxTimeFromDraws(nums.standardDraws) ? <span className="text-zinc-500">({approxTimeFromDraws(nums.standardDraws)})</span> : null}
+                                    </>
+                                  )}
+                                  {(k === "high" || k === "surrepr") && opt.id === "souple" && (
+                                    <>
+                                      <span className="font-bold">Souple</span>{" "}
+                                      <EditablePresetNumber pool={k} presetKey="soupleDraws" value={nums.soupleDraws} /> tirages{" "}
+                                      {approxTimeFromDraws(nums.soupleDraws) ? <span className="text-zinc-500">({approxTimeFromDraws(nums.soupleDraws)})</span> : null}
+                                    </>
+                                  )}
+                                  {(k === "high" || k === "surrepr") && opt.id === "dynamic" && (
+                                    <>
+                                      <span className="font-bold">Dynamique</span>{" "}
+                                      <span className="font-bold">{nums.dynamicDraws}</span> tirages{" "}
+                                      {approxTimeFromDraws(nums.dynamicDraws) ? <span className="text-zinc-500">({approxTimeFromDraws(nums.dynamicDraws)})</span> : null}
+                                    </>
+                                  )}
+                                  {k === "trend" && opt.id === "strict" && (
+                                    <>
+                                      <span className="font-bold">Strict</span>{" "}
+                                      W=<EditablePresetNumber pool={k} presetKey="strictDraws" value={nums.strictDraws} /> tirages{" "}
+                                      {approxTimeFromDraws(nums.strictDraws) ? <span className="text-zinc-500">({approxTimeFromDraws(nums.strictDraws)})</span> : null}
+                                      {" "}—{" "}
+                                      R=<EditablePresetNumber pool={k} presetKey="strictTrendR" value={nums.strictTrendR} /> tirages{" "}
+                                      {approxTimeFromDraws(nums.strictTrendR) ? <span className="text-zinc-500">({approxTimeFromDraws(nums.strictTrendR)})</span> : null}
+                                    </>
+                                  )}
+                                  {k === "trend" && opt.id === "standard" && (
+                                    <>
+                                      <span className="font-bold">Standard</span>{" "}
+                                      W=<EditablePresetNumber pool={k} presetKey="standardDraws" value={nums.standardDraws} /> tirages{" "}
+                                      {approxTimeFromDraws(nums.standardDraws) ? <span className="text-zinc-500">({approxTimeFromDraws(nums.standardDraws)})</span> : null}
+                                      {" "}—{" "}
+                                      R=<EditablePresetNumber pool={k} presetKey="standardTrendR" value={nums.standardTrendR} /> tirages{" "}
+                                      {approxTimeFromDraws(nums.standardTrendR) ? <span className="text-zinc-500">({approxTimeFromDraws(nums.standardTrendR)})</span> : null}
+                                    </>
+                                  )}
+                                  {k === "trend" && opt.id === "souple" && (
+                                    <>
+                                      <span className="font-bold">Souple</span>{" "}
+                                      W=<EditablePresetNumber pool={k} presetKey="soupleDraws" value={nums.soupleDraws} /> tirages{" "}
+                                      {approxTimeFromDraws(nums.soupleDraws) ? <span className="text-zinc-500">({approxTimeFromDraws(nums.soupleDraws)})</span> : null}
+                                      {" "}—{" "}
+                                      R=<EditablePresetNumber pool={k} presetKey="soupleTrendR" value={nums.soupleTrendR} /> tirages{" "}
+                                      {approxTimeFromDraws(nums.soupleTrendR) ? <span className="text-zinc-500">({approxTimeFromDraws(nums.soupleTrendR)})</span> : null}
+                                    </>
+                                  )}
+                                  {k === "trend" && opt.id === "dynamic" && (
+                                    <>
+                                      <span className="font-bold">Dynamique</span>{" "}
+                                      W=<span className="font-bold">{nums.dynamicDraws}</span> tirages{" "}
+                                      {approxTimeFromDraws(nums.dynamicDraws) ? <span className="text-zinc-500">({approxTimeFromDraws(nums.dynamicDraws)})</span> : null}
+                                      {" "}—{" "}
+                                      R=<span className="font-bold">{nums.dynamicTrendR}</span> tirages{" "}
+                                      {approxTimeFromDraws(nums.dynamicTrendR) ? <span className="text-zinc-500">({approxTimeFromDraws(nums.dynamicTrendR)})</span> : null}
+                                    </>
+                                  )}
+                                  {k === "dormeur" && opt.id === "strict" && (
+                                    <>
+                                      <span className="font-bold">Strict</span>{" "}
+                                      <EditablePresetNumber pool={k} presetKey="strictDraws" value={nums.strictDraws} /> tirages{" "}
+                                      {approxTimeFromDraws(nums.strictDraws) ? <span className="text-zinc-500">({approxTimeFromDraws(nums.strictDraws)})</span> : null}
+                                    </>
+                                  )}
+                                  {k === "dormeur" && opt.id === "standard" && (
+                                    <>
+                                      <span className="font-bold">Standard</span>{" "}
+                                      <EditablePresetNumber pool={k} presetKey="standardDraws" value={nums.standardDraws} /> tirages{" "}
+                                      {approxTimeFromDraws(nums.standardDraws) ? <span className="text-zinc-500">({approxTimeFromDraws(nums.standardDraws)})</span> : null}
+                                    </>
+                                  )}
+                                  {k === "dormeur" && opt.id === "souple" && (
+                                    <>
+                                      <span className="font-bold">Souple</span>{" "}
+                                      <EditablePresetNumber pool={k} presetKey="soupleDraws" value={nums.soupleDraws} /> tirages{" "}
+                                      {approxTimeFromDraws(nums.soupleDraws) ? <span className="text-zinc-500">({approxTimeFromDraws(nums.soupleDraws)})</span> : null}
+                                    </>
+                                  )}
+                                  {k === "dormeur" && opt.id === "dynamic" && (
+                                    <>
+                                      <span className="font-bold">Dynamique</span>{" "}
+                                      <span className="font-bold">{nums.dynamicDraws}</span> tirages{" "}
+                                      {approxTimeFromDraws(nums.dynamicDraws) ? <span className="text-zinc-500">({approxTimeFromDraws(nums.dynamicDraws)})</span> : null}
                                     </>
                                   )}
                                   {opt.id === "years3" && (
@@ -487,15 +723,15 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
                                   }}
                                 >
                                   <option value="draws">tirages</option>
-                                  <option value="weeks">semaines</option>
-                                  <option value="months">mois</option>
-                                  <option value="years">années</option>
+                                  {k !== "trend" && k !== "dormeur" && <option value="weeks">semaines</option>}
+                                  {k !== "trend" && k !== "dormeur" && <option value="months">mois</option>}
+                                  {k !== "trend" && k !== "dormeur" && <option value="years">années</option>}
                                 </select>
                               </div>
                             </div>
                           )}
 
-                          {k === "trend" && (
+                          {k === "trend" && p === "custom" && (
                             <div className="mt-3 pt-3 border-t border-zinc-800">
                               <label className="text-zinc-300 text-sm block mb-2">Période récente R (tirages)</label>
                               <input

@@ -601,7 +601,12 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
 
       // Récupérer tous les gains (sauf admin)
       const allWins = await db.select().from(winningGrids).where(ne(winningGrids.userId, admin.id));
-      const targetDates = [...new Set(allWins.map((w: any) => String(w.targetDate).split('T')[0]))];
+      const targetDatesMap: Record<string, true> = {};
+      for (const w of allWins as any[]) {
+        const d = String(w.targetDate).split('T')[0];
+        targetDatesMap[d] = true;
+      }
+      const targetDates = Object.keys(targetDatesMap);
       const drawsMap = new Map<string, any>();
       if (targetDates.length > 0) {
         const { inArray } = await import('drizzle-orm');
@@ -711,7 +716,12 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
       const [lastDrawRow] = await db.select().from(draws).orderBy(desc(draws.date)).limit(1);
       const lastDrawDateStr = lastDrawRow ? String(lastDrawRow.date).split('T')[0] : null;
       const userWins = await db.select().from(winningGrids).where(eq(winningGrids.userId, targetUserId));
-      const targetDates = [...new Set(userWins.map((w: any) => String(w.targetDate).split('T')[0]))];
+      const targetDatesMap: Record<string, true> = {};
+      for (const w of userWins as any[]) {
+        const d = String(w.targetDate).split('T')[0];
+        targetDatesMap[d] = true;
+      }
+      const targetDates = Object.keys(targetDatesMap);
       const drawsMap = new Map<string, any>();
       if (targetDates.length > 0) {
         const { inArray } = await import('drizzle-orm');
@@ -1286,7 +1296,12 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
       const [lastDrawRow] = await db.select().from(draws).orderBy(desc(draws.date)).limit(1);
       const lastDrawDateStr = lastDrawRow ? String(lastDrawRow.date).split('T')[0] : null;
       const userWins = await db.select().from(winningGrids).where(eq(winningGrids.userId, user.id));
-      const targetDates = [...new Set(userWins.map((w: any) => String(w.targetDate).split('T')[0]))];
+      const targetDatesMap: Record<string, true> = {};
+      for (const w of userWins as any[]) {
+        const d = String(w.targetDate).split('T')[0];
+        targetDatesMap[d] = true;
+      }
+      const targetDates = Object.keys(targetDatesMap);
       const drawsMap = new Map<string, any>();
       if (targetDates.length > 0) {
         const { inArray } = await import('drizzle-orm');
