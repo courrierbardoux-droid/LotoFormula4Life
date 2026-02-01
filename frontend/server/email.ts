@@ -16,19 +16,13 @@ function getEmailDomain(address: string | null | undefined) {
   return address.slice(at + 1);
 }
 
-function shouldUseResend(): boolean {
-  const isProd = process.env.NODE_ENV === 'production';
-  return !!process.env.RESEND_API_KEY && (isProd || process.env.FORCE_RESEND === '1');
-}
-
 function shouldUseBrevo(): boolean {
   const isProd = process.env.NODE_ENV === 'production';
   return !!process.env.BREVO_API_KEY && (isProd || process.env.FORCE_BREVO === '1');
 }
 
-function getEmailProvider(): 'brevo' | 'resend' | 'gmail' {
+function getEmailProvider(): 'brevo' | 'gmail' {
   if (shouldUseBrevo()) return 'brevo';
-  if (shouldUseResend()) return 'resend';
   return 'gmail';
 }
 
@@ -39,18 +33,7 @@ async function sendWithBrevo({ to, subject, html, replyTo, fromName }: OutgoingE
   const senderEmail = process.env.BREVO_SENDER_EMAIL || '';
   const senderName = fromName || process.env.BREVO_SENDER_NAME || 'LotoFormula4Life';
 
-  // #region agent log
-  console.log('[agent][H6][brevo] start', { toDomains, hasSenderEmail: !!senderEmail });
-  // #endregion
-
   if (!process.env.BREVO_API_KEY || !senderEmail) {
-    // #region agent log
-    console.log('[agent][H6][brevo] missing config', {
-      hasApiKey: !!process.env.BREVO_API_KEY,
-      hasSenderEmail: !!senderEmail,
-      ms: Date.now() - startedAt,
-    });
-    // #endregion
     return false;
   }
 
@@ -81,93 +64,8 @@ async function sendWithBrevo({ to, subject, html, replyTo, fromName }: OutgoingE
       // ignore
     }
 
-    // #region agent log
-    console.log('[agent][H6][brevo] response', {
-      ms: Date.now() - startedAt,
-      ok: res.ok,
-      status: res.status,
-      hasMessageId: !!data?.messageId,
-    });
-    // #endregion
-
     return res.ok && !!data?.messageId;
   } catch (err: any) {
-    // #region agent log
-    console.log('[agent][H6][brevo] exception', {
-      ms: Date.now() - startedAt,
-      name: err?.name ?? null,
-      message: err?.message ?? String(err),
-    });
-    // #endregion
-    return false;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-async function sendWithResend({ to, subject, html, replyTo }: OutgoingEmail): Promise<boolean> {
-  const startedAt = Date.now();
-  const toList = Array.isArray(to) ? to : [to];
-  const toDomains = toList.map(getEmailDomain).filter(Boolean);
-  const from = process.env.RESEND_FROM || 'LotoFormula4Life <onboarding@resend.dev>';
-
-  // #region agent log
-  console.log('[agent][H5][resend] start', { toDomains, hasFrom: !!process.env.RESEND_FROM });
-  // #endregion
-
-  if (!process.env.RESEND_API_KEY) {
-    // #region agent log
-    console.log('[agent][H5][resend] missing RESEND_API_KEY', { ms: Date.now() - startedAt });
-    // #endregion
-    return false;
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15_000);
-  try {
-    const res = await fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        from,
-        to: toList,
-        subject,
-        html,
-        ...(replyTo ? { reply_to: replyTo } : {}),
-      }),
-      signal: controller.signal,
-    });
-
-    let data: any = null;
-    try {
-      data = await res.json();
-    } catch {
-      // ignore
-    }
-
-    // #region agent log
-    console.log('[agent][H5][resend] response', {
-      ms: Date.now() - startedAt,
-      ok: res.ok,
-      status: res.status,
-      hasId: !!data?.id,
-      hasError: !!data?.error,
-      errorCode: data?.error?.name ?? null,
-    });
-    // #endregion
-
-    return res.ok && !!data?.id;
-  } catch (err: any) {
-    // #region agent log
-    console.log('[agent][H5][resend] exception', {
-      ms: Date.now() - startedAt,
-      name: err?.name ?? null,
-      message: err?.message ?? String(err),
-    });
-    // #endregion
     return false;
   } finally {
     clearTimeout(timeout);
@@ -175,23 +73,12 @@ async function sendWithResend({ to, subject, html, replyTo }: OutgoingEmail): Pr
 }
 
 async function sendWithGmailTransport({ to, subject, html, replyTo, fromName }: OutgoingEmail): Promise<boolean> {
-  const startedAt = Date.now();
   // Vérifier que les variables d'environnement sont définies
   if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
     console.error('[Email] Variables d\'environnement manquantes: GMAIL_USER ou GMAIL_APP_PASSWORD');
-    // #region agent log
-    console.log('[agent][H7][gmail] missing env', {
-      hasGmailUser: !!process.env.GMAIL_USER,
-      hasGmailAppPassword: !!process.env.GMAIL_APP_PASSWORD,
-      ms: Date.now() - startedAt,
-    });
-    // #endregion
     return false;
   }
   try {
-    // #region agent log
-    console.log('[agent][H7][gmail] start', { ms: 0 });
-    // #endregion
     const result = await transporter.sendMail({
       from: `"${fromName || 'LotoFormula4Life'}" <${process.env.GMAIL_USER}>`,
       to,
@@ -200,39 +87,15 @@ async function sendWithGmailTransport({ to, subject, html, replyTo, fromName }: 
       ...(replyTo ? { replyTo } : {}),
     });
     return !!result?.messageId;
-  } catch (e: any) {
-    // #region agent log
-    console.log('[agent][H7][gmail] error', {
-      ms: Date.now() - startedAt,
-      name: e?.name ?? null,
-      code: e?.code ?? null,
-      command: e?.command ?? null,
-      message: e?.message ?? String(e),
-    });
-    // #endregion
+  } catch {
     return false;
   }
 }
 
 async function sendEmail(email: OutgoingEmail): Promise<boolean> {
-  const provider = getEmailProvider();
-  // #region agent log
-  console.log('[agent][H7][email] provider selected', {
-    provider,
-    nodeEnv: process.env.NODE_ENV ?? null,
-    hasBrevoApiKey: !!process.env.BREVO_API_KEY,
-    hasBrevoSenderEmail: !!process.env.BREVO_SENDER_EMAIL,
-    hasResendApiKey: !!process.env.RESEND_API_KEY,
-    hasGmailUser: !!process.env.GMAIL_USER,
-  });
-  // #endregion
-
-  // Priorité : Brevo (HTTPS, pas besoin de domaine), puis Resend, puis Gmail.
+  // Priorité : Brevo (HTTPS, pas besoin de domaine), puis Gmail.
   if (shouldUseBrevo()) {
     return await sendWithBrevo(email);
-  }
-  if (shouldUseResend()) {
-    return await sendWithResend(email);
   }
   return await sendWithGmailTransport(email);
 }
@@ -291,17 +154,10 @@ export async function sendInvitationEmail({ to, code, type }: InvitationEmailPar
   const toDomain = getEmailDomain(to);
   const codePreview = typeof code === 'string' ? `len:${code.length}` : typeof code;
   const provider = getEmailProvider();
-
-  // #region agent log
-  console.log('[agent][H1][sendInvitationEmail] start', { type, toDomain, codePreview });
-  // #endregion
   
   try {
     // Charger l'URL du site depuis la DB
     const siteUrl = await getSiteUrl();
-    // #region agent log
-    console.log('[agent][H1][sendInvitationEmail] before sendMail', { ms: Date.now() - startedAt, type, toDomain });
-    // #endregion
     
     const ok = await sendEmail({
       to,
@@ -380,26 +236,10 @@ export async function sendInvitationEmail({ to, code, type }: InvitationEmailPar
     });
 
     if (!ok) {
-      // #region agent log
-      console.log('[agent][H1][sendInvitationEmail] sendMail returned false', {
-        ms: Date.now() - startedAt,
-        type,
-        toDomain,
-        provider,
-      });
-      // #endregion
       return false;
     }
 
     console.log(`[Email] Invitation ${type} envoyée à ${to}`);
-    // #region agent log
-    console.log('[agent][H1][sendInvitationEmail] sendMail ok', {
-      ms: Date.now() - startedAt,
-      type,
-      toDomain,
-      provider,
-    });
-    // #endregion
     return true;
   } catch (error: any) {
     console.error('[Email] Erreur envoi invitation:', error);
@@ -410,17 +250,6 @@ export async function sendInvitationEmail({ to, code, type }: InvitationEmailPar
       response: error.response,
       responseCode: error.responseCode
     });
-    // #region agent log
-    console.log('[agent][H1][sendInvitationEmail] sendMail error', {
-      ms: Date.now() - startedAt,
-      type,
-      toDomain,
-      code: error?.code ?? null,
-      responseCode: error?.responseCode ?? null,
-      command: error?.command ?? null,
-      message: error?.message ?? null,
-    });
-    // #endregion
     return false;
   }
 }

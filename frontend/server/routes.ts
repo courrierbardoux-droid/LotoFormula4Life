@@ -21,13 +21,6 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
 }
 
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
-  // #region agent log
-  console.log('[agent][H2][requireAdmin]', {
-    isAuthenticated: req.isAuthenticated(),
-    role: (req.user as any)?.role ?? null,
-  });
-  // #endregion
-
   if (req.isAuthenticated() && (req.user as any).role === 'admin') {
     return next();
   }
@@ -1434,25 +1427,12 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
 
   // Générer et envoyer un code d'invitation
   app.post('/api/invitations/send', requireAdmin, async (req, res) => {
-    const startedAt = Date.now();
     try {
       if (!hasDatabase) {
         return res.status(400).json({ error: 'Base de données requise' });
       }
 
       const { email, code, type } = req.body;
-
-      // #region agent log
-      const emailDomain = typeof email === 'string' && email.includes('@') ? email.split('@')[1] : null;
-      const codePreview = typeof code === 'string' ? `len:${code.length}` : typeof code;
-      console.log('[agent][H1][/api/invitations/send] entry', {
-        ms: 0,
-        hasDatabase,
-        type,
-        emailDomain,
-        codePreview,
-      });
-      // #endregion
       
       if (!email || !code || !type) {
         return res.status(400).json({ error: 'Email, code et type requis' });
@@ -1489,43 +1469,14 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
 
       // Envoyer l'email
       const { sendInvitationEmail } = await import('./email');
-      // #region agent log
-      console.log('[agent][H1][/api/invitations/send] before sendInvitationEmail', {
-        ms: Date.now() - startedAt,
-        type,
-        emailDomain,
-        codePreview,
-      });
-      // #endregion
       const sent = await sendInvitationEmail({ to: email, code, type: type as 'vip' | 'invite' });
 
       if (sent) {
-        // #region agent log
-        console.log('[agent][H1][/api/invitations/send] sent=true', {
-          ms: Date.now() - startedAt,
-          type,
-          emailDomain,
-        });
-        // #endregion
         res.json({ success: true, message: `Invitation ${type} envoyée à ${email}` });
       } else {
-        // #region agent log
-        console.log('[agent][H1][/api/invitations/send] sent=false', {
-          ms: Date.now() - startedAt,
-          type,
-          emailDomain,
-        });
-        // #endregion
         res.status(500).json({ error: 'Erreur envoi email. Vérifiez les logs serveur et les variables d\'environnement GMAIL_USER et GMAIL_APP_PASSWORD.' });
       }
     } catch (err) {
-      // #region agent log
-      console.log('[agent][H4][/api/invitations/send] exception', {
-        ms: Date.now() - startedAt,
-        message: (err as any)?.message ?? String(err),
-        code: (err as any)?.code ?? null,
-      });
-      // #endregion
       console.error('[API] Erreur envoi invitation:', err);
       res.status(500).json({ error: 'Erreur serveur' });
     }
