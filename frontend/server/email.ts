@@ -1,6 +1,122 @@
 import nodemailer from 'nodemailer';
 import { getTemplateVariable, getProcessedTemplate } from './templateService';
 
+type OutgoingEmail = {
+  to: string | string[];
+  subject: string;
+  html: string;
+  replyTo?: string;
+  fromName?: string;
+};
+
+function getEmailDomain(address: string | null | undefined) {
+  if (!address || typeof address !== 'string') return null;
+  const at = address.lastIndexOf('@');
+  if (at <= 0 || at === address.length - 1) return null;
+  return address.slice(at + 1);
+}
+
+function shouldUseResend(): boolean {
+  const isProd = process.env.NODE_ENV === 'production';
+  return !!process.env.RESEND_API_KEY && (isProd || process.env.FORCE_RESEND === '1');
+}
+
+async function sendWithResend({ to, subject, html, replyTo }: OutgoingEmail): Promise<boolean> {
+  const startedAt = Date.now();
+  const toList = Array.isArray(to) ? to : [to];
+  const toDomains = toList.map(getEmailDomain).filter(Boolean);
+  const from = process.env.RESEND_FROM || 'LotoFormula4Life <onboarding@resend.dev>';
+
+  // #region agent log
+  console.log('[agent][H5][resend] start', { toDomains, hasFrom: !!process.env.RESEND_FROM });
+  // #endregion
+
+  if (!process.env.RESEND_API_KEY) {
+    // #region agent log
+    console.log('[agent][H5][resend] missing RESEND_API_KEY', { ms: Date.now() - startedAt });
+    // #endregion
+    return false;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from,
+        to: toList,
+        subject,
+        html,
+        ...(replyTo ? { reply_to: replyTo } : {}),
+      }),
+      signal: controller.signal,
+    });
+
+    let data: any = null;
+    try {
+      data = await res.json();
+    } catch {
+      // ignore
+    }
+
+    // #region agent log
+    console.log('[agent][H5][resend] response', {
+      ms: Date.now() - startedAt,
+      ok: res.ok,
+      status: res.status,
+      hasId: !!data?.id,
+      hasError: !!data?.error,
+      errorCode: data?.error?.name ?? null,
+    });
+    // #endregion
+
+    return res.ok && !!data?.id;
+  } catch (err: any) {
+    // #region agent log
+    console.log('[agent][H5][resend] exception', {
+      ms: Date.now() - startedAt,
+      name: err?.name ?? null,
+      message: err?.message ?? String(err),
+    });
+    // #endregion
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function sendWithGmailTransport({ to, subject, html, replyTo, fromName }: OutgoingEmail): Promise<boolean> {
+  // Vérifier que les variables d'environnement sont définies
+  if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
+    console.error('[Email] Variables d\'environnement manquantes: GMAIL_USER ou GMAIL_APP_PASSWORD');
+    return false;
+  }
+  try {
+    const result = await transporter.sendMail({
+      from: `"${fromName || 'LotoFormula4Life'}" <${process.env.GMAIL_USER}>`,
+      to,
+      subject,
+      html,
+      ...(replyTo ? { replyTo } : {}),
+    });
+    return !!result?.messageId;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function sendEmail(email: OutgoingEmail): Promise<boolean> {
+  if (shouldUseResend()) {
+    return await sendWithResend(email);
+  }
+  return await sendWithGmailTransport(email);
+}
+
 // Configuration Gmail SMTP
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
@@ -52,27 +168,12 @@ export async function sendInvitationEmail({ to, code, type }: InvitationEmailPar
   const roleLabel = type === 'vip' ? 'VIP' : 'Invité';
   const roleColor = type === 'vip' ? '#22c55e' : '#ffffff';
   const startedAt = Date.now();
-  const toDomain = typeof to === 'string' && to.includes('@') ? to.split('@')[1] : null;
+  const toDomain = getEmailDomain(to);
   const codePreview = typeof code === 'string' ? `len:${code.length}` : typeof code;
 
   // #region agent log
   console.log('[agent][H1][sendInvitationEmail] start', { type, toDomain, codePreview });
   // #endregion
-  
-  // Vérifier que les variables d'environnement sont définies
-  if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
-    // #region agent log
-    console.log('[agent][H1][sendInvitationEmail] missing env', {
-      hasGmailUser: !!process.env.GMAIL_USER,
-      hasGmailAppPassword: !!process.env.GMAIL_APP_PASSWORD,
-      ms: Date.now() - startedAt,
-      type,
-      toDomain,
-    });
-    // #endregion
-    console.error('[Email] Variables d\'environnement manquantes: GMAIL_USER ou GMAIL_APP_PASSWORD');
-    return false;
-  }
   
   try {
     // Charger l'URL du site depuis la DB
@@ -81,9 +182,8 @@ export async function sendInvitationEmail({ to, code, type }: InvitationEmailPar
     console.log('[agent][H1][sendInvitationEmail] before sendMail', { ms: Date.now() - startedAt, type, toDomain });
     // #endregion
     
-    const result = await transporter.sendMail({
-      from: `"LotoFormula4Life" <${process.env.GMAIL_USER}>`,
-      to: to,
+    const ok = await sendEmail({
+      to,
       subject: `🎰 Invitation ${roleLabel} - LotoFormula4Life`,
       html: `
         <!DOCTYPE html>
@@ -158,13 +258,17 @@ export async function sendInvitationEmail({ to, code, type }: InvitationEmailPar
       `,
     });
 
-    console.log(`[Email] Invitation ${type} envoyée à ${to}`, result.messageId);
+    if (!ok) {
+      return false;
+    }
+
+    console.log(`[Email] Invitation ${type} envoyée à ${to}`);
     // #region agent log
     console.log('[agent][H1][sendInvitationEmail] sendMail ok', {
       ms: Date.now() - startedAt,
       type,
       toDomain,
-      hasMessageId: !!result?.messageId,
+      provider: shouldUseResend() ? 'resend' : 'gmail',
     });
     // #endregion
     return true;
@@ -349,12 +453,13 @@ export async function sendDrawConfirmationEmail({ to, username, token, gridCount
     console.log('[Email] Contenu final contient confirmUrl:', htmlContent.includes(confirmUrl));
     console.log('[Email] Contenu final contient <a href:', htmlContent.includes('<a href'));
 
-    await transporter.sendMail({
-      from: `"LotoFormula4Life" <${process.env.GMAIL_USER}>`,
-      to: to,
+    const ok = await sendEmail({
+      to,
       subject: `🎰 Vos ${gridCount} numéros sont prêts ! - LotoFormula4Life`,
       html: htmlContent,
     });
+
+    if (!ok) return false;
 
     console.log(`[Email] Confirmation tirage envoyée à ${to} (${gridCount} grilles) - Template email1 utilisé`);
     return true;
@@ -505,12 +610,13 @@ export async function sendDrawNumbersEmail({ to, username, numbers, stars, targe
       htmlContent = htmlContent.replace(/#url_mes_grilles/g, `${siteUrl}/my-grids`);
     }
     
-    await transporter.sendMail({
-      from: `"LotoFormula4Life" <${process.env.GMAIL_USER}>`,
-      to: to,
+    const ok = await sendEmail({
+      to,
       subject: `🍀 Vos numéros EuroMillions - ${dateDisplay}`,
       html: htmlContent,
     });
+
+    if (!ok) return false;
 
     console.log(`[Email] Numéros envoyés à ${to}: ${numbersDisplay} | ${starsDisplay} - Template email2 utilisé`);
     return true;
@@ -616,12 +722,13 @@ export async function sendDrawNumbersEmailMulti({ to, username, grids }: DrawNum
     
     const subjectDate = dateDisplay;
     
-    await transporter.sendMail({
-      from: `"LotoFormula4Life" <${process.env.GMAIL_USER}>`,
-      to: to,
+    const ok = await sendEmail({
+      to,
       subject: `🍀 Vos ${grids.length} grille${grids.length > 1 ? 's' : ''} EuroMillions - ${subjectDate}`,
       html: htmlContent,
     });
+
+    if (!ok) return false;
 
     console.log(`[Email] ${grids.length} grilles envoyées à ${to} dans un seul email avec le template de la DB`);
     return true;
@@ -644,20 +751,15 @@ interface TestEmailParams {
 }
 
 export async function sendTestEmail({ to, subject, html }: TestEmailParams): Promise<boolean> {
-  if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
-    console.error('[Email] Variables d\'environnement manquantes: GMAIL_USER ou GMAIL_APP_PASSWORD');
-    return false;
-  }
-
   try {
-    const result = await transporter.sendMail({
-      from: `"LotoFormula4Life [TEST]" <${process.env.GMAIL_USER}>`,
-      to: to,
-      subject: subject,
-      html: html,
+    const ok = await sendEmail({
+      to,
+      subject,
+      html,
+      fromName: 'LotoFormula4Life [TEST]',
     });
-
-    console.log(`[Email] Email de test envoyé à ${to}`, result.messageId);
+    if (!ok) return false;
+    console.log(`[Email] Email de test envoyé à ${to}`);
     return true;
   } catch (error: any) {
     console.error('[Email] Erreur envoi email test:', error);
@@ -682,11 +784,6 @@ interface WinnerUserEmailParams {
 }
 
 export async function sendWinnerEmailToUser(params: WinnerUserEmailParams): Promise<boolean> {
-  if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) {
-    console.error('[Email] Variables d\'environnement manquantes: GMAIL_USER ou GMAIL_APP_PASSWORD');
-    return false;
-  }
-
   const { to, username, drawDate, matchNum, matchStar, gainCents, gridNumbers, gridStars, drawNumbers, drawStars } = params;
   const siteUrl = await getSiteUrl();
   const contactEmail = await getContactEmail();
@@ -700,8 +797,7 @@ export async function sendWinnerEmailToUser(params: WinnerUserEmailParams): Prom
   const starsDraw = drawStars.join(' - ');
 
   try {
-    await transporter.sendMail({
-      from: `"LotoFormula4Life" <${process.env.GMAIL_USER}>`,
+    const ok = await sendEmail({
       to,
       subject: `🏆 Gagné ! Tirage du ${drawDate} — ${gainCents == null ? 'JACKPOT' : gainLabel}`,
       html: `
@@ -739,7 +835,7 @@ export async function sendWinnerEmailToUser(params: WinnerUserEmailParams): Prom
         </div>
       `,
     });
-    return true;
+    return ok;
   } catch (e) {
     console.error('[Email] Erreur envoi notification gagnant user:', e);
     return false;
