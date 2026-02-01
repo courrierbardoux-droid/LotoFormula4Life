@@ -13,6 +13,11 @@ const transporter = nodemailer.createTransport({
   tls: {
     rejectUnauthorized: false, // Ignorer les erreurs de certificat (proxy/réseau)
   },
+  // Timeouts pour éviter un "hang" infini en prod (Render/Gmail)
+  // (valeurs en millisecondes)
+  connectionTimeout: 10_000,
+  greetingTimeout: 10_000,
+  socketTimeout: 20_000,
 });
 
 // Valeur par défaut (fallback si variable n'existe pas en DB)
