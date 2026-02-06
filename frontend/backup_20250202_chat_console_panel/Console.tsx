@@ -5592,7 +5592,6 @@ export default function Console() {
                         {user?.id ? (
                             <ChatPanel
                                 onClose={handleCloseChat}
-                                isOpen={isChatOpen}
                                 currentUserId={user.id}
                                 currentUsername={user.username ?? ''}
                                 chatSocket={chatSocket}

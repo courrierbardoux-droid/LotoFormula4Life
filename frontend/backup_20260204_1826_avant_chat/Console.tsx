@@ -12,8 +12,6 @@ import { ProchainTirageSimple } from "@/components/casino/ProchainTirageSimple";
 import { LCDDisplay } from "@/components/casino/LCDDisplay";
 import { DebugPanel } from "@/components/casino/DebugPanel";
 import { GratitudePopup } from "@/components/GratitudePopup";
-import { ChatPanel } from "@/components/chat/ChatPanel";
-import { useChatSocket } from "@/lib/chatSocket";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { fr as frLocale } from "date-fns/locale";
@@ -253,7 +251,6 @@ interface PoolItem {
 
 export default function Console() {
   const { user } = useUser();
-  const chatSocket = useChatSocket(user?.id ?? null);
   const [, setLocation] = useLocation();
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [showPrice, setShowPrice] = useState(false); // Fix for crash
@@ -539,15 +536,6 @@ export default function Console() {
   const [showConsultationPopup, setShowConsultationPopup] = useState(false);
 
   // (Gagnants) : supprimé — aucune notification/redirect "gagnant"
-
-  // Volet chat : à l'ouverture, marquer toutes les conversations comme lues
-  useEffect(() => {
-    if (isChatOpen && chatSocket.markConversationAsRead && chatSocket.unreadCountByUser) {
-      Object.keys(chatSocket.unreadCountByUser).forEach((userId) => {
-        chatSocket.markConversationAsRead(Number(userId));
-      });
-    }
-  }, [isChatOpen]);
 
   // Volet chat : animation d'ouverture (glissement depuis la droite)
   useEffect(() => {
@@ -4459,26 +4447,14 @@ export default function Console() {
                          </button>
                      )}
 
-                     {/* CHAT - bulle de parole, style bleu + nombre connectés + badge non lus */}
-                     <div className="flex flex-col items-center gap-0.5">
-                         {!isChatOpen && (chatSocket.totalUnread ?? 0) > 0 && (
-                             <span className="text-[11px] text-red-500 font-mono tabular-nums font-bold leading-none">
-                                 {chatSocket.totalUnread}
-                             </span>
-                         )}
-                         <div className="flex items-center gap-1">
-                             <button 
-                                 onClick={() => setIsChatOpen(true)}
-                                 className="w-9 h-9 rounded-full border-2 border-blue-500 bg-[linear-gradient(180deg,#1e3a5f_0%,#0f172a_100%)] text-blue-400 hover:bg-[linear-gradient(180deg,#2563eb_0%,#1e40af_100%)] hover:border-blue-400 hover:text-white hover:shadow-[0_0_12px_rgba(59,130,246,0.6)] transition-all duration-300 flex items-center justify-center flex-shrink-0"
-                                 title="Chat"
-                             >
-                                 <MessageSquare size={18} strokeWidth={2.5} />
-                             </button>
-                             <span className="text-[15px] text-zinc-500 font-mono tabular-nums leading-none">
-                                 {chatSocket.connected ? chatSocket.othersConnectedCount : '—'}
-                             </span>
-                         </div>
-                     </div>
+                     {/* CHAT - bulle de parole, style bleu */}
+                     <button 
+                         onClick={() => setIsChatOpen(true)}
+                         className="w-11 h-11 rounded-full border-2 border-blue-500 bg-[linear-gradient(180deg,#1e3a5f_0%,#0f172a_100%)] text-blue-400 hover:bg-[linear-gradient(180deg,#2563eb_0%,#1e40af_100%)] hover:border-blue-400 hover:text-white hover:shadow-[0_0_12px_rgba(59,130,246,0.6)] transition-all duration-300 flex items-center justify-center flex-shrink-0"
+                         title="Chat"
+                     >
+                         <MessageSquare size={22} strokeWidth={2.5} />
+                     </button>
                      
                  </div>
 
@@ -5576,32 +5552,19 @@ export default function Console() {
                     className="absolute top-0 right-0 bottom-0 w-full max-w-[498px] bg-zinc-950 border-l-2 border-casino-gold/50 shadow-[-10px_0_30px_rgba(0,0,0,0.5)] z-50 flex flex-col transition-transform duration-[350ms] ease-out"
                     style={{ transform: chatPanelSlideIn ? 'translateX(0)' : 'translateX(100%)' }}
                 >
-                    <div className="flex items-center p-4 border-b border-zinc-800">
+                    <div className="flex items-center justify-between p-4 border-b border-zinc-800">
+                        <h2 className="font-orbitron text-lg text-casino-gold tracking-widest">CHAT</h2>
                         <button
                             type="button"
                             onClick={handleCloseChat}
-                            className="w-10 h-10 rounded-full border-2 border-red-600 bg-red-950/50 text-red-500 hover:bg-red-900/50 hover:text-red-400 flex items-center justify-center flex-shrink-0"
+                            className="w-10 h-10 rounded-full border-2 border-zinc-600 text-zinc-400 hover:border-casino-gold hover:text-casino-gold transition-colors flex items-center justify-center"
                             title="Fermer"
                         >
-                            <span className="text-2xl font-bold leading-none">×</span>
+                            ×
                         </button>
-                        <h2 className="flex-1 text-center font-orbitron text-lg text-casino-gold tracking-widest">CHAT</h2>
-                        <div className="w-10 flex-shrink-0" />
                     </div>
-                    <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-                        {user?.id ? (
-                            <ChatPanel
-                                onClose={handleCloseChat}
-                                isOpen={isChatOpen}
-                                currentUserId={user.id}
-                                currentUsername={user.username ?? ''}
-                                chatSocket={chatSocket}
-                            />
-                        ) : (
-                            <div className="flex-1 p-4 text-zinc-400 text-lg overflow-auto">
-                                Connexion requise pour le chat.
-                            </div>
-                        )}
+                    <div className="flex-1 p-4 text-zinc-400 text-sm overflow-auto">
+                        L’administrateur et les utilisateurs connectés apparaîtront ici.
                     </div>
                 </div>
             </>

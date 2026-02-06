@@ -55,6 +55,25 @@ export const presets = pgTable('presets', {
 });
 
 // ============================================
+// TABLE USER_CONSOLE_SETTINGS - Préférences console par utilisateur
+// ============================================
+export const userConsoleSettings = pgTable(
+  'user_console_settings',
+  {
+    id: serial('id').primaryKey(),
+    userId: integer('user_id').references(() => users.id).notNull(),
+    // Fenêtres de calcul (Tableau 1 Settings)
+    poolWindows: json('pool_windows').notNull(),
+    // Presets numériques (strict/standard/souple/dynamic + trend R)
+    poolWindowPresetNumbers: json('pool_window_preset_numbers').notNull(),
+    updatedAt: timestamp('updated_at').defaultNow(),
+  },
+  (t) => ({
+    userUniq: uniqueIndex('user_console_settings_user_uniq').on(t.userId),
+  })
+);
+
+// ============================================
 // TABLE INVITATION_CODES - Codes d'invitation
 // ============================================
 export const invitationCodes = pgTable('invitation_codes', {
@@ -183,6 +202,18 @@ export const emailPopupTemplates = pgTable('email_popup_templates', {
 });
 
 // ============================================
+// TABLE CHAT_MESSAGES - Messages du chat (persistance)
+// ============================================
+export const chatMessages = pgTable('chat_messages', {
+  id: serial('id').primaryKey(),
+  fromUserId: integer('from_user_id').references(() => users.id).notNull(),
+  toUserId: integer('to_user_id').references(() => users.id).notNull(),
+  text: text('text').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  attachment: json('attachment').$type<{ name: string; mime: string; dataBase64: string } | null>(),
+});
+
+// ============================================
 // TABLE TEMPLATE_VARIABLES - Variables globales pour les templates
 // ============================================
 export const templateVariables = pgTable('template_variables', {
@@ -208,6 +239,9 @@ export type NewGrid = typeof grids.$inferInsert;
 
 export type Preset = typeof presets.$inferSelect;
 export type NewPreset = typeof presets.$inferInsert;
+
+export type UserConsoleSettings = typeof userConsoleSettings.$inferSelect;
+export type NewUserConsoleSettings = typeof userConsoleSettings.$inferInsert;
 
 export type InvitationCode = typeof invitationCodes.$inferSelect;
 export type NewInvitationCode = typeof invitationCodes.$inferInsert;
@@ -236,3 +270,5 @@ export type NewEmailPopupTemplate = typeof emailPopupTemplates.$inferInsert;
 export type TemplateVariable = typeof templateVariables.$inferSelect;
 export type NewTemplateVariable = typeof templateVariables.$inferInsert;
 
+export type ChatMessageRow = typeof chatMessages.$inferSelect;
+export type NewChatMessageRow = typeof chatMessages.$inferInsert;

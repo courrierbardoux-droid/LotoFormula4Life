@@ -23,7 +23,6 @@ import ConfirmDraw from "@/pages/ConfirmDraw";
 import PopupEmailManagement from "@/pages/PopupEmailManagement";
 import PopupEmailManagementRedirect from "@/pages/PopupEmailManagementRedirect";
 import Settings from "@/pages/Settings";
-import SettingsPools from "@/pages/SettingsPools";
 import SettingsWindows from "@/pages/SettingsWindows";
 import UserActivityHistory from "@/pages/UserActivityHistory";
 
@@ -115,10 +114,6 @@ function Router() {
 
       <Route path="/settings">
         <ProtectedRoute component={Settings} />
-      </Route>
-
-      <Route path="/settings/pools">
-        <ProtectedRoute component={SettingsPools} />
       </Route>
 
       <Route path="/settings/windows">

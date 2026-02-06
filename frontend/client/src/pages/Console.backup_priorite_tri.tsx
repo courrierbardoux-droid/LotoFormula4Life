@@ -12,12 +12,10 @@ import { ProchainTirageSimple } from "@/components/casino/ProchainTirageSimple";
 import { LCDDisplay } from "@/components/casino/LCDDisplay";
 import { DebugPanel } from "@/components/casino/DebugPanel";
 import { GratitudePopup } from "@/components/GratitudePopup";
-import { ChatPanel } from "@/components/chat/ChatPanel";
-import { useChatSocket } from "@/lib/chatSocket";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { fr as frLocale } from "date-fns/locale";
-import { Lock, Unlock, ChevronDown, RotateCcw, ArrowUp, ArrowDown, Minus, RefreshCcw, Settings, Sliders, Calendar, Trash2, Wrench, MessageSquare } from "lucide-react";
+import { Lock, Unlock, ChevronDown, RotateCcw, ArrowUp, ArrowDown, Minus, RefreshCcw, Settings, Sliders, Calendar, Trash2, Wrench } from "lucide-react";
 import { useUser } from "@/lib/UserContext";
 import { 
   getStats, 
@@ -253,7 +251,6 @@ interface PoolItem {
 
 export default function Console() {
   const { user } = useUser();
-  const chatSocket = useChatSocket(user?.id ?? null);
   const [, setLocation] = useLocation();
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [showPrice, setShowPrice] = useState(false); // Fix for crash
@@ -519,8 +516,6 @@ export default function Console() {
   const [isSending, setIsSending] = useState(false);
   const [sendingMessage, setSendingMessage] = useState("");
   const [isDebugOpen, setIsDebugOpen] = useState(false);
-  const [isChatOpen, setIsChatOpen] = useState(false);
-  const [chatPanelSlideIn, setChatPanelSlideIn] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   // Popup Gratitude State (VIP/Abonné uniquement)
@@ -539,33 +534,6 @@ export default function Console() {
   const [showConsultationPopup, setShowConsultationPopup] = useState(false);
 
   // (Gagnants) : supprimé — aucune notification/redirect "gagnant"
-
-  // Volet chat : à l'ouverture, marquer toutes les conversations comme lues
-  useEffect(() => {
-    if (isChatOpen && chatSocket.markConversationAsRead && chatSocket.unreadCountByUser) {
-      Object.keys(chatSocket.unreadCountByUser).forEach((userId) => {
-        chatSocket.markConversationAsRead(Number(userId));
-      });
-    }
-  }, [isChatOpen]);
-
-  // Volet chat : animation d'ouverture (glissement depuis la droite)
-  useEffect(() => {
-    if (isChatOpen) {
-      setChatPanelSlideIn(false);
-      const t = requestAnimationFrame(() => {
-        requestAnimationFrame(() => setChatPanelSlideIn(true));
-      });
-      return () => cancelAnimationFrame(t);
-    } else {
-      setChatPanelSlideIn(false);
-    }
-  }, [isChatOpen]);
-
-  const handleCloseChat = () => {
-    setChatPanelSlideIn(false);
-    window.setTimeout(() => setIsChatOpen(false), 350);
-  };
 
   // --- LEGACY “Cycle de calcul des fréquences” ---
   // Ce réglage global (loto_freqConfig_v1) est désormais déprécié au profit des fenêtres par pôle (poolWindows.*).
@@ -649,6 +617,53 @@ export default function Console() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
+
+  // --- POOL SIZE SETTINGS (Top N) ---
+  const LS_POOL_SIZES_KEY = "loto_poolSizes_v1";
+  const EVENT_POOL_SIZES_CHANGED = "loto:poolSizesChanged";
+  type PoolSizeConfig = {
+    balls: { high: number; trend: number; dormeur: number };
+    stars: { high: number; trend: number; dormeur: number };
+  };
+  const [poolSizes, setPoolSizes] = useState<PoolSizeConfig>(() => {
+    const fallback: PoolSizeConfig = {
+      balls: { high: 25, trend: 25, dormeur: 25 },
+      stars: { high: 8, trend: 8, dormeur: 8 },
+    };
+    try {
+      const raw = localStorage.getItem(LS_POOL_SIZES_KEY);
+      if (!raw) return fallback;
+      const parsed = JSON.parse(raw) as Partial<PoolSizeConfig>;
+      return {
+        balls: {
+          high: Math.min(50, Math.max(10, Number(parsed?.balls?.high ?? fallback.balls.high))),
+          trend: Math.min(50, Math.max(10, Number(parsed?.balls?.trend ?? fallback.balls.trend))),
+          dormeur: Math.min(50, Math.max(10, Number(parsed?.balls?.dormeur ?? fallback.balls.dormeur))),
+        },
+        stars: {
+          high: Math.min(12, Math.max(4, Number(parsed?.stars?.high ?? fallback.stars.high))),
+          trend: Math.min(12, Math.max(4, Number(parsed?.stars?.trend ?? fallback.stars.trend))),
+          dormeur: Math.min(12, Math.max(4, Number(parsed?.stars?.dormeur ?? fallback.stars.dormeur))),
+        },
+      };
+    } catch {
+      return fallback;
+    }
+  });
+
+  useEffect(() => {
+    const handler = () => {
+      try {
+        const raw = localStorage.getItem(LS_POOL_SIZES_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw) as PoolSizeConfig;
+        if (!parsed?.balls || !parsed?.stars) return;
+        setPoolSizes(parsed);
+      } catch {}
+    };
+    window.addEventListener(EVENT_POOL_SIZES_CHANGED, handler as EventListener);
+    return () => window.removeEventListener(EVENT_POOL_SIZES_CHANGED, handler as EventListener);
+  }, []);
 
   useEffect(() => {
     const handler = () => {
@@ -1305,13 +1320,15 @@ export default function Console() {
     // LOAD STATE
     try {
         const saved = localStorage.getItem('console_state');
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/e0d55cc8-f5b0-4d7d-aab3-165a07d80745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'Console.tsx:loadEffect',message:'Load effect run',data:{user:user?.username,userRole:user?.role,hasSaved:!!saved,savedKeys:saved?Object.keys(JSON.parse(saved)).filter((k: string)=>k.startsWith('sort')):[]},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H1'})}).catch(()=>{});
+        // #endregion
         if (saved) {
             const state = JSON.parse(saved);
-            // Ne pas restaurer si le state appartient à un autre utilisateur
-            if (state._owner != null && state._owner !== user?.username) {
-              // state d'un autre user, déjà vidé au login ; ne rien restaurer
-            } else {
             isRestoringRef.current = true; // MARK AS RESTORING
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/e0d55cc8-f5b0-4d7d-aab3-165a07d80745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'Console.tsx:loadEffect',message:'Restore block',data:{sortPriority1:state.sortPriority1,sortPriority2:state.sortPriority2,sortPriority3:state.sortPriority3,willRestorePriorities:!(state.sortPriority1==null&&state.sortPriority2==null&&state.sortPriority3==null)},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H2'})}).catch(()=>{});
+            // #endregion
 
             // Mode is NOT loaded from localStorage - it's always based on user role
             // Set mode based on user role (ignoring any saved value)
@@ -1340,13 +1357,10 @@ export default function Console() {
             if (state.weightStarLow !== undefined) setWeightStarLow(state.weightStarLow);
             if (state.weightStarDormeur !== undefined) setWeightStarDormeur(state.weightStarDormeur);
 
+            // IMPORTANT: Do NOT restore VIVIER/STATS knobs from localStorage (default 0).
             if (state.influenceFreq !== undefined) setInfluenceFreq(Math.max(0, Math.min(10, state.influenceFreq)));
             if (state.influenceSurrepr !== undefined) setInfluenceSurrepr(Math.max(0, Math.min(10, state.influenceSurrepr)));
             if (state.influenceTrend !== undefined) setInfluenceTrend(Math.max(0, Math.min(10, state.influenceTrend)));
-            if (state.hazardLevel !== undefined) setHazardLevel(Math.max(0, Math.min(10, state.hazardLevel)));
-            if (state.tendencyLevel !== undefined) setTendencyLevel(Math.max(0, Math.min(10, state.tendencyLevel)));
-            if (state.dormeurBallLevel !== undefined) setDormeurBallLevel(Math.max(0, Math.min(10, state.dormeurBallLevel)));
-            if (state.dormeurStarLevel !== undefined) setDormeurStarLevel(Math.max(0, Math.min(10, state.dormeurStarLevel)));
             
             // Manual selection & SOURCES
             if (state.selectedNumbers) setSelectedNumbers(state.selectedNumbers);
@@ -1364,7 +1378,9 @@ export default function Console() {
                 setSortPriority1(p1);
                 setSortPriority2(p2);
                 setSortPriority3(p3);
-            }
+                // #region agent log
+                fetch('http://127.0.0.1:7242/ingest/e0d55cc8-f5b0-4d7d-aab3-165a07d80745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'Console.tsx:loadEffect',message:'Priorities restored',data:{p1,p2,p3},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H2'})}).catch(()=>{});
+                // #endregion
             }
         }
     } catch (e) {
@@ -1380,10 +1396,16 @@ export default function Console() {
   }, [user]);
 
   useEffect(() => {
+    // Ne pas écraser le localStorage pendant la restauration (état encore aux défauts)
+    // #region agent log
+    const skipSave = isRestoringRef.current;
+    fetch('http://127.0.0.1:7242/ingest/e0d55cc8-f5b0-4d7d-aab3-165a07d80745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'Console.tsx:saveEffect',message:'Save effect run',data:{isRestoringRef:isRestoringRef.current,sortPriority1,sortPriority2,sortPriority3,skipSave},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H3'})}).catch(()=>{});
+    // #endregion
     if (isRestoringRef.current) return;
 
     // SAVE STATE (mode is NOT saved - it's always based on user role)
     const stateToSave = {
+        // mode removed - always determined by user role
         autoDraws,
         generatedNumbers,
         generatedStars,
@@ -1393,18 +1415,16 @@ export default function Console() {
         weightHigh,
         weightStarHigh, weightStarMid, weightStarLow, weightStarDormeur,
         influenceFreq, influenceSurrepr, influenceTrend,
-        hazardLevel,
-        tendencyLevel,
-        dormeurBallLevel,
-        dormeurStarLevel,
         selectedNumbers, selectedStars,
         numberSources, starSources,
         isSimplifiedMode,
         sortPriority1,
         sortPriority2,
-        sortPriority3,
-        _owner: user?.username ?? null, // pour vider console_state au login si autre utilisateur
+        sortPriority3
     };
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/e0d55cc8-f5b0-4d7d-aab3-165a07d80745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'Console.tsx:saveEffect',message:'Writing to localStorage',data:{sortPriority1:stateToSave.sortPriority1,sortPriority2:stateToSave.sortPriority2,sortPriority3:stateToSave.sortPriority3},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H3'})}).catch(()=>{});
+    // #endregion
     localStorage.setItem('console_state', JSON.stringify(stateToSave));
   }, [
     autoDraws, generatedNumbers, generatedStars, selectedPreset,
@@ -1412,17 +1432,12 @@ export default function Console() {
     weightHigh,
     weightStarHigh, weightStarMid, weightStarLow, weightStarDormeur,
     influenceFreq, influenceSurrepr, influenceTrend,
-    hazardLevel,
-    tendencyLevel,
-    dormeurBallLevel,
-    dormeurStarLevel,
     selectedNumbers, selectedStars,
     numberSources, starSources,
     isSimplifiedMode,
     sortPriority1,
     sortPriority2,
-    sortPriority3,
-    user?.username
+    sortPriority3
   ]);
 
   // --- WEIGHT PRESET LOGIC ---
@@ -2467,17 +2482,29 @@ export default function Console() {
   
   // Load preset when selection changes
   useEffect(() => {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/e0d55cc8-f5b0-4d7d-aab3-165a07d80745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'Console.tsx:presetEffect',message:'Preset effect run',data:{user:user?.username,selectedPreset,isRestoringRef:isRestoringRef.current},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H4'})}).catch(()=>{});
+    // #endregion
     if (!user) return;
 
     // Prevent overwriting restored state on initial load
     if (isRestoringRef.current) {
         console.log("Skipping preset load to preserve restored state");
         isRestoringRef.current = false;
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/e0d55cc8-f5b0-4d7d-aab3-165a07d80745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'Console.tsx:presetEffect',message:'Skipped (restoring)',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H4'})}).catch(()=>{});
+        // #endregion
         return;
     }
 
-    // Réglage "0" = neutre (aucun préréglage). Aucune action.
-    if (selectedPreset === "0") return;
+    // If preset is "0", reset to default
+    if (selectedPreset === "0") {
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/e0d55cc8-f5b0-4d7d-aab3-165a07d80745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'Console.tsx:presetEffect',message:'Calling resetToDefault',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H4'})}).catch(()=>{});
+        // #endregion
+        resetToDefault();
+        return;
+    }
 
     // Use user-specific key for presets
     const savedPresets = localStorage.getItem(`loto_presets_${user.username}`);
@@ -2535,9 +2562,9 @@ export default function Console() {
   const handlePresetDoubleClick = () => {
       if (!user) return;
 
-      // Réglage "0" = aucun préréglage, pas de sauvegarde possible
+      // Prevent saving on preset "0"
       if (selectedPreset === "0") {
-          toast.error("Réglage 0 : aucun préréglage à sauvegarder");
+          toast.error("Impossible de sauvegarder sur le réglage 0 (Réinitialisation)");
           return;
       }
 
@@ -2607,9 +2634,9 @@ export default function Console() {
       e.stopPropagation();
       if (!user) return;
 
-      // Réglage "0" = aucun préréglage, pas de sauvegarde possible
+      // Prevent saving on preset "0"
       if (presetId === "0") {
-          toast.error("Réglage 0 : aucun préréglage à sauvegarder");
+          toast.error("Impossible de sauvegarder sur le réglage 0 (Réinitialisation)");
           return;
       }
 
@@ -2676,8 +2703,12 @@ export default function Console() {
       setIsPresetDropdownOpen(false);
       playSound('click');
       
-      // Réglage "0" = neutre (aucun préréglage). Aucune action, pas de chargement.
-      if (presetId === "0") return;
+      // If preset is "0", reset to default
+      if (presetId === "0") {
+          resetToDefault();
+          toast.success("Réglage 0 : Console réinitialisée");
+          return;
+      }
       
       // Load saved data if exists
       const savedPresets = localStorage.getItem(`loto_presets_${user.username}`);
@@ -2996,6 +3027,12 @@ export default function Console() {
             const basketBalls = makeBasket(allNumStats, targetPoolBalls, false);
             const basketStars = makeBasket(allStarStats, targetPoolStars, true);
 
+            // #region agent log
+            const statByNumForLog = new Map(allNumStats.map(s => [s.number, s]));
+            const poolTrends = basketBalls.slice(0, 20).map(n => ({ num: n, trend: statByNumForLog.get(n)?.trend ?? -1, dir: statByNumForLog.get(n)?.trendDirection ?? '?' }));
+            fetch('http://127.0.0.1:7242/ingest/e0d55cc8-f5b0-4d7d-aab3-165a07d80745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'Console.tsx:vivier',message:'Vivier boules',data:{targetPoolBalls,poolSize:basketBalls.length,poolNums:basketBalls.slice(0,15),poolTrends,koGrad,influenceFreq,influenceSurrepr,influenceTrend,sortP1:sortPriority1,sortP2:sortPriority2,sortP3:sortPriority3},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H1'})}).catch(()=>{});
+            // #endregion
+
             // Fallback si stats pas prêtes
             const combinedNumPool = basketBalls.length > 0
               ? basketBalls
@@ -3063,6 +3100,14 @@ export default function Console() {
                 // STATS (tendencyLevel) : 0 = hasard pur, 10 = stats pures (pole stricte). Défaut 0.
                 const statsLevel = Math.max(0, Math.min(10, tendencyLevel));
 
+                // #region agent log — tiebreak: même trend → départage par priorité 1 (freq) puis 2 (surrepr)
+                if (!isStarContext) {
+                    const sortedPreview = sorted.slice(0, 15).map((s, i) => ({ rank: i, num: s.num, trendScore: s.trendScore, finalScore: s.finalScore, frequency: s.frequency, surreprZ: s.surreprZ }));
+                    const tiebreakDemo = [6, 13].map(n => sorted.find(x => x.num === n)).filter(Boolean).map(s => ({ num: s!.num, trendScore: s!.trendScore, frequency: s!.frequency, surreprZ: s!.surreprZ, rank: sorted.findIndex(x => x.num === s!.num) }));
+                    fetch('http://127.0.0.1:7242/ingest/e0d55cc8-f5b0-4d7d-aab3-165a07d80745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'Console.tsx:pickWithStats',message:'Pool et tri + tiebreak 6 vs 13',data:{poolLen:uniquePool.length,statsLevel,maxPool,count,sortedPreview,tiebreakDemo,sortP1:sortPriority1,sortP2:sortPriority2,sortP3:sortPriority3},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H2'})}).catch(()=>{});
+                }
+                // #endregion
+
                 // STATS 9–10 : application stricte = prendre les « count » premiers (pole position)
                 if (statsLevel >= 9) {
                     const pickedSlice = sorted.slice(0, count);
@@ -3070,6 +3115,9 @@ export default function Console() {
                         if (isStarContext) selectionScoreStars[s.num] = s.finalScore;
                         else selectionScoreNums[s.num] = s.finalScore;
                     });
+                    // #region agent log
+                    if (!isStarContext) fetch('http://127.0.0.1:7242/ingest/e0d55cc8-f5b0-4d7d-aab3-165a07d80745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'Console.tsx:pickBranch',message:'Branch pole stricte',data:{branch:'pole',picked:pickedSlice.map(s=>s.num),trends:pickedSlice.map(s=>s.trendScore)},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H3'})}).catch(()=>{});
+                    // #endregion
                     return pickedSlice.map(s => s.num);
                 }
 
@@ -3117,6 +3165,9 @@ export default function Console() {
                     if (isStarContext) selectionScoreStars[s.num] = s.finalScore;
                     else selectionScoreNums[s.num] = s.finalScore;
                 });
+                // #region agent log
+                if (!isStarContext) fetch('http://127.0.0.1:7242/ingest/e0d55cc8-f5b0-4d7d-aab3-165a07d80745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'Console.tsx:pickWeighted',message:'Branch weighted',data:{branch:'weighted',temp,statsLevel,picked:picked.map(s=>s.num),trends:picked.map(s=>s.trendScore),ranks:pickedIndices},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H3'})}).catch(()=>{});
+                // #endregion
                 return picked.map(s => s.num);
             };
 
@@ -3325,6 +3376,11 @@ export default function Console() {
                 if (!forbiddenKeys.has(key)) {
                     forbiddenKeys.add(key);
                     foundUnique = true;
+                    // #region agent log
+                    const inPool = calculatedNums.map(n => combinedNumPool.includes(n));
+                    const trends = calculatedNums.map(n => statByNumForLog.get(n)?.trend ?? -1);
+                    fetch('http://127.0.0.1:7242/ingest/e0d55cc8-f5b0-4d7d-aab3-165a07d80745',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'Console.tsx:finalNums',message:'Résultat final',data:{calculatedNums,poolSize:combinedNumPool.length,inPool,trends,dormeurBallLevel,attempt},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'H5'})}).catch(()=>{});
+                    // #endregion
                     break;
                 }
             }
@@ -3414,12 +3470,11 @@ export default function Console() {
       // 3. Reset Tarif (prix de la grille)
       setSelectedTariff(null);
       
-      // 4. Reset Vivier, Stat, Dormeur et influences (Fréquence, Surreprés, Tendance)
+      // 4. Reset Chaos et Tendance
+      // Chaos à 0 = minimum de chaos (100% statistiques)
+      // Tendance à 0 = aucune influence tendance (stat pure)
       setHazardLevel(0);
       setTendencyLevel(0);
-      setInfluenceFreq(0);
-      setInfluenceSurrepr(0);
-      setInfluenceTrend(0);
       
       // 5. Reset Email/SMS
       setEmailNotify(false);
@@ -3433,16 +3488,14 @@ export default function Console() {
       // 9. Reset preset sélectionné
       setSelectedPreset("0");
       
-      // 10. Reset Priorité de tri (défaut : Fréquence, Surreprésentation, Tendance)
-      setSortPriority1('frequency');
-      setSortPriority2('surrepr');
-      setSortPriority3('trend');
+      // NOTE: On NE réinitialise PAS les priorités de tri (sortPriority1, sortPriority2, sortPriority3)
+      // ni le mode simplifié/classique (isSimplifiedMode) selon la demande de l'utilisateur
       
-      // 11. Update Limits
+      // 10. Update Limits
       setMaxWeightLimit(10);
       
       playSound('click');
-      toast.success("Réinitialisation complète effectuée");
+      toast.success("Réinitialisation complète effectuée (priorités de tri conservées)");
   };
 
   const handleSend = () => {
@@ -4247,8 +4300,8 @@ export default function Console() {
         </div>
       ) : null}
 
-      {/* Wrapper for perfect centering (relative pour positionner le volet chat) */}
-      <div className="w-full flex justify-center relative">
+      {/* Wrapper for perfect centering */}
+      <div className="w-full flex justify-center">
         <div 
           className="p-2 space-y-2" 
           style={{ 
@@ -4433,10 +4486,10 @@ export default function Console() {
                      </div>
                  </div>
                  
-                 {/* CENTER: SOUND + (ADMIN: CLÉ) + CHAT */}
+                 {/* CENTER: SOUND */}
                  <div className="flex items-center justify-center gap-[20px] h-full pt-[24px]">
 
-                     {/* SOUND TOGGLE */}
+                     {/* SOUND TOGGLE MOVED HERE */}
                      <button 
                         onClick={() => setSoundEnabled(!soundEnabled)} 
                         className={cn(
@@ -4448,7 +4501,7 @@ export default function Console() {
                         {soundEnabled ? "♪" : "×"}
                      </button>
 
-                     {/* ADMIN: CLÉ (Panneau de contrôle) - même format que le bouton Chat */}
+                     {/* ADMIN CONTROL BUTTON - Round with wrench icon */}
                      {user?.role === 'admin' && (
                          <button 
                              onClick={() => setIsDebugOpen(true)}
@@ -4458,27 +4511,6 @@ export default function Console() {
                              <Wrench size={20} />
                          </button>
                      )}
-
-                     {/* CHAT - bulle de parole, style bleu + nombre connectés + badge non lus */}
-                     <div className="flex flex-col items-center gap-0.5">
-                         {!isChatOpen && (chatSocket.totalUnread ?? 0) > 0 && (
-                             <span className="text-[11px] text-red-500 font-mono tabular-nums font-bold leading-none">
-                                 {chatSocket.totalUnread}
-                             </span>
-                         )}
-                         <div className="flex items-center gap-1">
-                             <button 
-                                 onClick={() => setIsChatOpen(true)}
-                                 className="w-9 h-9 rounded-full border-2 border-blue-500 bg-[linear-gradient(180deg,#1e3a5f_0%,#0f172a_100%)] text-blue-400 hover:bg-[linear-gradient(180deg,#2563eb_0%,#1e40af_100%)] hover:border-blue-400 hover:text-white hover:shadow-[0_0_12px_rgba(59,130,246,0.6)] transition-all duration-300 flex items-center justify-center flex-shrink-0"
-                                 title="Chat"
-                             >
-                                 <MessageSquare size={18} strokeWidth={2.5} />
-                             </button>
-                             <span className="text-[15px] text-zinc-500 font-mono tabular-nums leading-none">
-                                 {chatSocket.connected ? chatSocket.othersConnectedCount : '—'}
-                             </span>
-                         </div>
-                     </div>
                      
                  </div>
 
@@ -4541,12 +4573,12 @@ export default function Console() {
                                                 onClick={() => handleLoadPreset(presetId)}
                                         >
                                                 <span className={isPreset0 ? "text-zinc-500 italic" : (isSaved ? "text-white font-bold" : "text-zinc-400")}>
-                                                    Réglage {num} {isPreset0 && "(Aucun préréglage)"}
+                                                    Réglage {num} {isPreset0 && "(Réinitialisation)"}
                                             </span>
                                                 
                                                 <div className="flex items-center gap-2">
                                                     {isPreset0 ? (
-                                                        <span className="text-xs text-zinc-500 italic">Ne fait rien</span>
+                                                        <span className="text-xs text-zinc-500 italic">Non sauvegardable</span>
                                                     ) : isSaved ? (
                                                         <>
                                                             {/* Delete button - Red square */}
@@ -5161,7 +5193,7 @@ export default function Console() {
                             <div 
                                 onClick={handleReset}
                                 className="cursor-pointer transition-transform hover:scale-110 ml-2"
-                                title="Réinitialiser tous les réglages (y compris priorité de tri)"
+                                title="Réinitialiser tous les réglages (sauf priorités de tri)"
                             >
                                 <RefreshCcw size={24} className="text-white drop-shadow-[0_0_5px_rgba(255,255,255,0.5)] hover:text-red-400 transition-colors" />
                             </div>
@@ -5563,49 +5595,6 @@ export default function Console() {
             lastDrawDate={dernierTirage && dernierTirage.date && !isNaN(new Date(dernierTirage.date).getTime()) ? format(new Date(dernierTirage.date), 'yyyy-MM-dd') : '...'}
             totalDraws={stats ? 1899 : 0} 
         />
-
-        {/* Panneau Chat (glisse depuis la droite) */}
-        {isChatOpen && (
-            <>
-                <div 
-                    className="absolute inset-0 bg-black/50 z-40" 
-                    onClick={handleCloseChat} 
-                    aria-hidden="true"
-                />
-                <div 
-                    className="absolute top-0 right-0 bottom-0 w-full max-w-[498px] bg-zinc-950 border-l-2 border-casino-gold/50 shadow-[-10px_0_30px_rgba(0,0,0,0.5)] z-50 flex flex-col transition-transform duration-[350ms] ease-out"
-                    style={{ transform: chatPanelSlideIn ? 'translateX(0)' : 'translateX(100%)' }}
-                >
-                    <div className="flex items-center p-4 border-b border-zinc-800">
-                        <button
-                            type="button"
-                            onClick={handleCloseChat}
-                            className="w-10 h-10 rounded-full border-2 border-red-600 bg-red-950/50 text-red-500 hover:bg-red-900/50 hover:text-red-400 flex items-center justify-center flex-shrink-0"
-                            title="Fermer"
-                        >
-                            <span className="text-2xl font-bold leading-none">×</span>
-                        </button>
-                        <h2 className="flex-1 text-center font-orbitron text-lg text-casino-gold tracking-widest">CHAT</h2>
-                        <div className="w-10 flex-shrink-0" />
-                    </div>
-                    <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-                        {user?.id ? (
-                            <ChatPanel
-                                onClose={handleCloseChat}
-                                isOpen={isChatOpen}
-                                currentUserId={user.id}
-                                currentUsername={user.username ?? ''}
-                                chatSocket={chatSocket}
-                            />
-                        ) : (
-                            <div className="flex-1 p-4 text-zinc-400 text-lg overflow-auto">
-                                Connexion requise pour le chat.
-                            </div>
-                        )}
-                    </div>
-                </div>
-            </>
-        )}
 
         </div>
       </div>

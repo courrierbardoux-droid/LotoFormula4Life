@@ -39,9 +39,6 @@ export type PresetConfig = {
   weightStarDormeur: number;
   
   // Options
-  avoidPairExt: boolean;
-  balanceHighLow: boolean;
-  avoidPopSeq: boolean;
   avoidFriday: boolean;
 
   // Mode

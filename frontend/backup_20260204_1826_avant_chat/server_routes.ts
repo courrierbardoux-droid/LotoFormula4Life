@@ -10,9 +10,15 @@ import { registerChatToken } from './chatWs';
 // ============================================
 
 function requireAuth(req: Request, res: Response, next: NextFunction) {
+  console.log('[requireAuth] Vérification authentification, isAuthenticated():', req.isAuthenticated());
+  console.log('[requireAuth] req.user:', req.user ? { id: (req.user as any).id, username: (req.user as any).username, role: (req.user as any).role } : 'null');
+  
   if (req.isAuthenticated()) {
+    console.log('[requireAuth] ✅ Authentification OK, passage au handler suivant');
     return next();
   }
+  
+  console.log('[requireAuth] ❌ Authentification échouée, envoi 401');
   res.status(401).json({ error: 'Non authentifié' });
 }
 
@@ -300,28 +306,6 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
     const token = randomBytes(24).toString('base64url');
     registerChatToken(token, { userId: user.id, username: user.username });
     res.json({ token });
-  });
-
-  // Liste des contacts chat (utilisateurs avec qui on a déjà discuté)
-  app.get('/api/chat/contacts', requireAuth, async (req, res) => {
-    try {
-      if (!hasDatabase) return res.json({ contacts: [] });
-      const user = req.user as any;
-      const { db } = await import('../db');
-      const { chatMessages, users } = await import('../db/schema');
-      const { or, eq, inArray } = await import('drizzle-orm');
-      const myId = user.id;
-      const fromRows = await db.select({ userId: chatMessages.toUserId }).from(chatMessages).where(eq(chatMessages.fromUserId, myId));
-      const toRows = await db.select({ userId: chatMessages.fromUserId }).from(chatMessages).where(eq(chatMessages.toUserId, myId));
-      const userIds = [...new Set([...fromRows.map((r) => r.userId), ...toRows.map((r) => r.userId)])].filter((id) => id !== myId);
-      if (userIds.length === 0) return res.json({ contacts: [] });
-      const userRows = await db.select({ id: users.id, username: users.username }).from(users).where(inArray(users.id, userIds));
-      const contacts = userRows.map((u) => ({ userId: u.id, username: u.username }));
-      res.json({ contacts });
-    } catch (e) {
-      console.error('[chat/contacts]', e);
-      res.json({ contacts: [] });
-    }
   });
 
   // Modifier son propre profil

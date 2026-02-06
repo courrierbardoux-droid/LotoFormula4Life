@@ -1,13 +1,12 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { CasinoLayout } from "@/components/layout/CasinoLayout";
 import { toast } from "sonner";
 import type { FrequencyConfig, PeriodUnit, TrendWindowConfig } from "@/lib/lotoService";
 import { motion } from "framer-motion";
+import { useUser } from "@/lib/UserContext";
 
 const LS_FREQ_CONFIG_KEY = "loto_freqConfig_v1";
 const EVENT_FREQ_CONFIG_CHANGED = "loto:freqConfigChanged";
-const LS_POOL_SIZES_KEY = "loto_poolSizes_v1";
-const EVENT_POOL_SIZES_CHANGED = "loto:poolSizesChanged";
 const LS_POOL_WINDOWS_KEY = "loto_poolWindows_v1";
 const EVENT_POOL_WINDOWS_CHANGED = "loto:poolWindowsChanged";
 const LS_POOL_WINDOW_PRESET_NUMBERS_KEY = "loto_poolWindowPresetNumbers_v1";
@@ -29,9 +28,10 @@ function safeParseFreqConfig(raw: string | null): FrequencyConfig | null {
   }
 }
 
-export type SettingsMode = "all" | "pools" | "windows";
+export type SettingsMode = "all" | "windows";
 
 export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
+  const { user } = useUser();
   type PoolKey = "high" | "surrepr" | "trend" | "dormeur";
   type PoolWindowsConfig = { high: FrequencyConfig; surrepr: FrequencyConfig; trend: TrendWindowConfig; dormeur: FrequencyConfig };
   type WindowPreset =
@@ -54,8 +54,10 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
     | "yearsShort"
     | "yearsLong";
   type PoolWindowPresetNumbers = Record<PoolKey, Record<PresetNumberKey, number>>;
-  type SaveStatus = "saved" | "dirty";
-  type SavePulseSource = "apply" | "preset" | "change";
+  const hasLoadedUserWindowsRef = useRef(false);
+
+  const getPoolWindowsStorageKey = (userId?: number) => `loto_poolWindows_v1_u${userId ?? "unknown"}`;
+  const getPresetNumbersStorageKey = (userId?: number) => `loto_poolWindowPresetNumbers_v1_u${userId ?? "unknown"}`;
 
   const approxTimeFromDraws = (draws: number) => {
     // EuroMillions: ~2 tirages/semaine => 1 tirage ≈ 3,5 jours.
@@ -137,7 +139,8 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
   };
 
   const [presetNumbers, setPresetNumbers] = useState<PoolWindowPresetNumbers>(() => {
-    const existing = safeParsePresetNumbers(localStorage.getItem(LS_POOL_WINDOW_PRESET_NUMBERS_KEY));
+    const key = user?.id ? getPresetNumbersStorageKey(user.id) : LS_POOL_WINDOW_PRESET_NUMBERS_KEY;
+    const existing = safeParsePresetNumbers(localStorage.getItem(key));
     return existing ?? defaultPresetNumbers;
   });
 
@@ -147,20 +150,15 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
 
   useEffect(() => {
     const handler = () => {
-      const existing = safeParsePresetNumbers(localStorage.getItem(LS_POOL_WINDOW_PRESET_NUMBERS_KEY));
+      const key = user?.id ? getPresetNumbersStorageKey(user.id) : LS_POOL_WINDOW_PRESET_NUMBERS_KEY;
+      const existing = safeParsePresetNumbers(localStorage.getItem(key));
       if (existing) {
         setPresetNumbers(existing);
       }
     };
     window.addEventListener(EVENT_POOL_WINDOW_PRESET_NUMBERS_CHANGED, handler as EventListener);
     return () => window.removeEventListener(EVENT_POOL_WINDOW_PRESET_NUMBERS_CHANGED, handler as EventListener);
-  }, []);
-
-  // Save status is now for "Taille des pools" only (Tableau 2).
-  // "Fenêtre de calcul" (Tableau 1) is auto-applied on change.
-  const [poolSizesSaveStatus, setPoolSizesSaveStatus] = useState<SaveStatus>("saved");
-  const [poolSizesSavePulseId, setPoolSizesSavePulseId] = useState(0);
-  const [poolSizesSavePulseSource, setPoolSizesSavePulseSource] = useState<SavePulseSource>("apply");
+  }, [user?.id]);
 
   const defaultPoolWindows: PoolWindowsConfig = {
     high: { type: "custom", customUnit: "draws", customValue: 680 },
@@ -260,7 +258,8 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
   };
 
   const [poolWindows, setPoolWindows] = useState<PoolWindowsConfig>(() => {
-    const existing = safeParsePoolWindows(localStorage.getItem(LS_POOL_WINDOWS_KEY));
+    const key = user?.id ? getPoolWindowsStorageKey(user.id) : LS_POOL_WINDOWS_KEY;
+    const existing = safeParsePoolWindows(localStorage.getItem(key));
     if (existing) return existing;
     // Compat: si l'ancien réglage unique existe, on l'utilise comme fenêtre High
     const old = safeParseFreqConfig(localStorage.getItem(LS_FREQ_CONFIG_KEY));
@@ -270,9 +269,90 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
 
   // AUTO-APPLY (Tableau 1): on persiste et on notifie dès que la fenêtre change.
   useEffect(() => {
-    localStorage.setItem(LS_POOL_WINDOWS_KEY, JSON.stringify(poolWindows));
+    const key = user?.id ? getPoolWindowsStorageKey(user.id) : LS_POOL_WINDOWS_KEY;
+    localStorage.setItem(key, JSON.stringify(poolWindows));
     window.dispatchEvent(new Event(EVENT_POOL_WINDOWS_CHANGED));
-  }, [poolWindows]);
+  }, [poolWindows, user?.id]);
+
+  // Charger depuis la DB (par utilisateur) au 1er rendu
+  useEffect(() => {
+    if (!user?.id) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/user-settings/windows", { credentials: "include" });
+        if (!res.ok) {
+          hasLoadedUserWindowsRef.current = true;
+          return;
+        }
+        const data = await res.json();
+        if (cancelled) return;
+
+        // 1) Presets numériques (valeurs)
+        const serverPresetNumbersRaw = data?.poolWindowPresetNumbers ?? null;
+        const serverPresetNumbers = serverPresetNumbersRaw
+          ? safeParsePresetNumbers(JSON.stringify(serverPresetNumbersRaw))
+          : null;
+        if (serverPresetNumbers) {
+          localStorage.setItem(getPresetNumbersStorageKey(user.id), JSON.stringify(serverPresetNumbers));
+          setPresetNumbers(serverPresetNumbers);
+        }
+        const effectivePresetNumbers =
+          serverPresetNumbers ??
+          safeParsePresetNumbers(localStorage.getItem(getPresetNumbersStorageKey(user.id))) ??
+          defaultPresetNumbers;
+
+        // 2) Fenêtres actives
+        const serverPoolWindowsRaw = data?.poolWindows ?? null;
+        const serverPoolWindows = serverPoolWindowsRaw ? safeParsePoolWindows(JSON.stringify(serverPoolWindowsRaw)) : null;
+        if (serverPoolWindows) {
+          localStorage.setItem(getPoolWindowsStorageKey(user.id), JSON.stringify(serverPoolWindows));
+          hasLoadedUserWindowsRef.current = true;
+          setPoolWindows(serverPoolWindows);
+          return;
+        }
+
+        // Aucun choix spécifique: Dynamics pour les 4 pools (High / Surrepr / Trend / Dormeur)
+        const dynamicDefaults: PoolWindowsConfig = {
+          high: presetToWindowFromNumbers("high", effectivePresetNumbers.high, "dynamic"),
+          surrepr: presetToWindowFromNumbers("surrepr", effectivePresetNumbers.surrepr, "dynamic"),
+          trend: presetToWindowFromNumbers("trend", effectivePresetNumbers.trend, "dynamic"),
+          dormeur: presetToWindowFromNumbers("dormeur", effectivePresetNumbers.dormeur, "dynamic"),
+        };
+        localStorage.setItem(getPoolWindowsStorageKey(user.id), JSON.stringify(dynamicDefaults));
+        hasLoadedUserWindowsRef.current = true;
+        setPoolWindows(dynamicDefaults);
+      } catch {
+        hasLoadedUserWindowsRef.current = true;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+
+  // Auto-save en DB (debounce) dès qu'on change Tableau 1
+  useEffect(() => {
+    if (!user?.id) return;
+    if (!hasLoadedUserWindowsRef.current) return;
+    const id = window.setTimeout(async () => {
+      try {
+        await fetch("/api/user-settings/windows", {
+          method: "PUT",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            poolWindows,
+            poolWindowPresetNumbers: presetNumbers,
+          }),
+        });
+      } catch {
+        // ignore
+      }
+    }, 400);
+    return () => window.clearTimeout(id);
+  }, [poolWindows, presetNumbers, user?.id]);
 
   const [poolWindowPresets, setPoolWindowPresets] = useState<Record<PoolKey, WindowPreset>>(() => ({
     high: windowToPreset("high", poolWindows.high),
@@ -281,41 +361,19 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
     dormeur: windowToPreset("dormeur", poolWindows.dormeur),
   }));
 
+  // Garder les radios en phase si la fenêtre change (reset / chargement / custom)
+  useEffect(() => {
+    setPoolWindowPresets({
+      high: windowToPreset("high", poolWindows.high),
+      surrepr: windowToPreset("surrepr", poolWindows.surrepr),
+      trend: windowToPreset("trend", poolWindows.trend),
+      dormeur: windowToPreset("dormeur", poolWindows.dormeur),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [poolWindows]);
+
   useEffect(() => {
   }, [poolWindowPresets.surrepr, presetNumbers.surrepr?.dynamicDraws, presetNumbers.surrepr?.standardDraws]);
-
-  type PoolSizeConfig = {
-    balls: { high: number; trend: number; dormeur: number };
-    stars: { high: number; trend: number; dormeur: number };
-  };
-
-  const defaultPoolSizes: PoolSizeConfig = {
-    balls: { high: 25, trend: 25, dormeur: 25 },
-    stars: { high: 8, trend: 8, dormeur: 8 },
-  };
-
-  const [poolSizes, setPoolSizes] = useState<PoolSizeConfig>(() => {
-    try {
-      const raw = localStorage.getItem(LS_POOL_SIZES_KEY);
-      if (!raw) return defaultPoolSizes;
-      const parsed = JSON.parse(raw) as Partial<PoolSizeConfig>;
-      const safe = {
-        balls: {
-          high: Math.min(50, Math.max(10, Number(parsed?.balls?.high ?? defaultPoolSizes.balls.high))),
-          trend: Math.min(50, Math.max(10, Number(parsed?.balls?.trend ?? defaultPoolSizes.balls.trend))),
-          dormeur: Math.min(50, Math.max(10, Number(parsed?.balls?.dormeur ?? defaultPoolSizes.balls.dormeur))),
-        },
-        stars: {
-          high: Math.min(12, Math.max(4, Number(parsed?.stars?.high ?? defaultPoolSizes.stars.high))),
-          trend: Math.min(12, Math.max(4, Number(parsed?.stars?.trend ?? defaultPoolSizes.stars.trend))),
-          dormeur: Math.min(12, Math.max(4, Number(parsed?.stars?.dormeur ?? defaultPoolSizes.stars.dormeur))),
-        },
-      };
-      return safe;
-    } catch {
-      return defaultPoolSizes;
-    }
-  });
 
   useEffect(() => {
     const existing = safeParseFreqConfig(localStorage.getItem(LS_FREQ_CONFIG_KEY));
@@ -338,7 +396,8 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
   }, [presetNumbers]);
 
   const persistPresetNumbers = (next: PoolWindowPresetNumbers) => {
-    localStorage.setItem(LS_POOL_WINDOW_PRESET_NUMBERS_KEY, JSON.stringify(next));
+    const key = user?.id ? getPresetNumbersStorageKey(user.id) : LS_POOL_WINDOW_PRESET_NUMBERS_KEY;
+    localStorage.setItem(key, JSON.stringify(next));
     window.dispatchEvent(new Event(EVENT_POOL_WINDOW_PRESET_NUMBERS_CHANGED));
   };
 
@@ -456,16 +515,6 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
     );
   };
 
-  const apply = () => {
-    localStorage.setItem(LS_POOL_SIZES_KEY, JSON.stringify(poolSizes));
-    window.dispatchEvent(new Event(EVENT_POOL_SIZES_CHANGED));
-
-    toast.success("Taille des pools enregistrée.");
-    setPoolSizesSaveStatus("saved");
-    setPoolSizesSavePulseSource("apply");
-    setPoolSizesSavePulseId((x) => x + 1);
-  };
-
   return (
     <CasinoLayout>
       <div className="max-w-3xl mx-auto p-6">
@@ -475,7 +524,32 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
             <div className="bg-gradient-to-b from-[#1a1a1a] to-[#0a0a0a] border border-zinc-700 rounded-lg p-6">
               <div className="mt-6 space-y-4">
                 <div className="border border-zinc-800 rounded-lg p-4">
-                  <h2 className="font-orbitron text-lg text-casino-gold tracking-widest">Fenêtre de calcul</h2>
+                  <div className="flex items-center justify-between gap-3">
+                    <h2 className="font-orbitron text-lg text-casino-gold tracking-widest">Fenêtre de calcul</h2>
+                    <button
+                      type="button"
+                      className="px-3 py-1.5 rounded-md bg-zinc-800 text-white text-sm font-bold border border-zinc-700 hover:bg-zinc-700 transition-colors"
+                      onClick={() => {
+                        const dynamicDefaults: PoolWindowsConfig = {
+                          high: presetToWindow("high", "dynamic"),
+                          surrepr: presetToWindow("surrepr", "dynamic"),
+                          trend: presetToWindow("trend", "dynamic"),
+                          dormeur: presetToWindow("dormeur", "dynamic"),
+                        };
+                        setPoolWindows(dynamicDefaults);
+                        setPoolWindowPresets({
+                          high: "dynamic",
+                          surrepr: "dynamic",
+                          trend: "dynamic",
+                          dormeur: "dynamic",
+                        });
+                        toast.success("Fenêtres remises sur Dynamics.");
+                      }}
+                      aria-label="Reset fenêtres de calcul"
+                    >
+                      Reset
+                    </button>
+                  </div>
                   <p className="text-zinc-400 mt-2 text-sm">
                     Chaque pool peut avoir sa propre fenêtre de calcul: High (fréquences), Surreprésentation, Tendance, Dormeur (retards).
                   </p>
@@ -757,143 +831,6 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
                       );
                     })}
                   </div>
-                </div>
-              </div>
-            </div>
-          </>
-        )}
-
-        {mode !== "windows" && (
-          <>
-            {/* TABLEAU 2: Taille des pools (séparé physiquement) */}
-            <div className={["bg-gradient-to-b from-[#1a1a1a] to-[#0a0a0a] border border-zinc-700 rounded-lg p-6", mode === "all" ? "mt-4" : ""].join(" ")}>
-              <div className="mt-6 space-y-4">
-                <div className="border border-zinc-800 rounded-lg p-4">
-                  <h2 className="font-orbitron text-lg text-casino-gold tracking-widest">Taille des pools</h2>
-                  <p className="text-zinc-400 mt-2 text-sm">
-                    Ici tu définis combien d'éléments (Top N) sont pris dans chaque pool, du plus “top” vers le moins “top”.
-                  </p>
-
-                  <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="border border-zinc-800 rounded-lg p-3">
-                      <div className="text-white font-rajdhani text-lg mb-2">Boules (1–50)</div>
-                      {(["high", "trend", "dormeur"] as const).map((k) => (
-                        <div key={`balls-${k}`} className="flex items-center justify-between gap-3 py-2">
-                          <div className="text-zinc-300 text-sm">{k === "high" ? "High" : k === "trend" ? "Tendance" : "Dormeur"}</div>
-                          <input
-                            className="bg-black/40 border border-zinc-700 rounded-md px-3 py-2 text-white w-28 text-right"
-                            type="number"
-                            min={10}
-                            max={50}
-                            value={poolSizes.balls[k]}
-                            onChange={(e) => {
-                              const v = Math.min(50, Math.max(10, parseInt(e.target.value) || 10));
-                              setPoolSizes((prev) => ({ ...prev, balls: { ...prev.balls, [k]: v } }));
-                              setPoolSizesSaveStatus("dirty");
-                              setPoolSizesSavePulseSource("change");
-                            }}
-                          />
-                        </div>
-                      ))}
-                    </div>
-
-                    <div className="border border-zinc-800 rounded-lg p-3">
-                      <div className="text-white font-rajdhani text-lg mb-2">Étoiles (1–12)</div>
-                      {(["high", "trend", "dormeur"] as const).map((k) => (
-                        <div key={`stars-${k}`} className="flex items-center justify-between gap-3 py-2">
-                          <div className="text-zinc-300 text-sm">{k === "high" ? "High" : k === "trend" ? "Tendance" : "Dormeur"}</div>
-                          <input
-                            className="bg-black/40 border border-zinc-700 rounded-md px-3 py-2 text-white w-28 text-right"
-                            type="number"
-                            min={4}
-                            max={12}
-                            value={poolSizes.stars[k]}
-                            onChange={(e) => {
-                              const v = Math.min(12, Math.max(4, parseInt(e.target.value) || 4));
-                              setPoolSizes((prev) => ({ ...prev, stars: { ...prev.stars, [k]: v } }));
-                              setPoolSizesSaveStatus("dirty");
-                              setPoolSizesSavePulseSource("change");
-                            }}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <button
-                      className="px-3 py-2 rounded-md bg-zinc-800 text-zinc-200 text-sm font-bold hover:bg-zinc-700 transition-colors"
-                      onClick={() => {
-                        setPoolSizes(defaultPoolSizes);
-                        setPoolSizesSaveStatus("dirty");
-                        setPoolSizesSavePulseSource("change");
-                      }}
-                    >
-                      RESET (25/8)
-                    </button>
-                    <button
-                      className="px-3 py-2 rounded-md bg-zinc-800 text-zinc-200 text-sm font-bold hover:bg-zinc-700 transition-colors"
-                      onClick={() => {
-                        setPoolSizes({
-                          balls: { high: 50, trend: 50, dormeur: 50 },
-                          stars: { high: 12, trend: 12, dormeur: 12 },
-                        });
-                        setPoolSizesSaveStatus("dirty");
-                        setPoolSizesSavePulseSource("change");
-                      }}
-                    >
-                      MAX
-                    </button>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between border border-zinc-800 rounded-lg p-4">
-                  <div className="text-zinc-300">
-                    <div className="font-rajdhani text-lg">Fenêtres actives</div>
-                    <div className="text-zinc-400 text-sm space-y-1 mt-1">
-                      <div>High: {describeWindow(poolWindows.high)}</div>
-                      <div>Surreprésentation: {describeWindow(poolWindows.surrepr)}</div>
-                      <div>Tendance: {describeWindow(poolWindows.trend)}</div>
-                      <div>Dormeur: {describeWindow(poolWindows.dormeur)}</div>
-                    </div>
-                    <div className="mt-2 text-sm font-bold">
-                      {poolSizesSaveStatus === "saved" ? (
-                        <motion.span
-                          key={`saved-${poolSizesSavePulseId}-${poolSizesSavePulseSource}`}
-                          className="text-green-400 inline-flex items-center gap-2"
-                          initial={{ scale: 1, opacity: 0.85 }}
-                          animate={{
-                            opacity: [0.85, 1, 1],
-                            scale: poolSizesSavePulseSource === "apply" || poolSizesSavePulseSource === "preset" ? [1, 1.08, 1] : 1,
-                          }}
-                          transition={{ duration: 0.35 }}
-                        >
-                          ✔ Enregistré
-                        </motion.span>
-                      ) : (
-                        <span className="text-amber-400">● Modifications non enregistrées</span>
-                      )}
-                    </div>
-                  </div>
-                  <button
-                    className={[
-                      "px-5 py-2 rounded-md text-white font-orbitron tracking-widest transition-colors active:scale-[0.98]",
-                      poolSizesSaveStatus === "saved"
-                        ? "bg-green-700 hover:bg-green-600"
-                        : "bg-green-600 hover:bg-green-500 ring-2 ring-amber-400/60",
-                    ].join(" ")}
-                    onClick={apply}
-                  >
-                    <motion.span
-                      key={`btn-${poolSizesSavePulseId}-${poolSizesSaveStatus}`}
-                      className="inline-block"
-                      initial={{ scale: 1 }}
-                      animate={poolSizesSaveStatus === "saved" ? { scale: [1, 1.06, 1] } : { scale: 1 }}
-                      transition={{ duration: 0.25 }}
-                    >
-                      {poolSizesSaveStatus === "saved" ? "ENREGISTRÉ" : "ENREGISTRER"}
-                    </motion.span>
-                  </button>
                 </div>
               </div>
             </div>

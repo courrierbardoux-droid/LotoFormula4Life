@@ -27,7 +27,10 @@ export default defineConfig({
         rewrite: (path) => path, // Ne pas réécrire le chemin
         configure: (proxy, _options) => {
           proxy.on('error', (err, _req, res) => {
-            console.error('Proxy error:', err);
+            console.log('Proxy error:', err);
+          });
+          proxy.on('proxyReq', (proxyReq, req, _res) => {
+            console.log('Proxying request:', req.method, req.url, '→', proxyReq.path);
           });
         },
       },

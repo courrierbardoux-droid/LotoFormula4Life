@@ -113,6 +113,12 @@ export default function SubscriberManagement() {
         toast.error('Veuillez générer un code d\'abord');
         return;
     }
+
+    // Confirmation simple (pour éviter le "j'envoie sans le vouloir")
+    const ok = window.confirm(
+      `Confirmer l'envoi d'une invitation ${codeType.toUpperCase()} à :\n\n${inviteEmail}\n\nCode : ${generatedCode}\n\nConfirmer ?`
+    );
+    if (!ok) return;
     
     setIsSending(true);
     try {

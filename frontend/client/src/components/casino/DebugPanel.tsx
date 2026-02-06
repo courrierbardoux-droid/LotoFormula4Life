@@ -24,8 +24,6 @@ interface DebugPanelProps {
     weightStarMid: number;
     weightStarLow: number;
     weightStarDormeur: number;
-    avoidPairExt: boolean;
-    balanceHighLow: boolean;
   };
   numberSources?: Record<number, 'high' | 'dormeur'>;
   starSources?: Record<number, 'high' | 'dormeur'>;
@@ -169,11 +167,6 @@ export function DebugPanel({
                     <div className="flex justify-between"><span>- Dormeur :</span> <span className="text-white">{config.weightStarDormeur}</span></div>
                 </div>
 
-                <div className="mt-4 text-zinc-400 font-bold">Options :</div>
-                <div className="pl-4 space-y-1">
-                    <div className="flex justify-between"><span>- Pair/Impair :</span> <span className={config.avoidPairExt ? "text-green-400" : "text-zinc-600"}>{config.avoidPairExt ? "OUI" : "NON"}</span></div>
-                    <div className="flex justify-between"><span>- Haut/Bas :</span> <span className={config.balanceHighLow ? "text-green-400" : "text-zinc-600"}>{config.balanceHighLow ? "OUI" : "NON"}</span></div>
-                </div>
             </div>
         </div>
 

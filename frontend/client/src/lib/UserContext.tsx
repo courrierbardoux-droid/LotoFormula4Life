@@ -127,11 +127,9 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  // Nettoyer les données utilisateur du localStorage
+  // Nettoyer les données utilisateur du localStorage (sauf console_state : priorité de tri et état console conservés pour même utilisateur)
   const clearUserData = () => {
     const keysToRemove = [
-      // 'loto_played_grids' retiré - les grilles sont maintenant uniquement en DB
-      'console_state',          // État de la console (tirages affichés)
       'lf4l-grilles-jouees',
       'lf4l-grilles-gagnantes', 
       'lf4l-console-presets',
@@ -144,6 +142,20 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       'loto_favorites',
     ];
     keysToRemove.forEach(key => localStorage.removeItem(key));
+  };
+
+  // Vider console_state seulement si un autre utilisateur se connecte (éviter d'hériter de l'état du précédent)
+  const clearConsoleStateIfDifferentUser = (currentUsername: string) => {
+    try {
+      const raw = localStorage.getItem('console_state');
+      if (!raw) return;
+      const state = JSON.parse(raw) as { _owner?: string };
+      if (state._owner != null && state._owner !== currentUsername) {
+        localStorage.removeItem('console_state');
+      }
+    } catch {
+      // ignore
+    }
   };
 
   // Connexion
@@ -163,8 +175,8 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
         };
         
         if (validPasswords[username] === password) {
-          // Nettoyer les données de l'utilisateur précédent
           clearUserData();
+          clearConsoleStateIfDifferentUser(mockUser.username);
           setUser(mockUser);
           return true;
         }
@@ -183,8 +195,8 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
       const data = await response.json();
       
       if (data.success && data.user) {
-        // Nettoyer les données de l'utilisateur précédent au LOGIN
         clearUserData();
+        clearConsoleStateIfDifferentUser(data.user.username);
         console.log('[UserContext] localStorage nettoyé au login');
         setUser(data.user);
         return true;
@@ -214,7 +226,7 @@ export function UserProvider({ children }: { children: React.ReactNode }) {
     clearUserData();
     localStorage.removeItem('lf4l-euromillions-history'); // Aussi nettoyer l'historique
     console.log('[UserContext] localStorage nettoyé au logout');
-    
+
     setUser(null);
     setLocation('/');
   };

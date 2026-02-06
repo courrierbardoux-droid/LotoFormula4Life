@@ -1,4 +1,4 @@
-# PROMPT SYSTÈME - LOTOFORMULA4LIFE
+﻿# PROMPT SYSTÈME - LOTOFORMULA4LIFE
 ## Pour IA Spécialisée dans la Création de Sites Web
 
 ---
@@ -257,100 +257,7 @@ LotoFormula4Life_BACKUP_YYYY-MM-DD_HH-MM-SS/
 
 ---
 
-# SECTION 6 : SPÉCIFICATIONS FONCTIONNELLES
-
-## Système de Fréquences
-
-### Catégorisation des Numéros (1-50)
-- **Fréquence Élevée** : Top 17 numéros (rang 1-17)
-- **Fréquence Moyenne** : Numéros rang 18-34
-- **Fréquence Basse** : Numéros rang 35-50
-- **Dormants** : Numéros absents depuis longue période (dette statistique élevée)
-
-### Catégorisation des Étoiles (1-12)
-- **Fréquence Élevée** : 6 premières
-- **Fréquence Moyenne** : 6 suivantes
-
-### Indicateurs de Tendance
-- **Haussière** : Fréquence en augmentation
-- **Baissière** : Fréquence en diminution
-- **Stabilisée** : Fréquence constante
-
-### Fenêtres d'Analyse
-- Recherche du point d'équilibre statistique
-- Analyse sur 5-7 dernières années pour tendances récentes
-- Comptage des années consécutives de progression/régression
-
-## Tableaux de Bord
-
-### AdminBoard (Administrateur)
-- Mode Manuel ET Automatique (switch)
-- Numéros visibles
-- Tous les paramétrages accessibles
-- Style cockpit/table de mixage professionnel
-
-### GuyBoard (Abonné)
-- Mode Automatique par défaut
-- Numéros INVISIBLES (envoi par email uniquement)
-- Mode manuel activable par admin sur profil
-- Mode numéros visibles activable par admin sur profil
-
-### Éléments d'Interface
-- Boutons rotatifs avec écran LCD
-- Boutons coulissants
-- LEDs indicateurs
-- Palette couleurs chaudes à froides pour tendances
-- Esthétique : cockpit moderne + table de mixage épurée
-- Couleurs cohérentes, pas de décoration fake
-
-## Considérations de l'Algorithme
-
-### 1. Fréquences
-Classement par fréquence de sortie avec tendance (haussière/baissière/stabilisée)
-
-### 2. Pondération
-- Configurable par l'utilisateur
-- Exemple : 2 haute + 2 moyenne + 1 basse pour numéros
-- Contrôle que sélection respecte les pondérations choisies
-
-### 3. Combinaisons Équilibrées
-- Éviter tous pairs ou tous impairs (alerte si coché)
-- Équilibrer haut (26-50) / bas (1-25) (alerte si coché)
-
-### 4. Maximisation des Gains
-- Éviter séquences populaires (1-2-3-4-5, toutes les dizaines)
-- Privilégier tirage du mardi (moins de joueurs que vendredi)
-- Forbo identifie et stocke les séquences populaires
-
-### 5. Numéros Circonstanciels (évolution future)
-Numéros liés à dates/événements récurrents
-
-## Sérialisation des Combinaisons
-
-**Format :** `[AAMMJJ_tirage][N°abonné][AAMMJJhhmm_création][N°séquence]`
-
-**Exemple :** `2505060012505031810001`
-- Tirage du 06/05/2025
-- Abonné N°001
-- Créée le 03/05/2025 à 18h10
-- Tirage n°001
-
-## Mise à Jour des Données
-
-### Automatique (Forbo)
-- Au lancement : téléchargement historique complet depuis FDJ
-- Lendemain de chaque tirage : mise à jour incrémentale
-- Calcul des fréquences au premier utilisateur, puis cache en BDD
-
-### Affichage
-- Combinaison gagnante du dernier tirage en page d'accueil
-- Sous les titres AdminBoard et GuyBoard
-- Historique consultable sur page dédiée
-- Dates des 2 prochains mois de tirages
-
----
-
-# SECTION 7 : GUIDE CURSOR (SI APPLICABLE)
+# SECTION 6 : GUIDE CURSOR (SI APPLICABLE)
 
 ## Ce qui fonctionne
 - Instructions CHERCHER/REMPLACER strictes
@@ -396,7 +303,7 @@ Numéros liés à dates/événements récurrents
 
 ---
 
-# SECTION 8 : RÉSUMÉ EXÉCUTIF
+# SECTION 7 : RÉSUMÉ EXÉCUTIF
 
 **Mission** : Créer LotoFormula4Life, application d'analyse EuroMillions basée sur la Loi de Compensation.
 

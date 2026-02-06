@@ -17,14 +17,12 @@ if (existsSync(envPathFrontend)) {
   dotenv.config();
 }
 
-import http from 'node:http';
 import express from 'express';
 import session from 'express-session';
 import passport from 'passport';
 import { registerRoutes } from './routes';
 import fs from 'node:fs/promises';
 import { startHistoryAutoUpdater } from './historyAutoUpdater';
-import { attachChatWs } from './chatWs';
 
 const app = express();
 
@@ -157,10 +155,8 @@ async function startServer() {
   }
   
   const PORT = process.env.PORT || 3000;
-  const server = http.createServer(app);
-  attachChatWs(server);
-
-  server.listen(PORT, () => {
+  
+  app.listen(PORT, () => {
     console.log(`
 ╔════════════════════════════════════════════════════════════╗
 ║           🎰 LOTOFORMULA4LIFE SERVER 🎰                    ║
@@ -168,7 +164,6 @@ async function startServer() {
 ║  Mode:     ${process.env.NODE_ENV || 'development'}
 ║  Port:     ${PORT}
 ║  Database: ${hasDatabase ? '✅ PostgreSQL' : '⚠️ Mock (mémoire)'}
-║  Chat WS:  /ws-chat
 ╚════════════════════════════════════════════════════════════╝
     `);
   });

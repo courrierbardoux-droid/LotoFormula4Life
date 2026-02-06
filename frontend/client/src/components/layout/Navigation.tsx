@@ -50,7 +50,6 @@ export const Navigation = () => {
       label: 'Paramètres',
       groupKey: "settings",
       children: [
-        { label: 'Taille des pools', path: '/settings/pools' },
         { label: 'Fenêtre de calcul par pool', path: '/settings/windows' },
         { label: 'Gestion des pop-up et e-mails', path: '/settings/popups-emails' },
       ],
