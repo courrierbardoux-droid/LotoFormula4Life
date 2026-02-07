@@ -5569,12 +5569,12 @@ export default function Console() {
           {isChatOpen && (
             <>
               <div
-                className="absolute inset-0 bg-black/50 z-40"
+                className="fixed inset-0 bg-black/50 z-40"
                 onClick={handleCloseChat}
                 aria-hidden="true"
               />
               <div
-                className="absolute top-0 right-0 bottom-0 w-full max-w-[498px] bg-zinc-950 border-l-2 border-casino-gold/50 shadow-[-10px_0_30px_rgba(0,0,0,0.5)] z-50 flex flex-col transition-transform duration-[350ms] ease-out"
+                className="fixed top-0 right-0 bottom-0 w-full max-w-[498px] bg-zinc-950 border-l-2 border-casino-gold/50 shadow-[-10px_0_30px_rgba(0,0,0,0.5)] z-50 flex flex-col transition-transform duration-[350ms] ease-out"
                 style={{ transform: chatPanelSlideIn ? 'translateX(0)' : 'translateX(100%)' }}
               >
 

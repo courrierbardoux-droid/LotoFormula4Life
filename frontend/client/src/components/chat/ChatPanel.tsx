@@ -280,7 +280,13 @@ export function ChatPanel({ onClose, isOpen, currentUserId, currentUsername, cur
   }, [selectedUserId, markConversationAsRead, messages]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // Scroll intelligent : si on est déjà en bas (ou presque), on reste en bas
+    // Sinon on laisse l'utilisateur scroller
+    // Au montage initial, on force le bas.
+    if (messagesEndRef.current?.parentElement) {
+      const container = messagesEndRef.current.parentElement;
+      container.scrollTop = container.scrollHeight;
+    }
   }, [messages]);
 
   const handleDraftChange = useCallback((value: string) => {

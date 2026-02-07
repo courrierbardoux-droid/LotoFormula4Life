@@ -287,7 +287,5 @@ export type TemplateVariable = typeof templateVariables.$inferSelect;
 export type NewTemplateVariable = typeof templateVariables.$inferInsert;
 
 export type ChatMessageRow = typeof chatMessages.$inferSelect;
-export type NewChatMessageRow = typeof chatMessages.$inferInsert;
-
-export type ChatRead = typeof chatReads.$inferSelect;
+export type NewChatMessageRow = typeof chatMessages.$inferInsert;export type ChatRead = typeof chatReads.$inferSelect;
 export type NewChatRead = typeof chatReads.$inferInsert;
