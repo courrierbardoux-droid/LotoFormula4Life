@@ -1,0 +1,1484 @@
+{
+  "generatedAt": "2026-02-01T02:05:53.769Z",
+  "analyses": [
+    {
+      "name": "strict",
+      "params": {
+        "DELTA": 50,
+        "STEP_N": 10,
+        "N_MAX": 450,
+        "PAS_CONSECUTIFS": 2,
+        "K_BALL": 12,
+        "K_STAR": 4,
+        "name": "strict",
+        "SEUIL_RHO": 0.92,
+        "SEUIL_OV": 0.75
+      },
+      "total": 1911,
+      "proposition": {
+        "NStarBalls": 300,
+        "NStarStars": 100,
+        "NStarBoth": 430
+      },
+      "rows": [
+        {
+          "N": 50,
+          "rhoBalls": 0.739,
+          "overlapBallsPct": 0.667,
+          "rhoStars": 0.643,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 60,
+          "rhoBalls": 0.733,
+          "overlapBallsPct": 0.583,
+          "rhoStars": 0.601,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 70,
+          "rhoBalls": 0.8,
+          "overlapBallsPct": 0.667,
+          "rhoStars": 0.545,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 80,
+          "rhoBalls": 0.844,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.881,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 90,
+          "rhoBalls": 0.866,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.888,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 100,
+          "rhoBalls": 0.849,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.93,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": true,
+          "okBoth": false
+        },
+        {
+          "N": 110,
+          "rhoBalls": 0.852,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.958,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": true,
+          "okBoth": false
+        },
+        {
+          "N": 120,
+          "rhoBalls": 0.802,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.783,
+          "overlapStarsPct": 0.5,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 130,
+          "rhoBalls": 0.846,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.629,
+          "overlapStarsPct": 0.5,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 140,
+          "rhoBalls": 0.838,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.727,
+          "overlapStarsPct": 0.25,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 150,
+          "rhoBalls": 0.837,
+          "overlapBallsPct": 0.917,
+          "rhoStars": 0.608,
+          "overlapStarsPct": 0.5,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 160,
+          "rhoBalls": 0.84,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.776,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 170,
+          "rhoBalls": 0.87,
+          "overlapBallsPct": 0.667,
+          "rhoStars": 0.916,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 180,
+          "rhoBalls": 0.903,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.818,
+          "overlapStarsPct": 1,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 190,
+          "rhoBalls": 0.888,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.601,
+          "overlapStarsPct": 0.25,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 200,
+          "rhoBalls": 0.891,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.664,
+          "overlapStarsPct": 0.5,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 210,
+          "rhoBalls": 0.918,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.783,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 220,
+          "rhoBalls": 0.893,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.783,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 230,
+          "rhoBalls": 0.89,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.776,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 240,
+          "rhoBalls": 0.91,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.783,
+          "overlapStarsPct": 1,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 250,
+          "rhoBalls": 0.912,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.734,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 260,
+          "rhoBalls": 0.912,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.867,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 270,
+          "rhoBalls": 0.913,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.741,
+          "overlapStarsPct": 0.5,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 280,
+          "rhoBalls": 0.911,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.776,
+          "overlapStarsPct": 0.5,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 290,
+          "rhoBalls": 0.899,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.573,
+          "overlapStarsPct": 0.5,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 300,
+          "rhoBalls": 0.921,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.385,
+          "overlapStarsPct": 0.5,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 310,
+          "rhoBalls": 0.924,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.51,
+          "overlapStarsPct": 0.25,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 320,
+          "rhoBalls": 0.925,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.573,
+          "overlapStarsPct": 0.5,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 330,
+          "rhoBalls": 0.921,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.608,
+          "overlapStarsPct": 0.5,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 340,
+          "rhoBalls": 0.92,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.706,
+          "overlapStarsPct": 0.5,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 350,
+          "rhoBalls": 0.926,
+          "overlapBallsPct": 0.917,
+          "rhoStars": 0.825,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 360,
+          "rhoBalls": 0.945,
+          "overlapBallsPct": 1,
+          "rhoStars": 0.846,
+          "overlapStarsPct": 0.5,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 370,
+          "rhoBalls": 0.938,
+          "overlapBallsPct": 0.917,
+          "rhoStars": 0.832,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 380,
+          "rhoBalls": 0.957,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.776,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 390,
+          "rhoBalls": 0.927,
+          "overlapBallsPct": 0.667,
+          "rhoStars": 0.797,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 400,
+          "rhoBalls": 0.927,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.86,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 410,
+          "rhoBalls": 0.913,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.797,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 420,
+          "rhoBalls": 0.914,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.951,
+          "overlapStarsPct": 1,
+          "okBalls": false,
+          "okStars": true,
+          "okBoth": false
+        },
+        {
+          "N": 430,
+          "rhoBalls": 0.935,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.965,
+          "overlapStarsPct": 1,
+          "okBalls": true,
+          "okStars": true,
+          "okBoth": true
+        },
+        {
+          "N": 440,
+          "rhoBalls": 0.947,
+          "overlapBallsPct": 0.917,
+          "rhoStars": 0.951,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": true,
+          "okBoth": true
+        },
+        {
+          "N": 450,
+          "rhoBalls": 0.964,
+          "overlapBallsPct": 1,
+          "rhoStars": 0.93,
+          "overlapStarsPct": 1,
+          "okBalls": true,
+          "okStars": true,
+          "okBoth": true
+        }
+      ],
+      "dynamic": {
+        "SERIES_STEP": 150,
+        "MIN_TAIL": 400,
+        "series": [
+          {
+            "endIndex": 0,
+            "endDate": "2026-01-27",
+            "NStarBoth": 430
+          },
+          {
+            "endIndex": 150,
+            "endDate": "2024-08-06",
+            "NStarBoth": 390
+          },
+          {
+            "endIndex": 300,
+            "endDate": "2023-02-28",
+            "NStarBoth": 370
+          },
+          {
+            "endIndex": 450,
+            "endDate": "2021-09-21",
+            "NStarBoth": 260
+          },
+          {
+            "endIndex": 600,
+            "endDate": "2020-04-14",
+            "NStarBoth": 410
+          },
+          {
+            "endIndex": 750,
+            "endDate": "2018-11-06",
+            "NStarBoth": 380
+          },
+          {
+            "endIndex": 900,
+            "endDate": "2017-05-30",
+            "NStarBoth": 250
+          },
+          {
+            "endIndex": 1050,
+            "endDate": "2015-12-22",
+            "NStarBoth": 320
+          },
+          {
+            "endIndex": 1200,
+            "endDate": "2014-07-15",
+            "NStarBoth": 420
+          },
+          {
+            "endIndex": 1350,
+            "endDate": "2013-02-05",
+            "NStarBoth": 340
+          },
+          {
+            "endIndex": 1500,
+            "endDate": "2011-08-30",
+            "NStarBoth": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "standard",
+      "params": {
+        "DELTA": 50,
+        "STEP_N": 10,
+        "N_MAX": 450,
+        "PAS_CONSECUTIFS": 2,
+        "K_BALL": 12,
+        "K_STAR": 4,
+        "name": "standard",
+        "SEUIL_RHO": 0.9,
+        "SEUIL_OV": 0.7
+      },
+      "total": 1911,
+      "proposition": {
+        "NStarBalls": 240,
+        "NStarStars": 100,
+        "NStarBoth": 420
+      },
+      "rows": [
+        {
+          "N": 50,
+          "rhoBalls": 0.739,
+          "overlapBallsPct": 0.667,
+          "rhoStars": 0.643,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 60,
+          "rhoBalls": 0.733,
+          "overlapBallsPct": 0.583,
+          "rhoStars": 0.601,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 70,
+          "rhoBalls": 0.8,
+          "overlapBallsPct": 0.667,
+          "rhoStars": 0.545,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 80,
+          "rhoBalls": 0.844,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.881,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 90,
+          "rhoBalls": 0.866,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.888,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 100,
+          "rhoBalls": 0.849,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.93,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": true,
+          "okBoth": false
+        },
+        {
+          "N": 110,
+          "rhoBalls": 0.852,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.958,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": true,
+          "okBoth": false
+        },
+        {
+          "N": 120,
+          "rhoBalls": 0.802,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.783,
+          "overlapStarsPct": 0.5,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 130,
+          "rhoBalls": 0.846,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.629,
+          "overlapStarsPct": 0.5,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 140,
+          "rhoBalls": 0.838,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.727,
+          "overlapStarsPct": 0.25,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 150,
+          "rhoBalls": 0.837,
+          "overlapBallsPct": 0.917,
+          "rhoStars": 0.608,
+          "overlapStarsPct": 0.5,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 160,
+          "rhoBalls": 0.84,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.776,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 170,
+          "rhoBalls": 0.87,
+          "overlapBallsPct": 0.667,
+          "rhoStars": 0.916,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": true,
+          "okBoth": false
+        },
+        {
+          "N": 180,
+          "rhoBalls": 0.903,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.818,
+          "overlapStarsPct": 1,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 190,
+          "rhoBalls": 0.888,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.601,
+          "overlapStarsPct": 0.25,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 200,
+          "rhoBalls": 0.891,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.664,
+          "overlapStarsPct": 0.5,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 210,
+          "rhoBalls": 0.918,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.783,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 220,
+          "rhoBalls": 0.893,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.783,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 230,
+          "rhoBalls": 0.89,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.776,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 240,
+          "rhoBalls": 0.91,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.783,
+          "overlapStarsPct": 1,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 250,
+          "rhoBalls": 0.912,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.734,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 260,
+          "rhoBalls": 0.912,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.867,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 270,
+          "rhoBalls": 0.913,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.741,
+          "overlapStarsPct": 0.5,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 280,
+          "rhoBalls": 0.911,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.776,
+          "overlapStarsPct": 0.5,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 290,
+          "rhoBalls": 0.899,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.573,
+          "overlapStarsPct": 0.5,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 300,
+          "rhoBalls": 0.921,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.385,
+          "overlapStarsPct": 0.5,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 310,
+          "rhoBalls": 0.924,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.51,
+          "overlapStarsPct": 0.25,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 320,
+          "rhoBalls": 0.925,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.573,
+          "overlapStarsPct": 0.5,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 330,
+          "rhoBalls": 0.921,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.608,
+          "overlapStarsPct": 0.5,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 340,
+          "rhoBalls": 0.92,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.706,
+          "overlapStarsPct": 0.5,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 350,
+          "rhoBalls": 0.926,
+          "overlapBallsPct": 0.917,
+          "rhoStars": 0.825,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 360,
+          "rhoBalls": 0.945,
+          "overlapBallsPct": 1,
+          "rhoStars": 0.846,
+          "overlapStarsPct": 0.5,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 370,
+          "rhoBalls": 0.938,
+          "overlapBallsPct": 0.917,
+          "rhoStars": 0.832,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 380,
+          "rhoBalls": 0.957,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.776,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 390,
+          "rhoBalls": 0.927,
+          "overlapBallsPct": 0.667,
+          "rhoStars": 0.797,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 400,
+          "rhoBalls": 0.927,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.86,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 410,
+          "rhoBalls": 0.913,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.797,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 420,
+          "rhoBalls": 0.914,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.951,
+          "overlapStarsPct": 1,
+          "okBalls": true,
+          "okStars": true,
+          "okBoth": true
+        },
+        {
+          "N": 430,
+          "rhoBalls": 0.935,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.965,
+          "overlapStarsPct": 1,
+          "okBalls": true,
+          "okStars": true,
+          "okBoth": true
+        },
+        {
+          "N": 440,
+          "rhoBalls": 0.947,
+          "overlapBallsPct": 0.917,
+          "rhoStars": 0.951,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": true,
+          "okBoth": true
+        },
+        {
+          "N": 450,
+          "rhoBalls": 0.964,
+          "overlapBallsPct": 1,
+          "rhoStars": 0.93,
+          "overlapStarsPct": 1,
+          "okBalls": true,
+          "okStars": true,
+          "okBoth": true
+        }
+      ],
+      "dynamic": {
+        "SERIES_STEP": 150,
+        "MIN_TAIL": 400,
+        "series": [
+          {
+            "endIndex": 0,
+            "endDate": "2026-01-27",
+            "NStarBoth": 420
+          },
+          {
+            "endIndex": 150,
+            "endDate": "2024-08-06",
+            "NStarBoth": 330
+          },
+          {
+            "endIndex": 300,
+            "endDate": "2023-02-28",
+            "NStarBoth": 170
+          },
+          {
+            "endIndex": 450,
+            "endDate": "2021-09-21",
+            "NStarBoth": 260
+          },
+          {
+            "endIndex": 600,
+            "endDate": "2020-04-14",
+            "NStarBoth": 250
+          },
+          {
+            "endIndex": 750,
+            "endDate": "2018-11-06",
+            "NStarBoth": 320
+          },
+          {
+            "endIndex": 900,
+            "endDate": "2017-05-30",
+            "NStarBoth": 250
+          },
+          {
+            "endIndex": 1050,
+            "endDate": "2015-12-22",
+            "NStarBoth": 290
+          },
+          {
+            "endIndex": 1200,
+            "endDate": "2014-07-15",
+            "NStarBoth": 170
+          },
+          {
+            "endIndex": 1350,
+            "endDate": "2013-02-05",
+            "NStarBoth": 340
+          },
+          {
+            "endIndex": 1500,
+            "endDate": "2011-08-30",
+            "NStarBoth": 260
+          }
+        ]
+      }
+    },
+    {
+      "name": "souple",
+      "params": {
+        "DELTA": 50,
+        "STEP_N": 10,
+        "N_MAX": 450,
+        "PAS_CONSECUTIFS": 2,
+        "K_BALL": 12,
+        "K_STAR": 4,
+        "name": "souple",
+        "SEUIL_RHO": 0.85,
+        "SEUIL_OV": 0.6
+      },
+      "total": 1911,
+      "proposition": {
+        "NStarBalls": 170,
+        "NStarStars": 80,
+        "NStarBoth": 420
+      },
+      "rows": [
+        {
+          "N": 50,
+          "rhoBalls": 0.739,
+          "overlapBallsPct": 0.667,
+          "rhoStars": 0.643,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 60,
+          "rhoBalls": 0.733,
+          "overlapBallsPct": 0.583,
+          "rhoStars": 0.601,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 70,
+          "rhoBalls": 0.8,
+          "overlapBallsPct": 0.667,
+          "rhoStars": 0.545,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 80,
+          "rhoBalls": 0.844,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.881,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": true,
+          "okBoth": false
+        },
+        {
+          "N": 90,
+          "rhoBalls": 0.866,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.888,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": true,
+          "okBoth": true
+        },
+        {
+          "N": 100,
+          "rhoBalls": 0.849,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.93,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": true,
+          "okBoth": false
+        },
+        {
+          "N": 110,
+          "rhoBalls": 0.852,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.958,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": true,
+          "okBoth": true
+        },
+        {
+          "N": 120,
+          "rhoBalls": 0.802,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.783,
+          "overlapStarsPct": 0.5,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 130,
+          "rhoBalls": 0.846,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.629,
+          "overlapStarsPct": 0.5,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 140,
+          "rhoBalls": 0.838,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.727,
+          "overlapStarsPct": 0.25,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 150,
+          "rhoBalls": 0.837,
+          "overlapBallsPct": 0.917,
+          "rhoStars": 0.608,
+          "overlapStarsPct": 0.5,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 160,
+          "rhoBalls": 0.84,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.776,
+          "overlapStarsPct": 0.75,
+          "okBalls": false,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 170,
+          "rhoBalls": 0.87,
+          "overlapBallsPct": 0.667,
+          "rhoStars": 0.916,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": true,
+          "okBoth": true
+        },
+        {
+          "N": 180,
+          "rhoBalls": 0.903,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.818,
+          "overlapStarsPct": 1,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 190,
+          "rhoBalls": 0.888,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.601,
+          "overlapStarsPct": 0.25,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 200,
+          "rhoBalls": 0.891,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.664,
+          "overlapStarsPct": 0.5,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 210,
+          "rhoBalls": 0.918,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.783,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 220,
+          "rhoBalls": 0.893,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.783,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 230,
+          "rhoBalls": 0.89,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.776,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 240,
+          "rhoBalls": 0.91,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.783,
+          "overlapStarsPct": 1,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 250,
+          "rhoBalls": 0.912,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.734,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 260,
+          "rhoBalls": 0.912,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.867,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": true,
+          "okBoth": true
+        },
+        {
+          "N": 270,
+          "rhoBalls": 0.913,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.741,
+          "overlapStarsPct": 0.5,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 280,
+          "rhoBalls": 0.911,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.776,
+          "overlapStarsPct": 0.5,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 290,
+          "rhoBalls": 0.899,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.573,
+          "overlapStarsPct": 0.5,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 300,
+          "rhoBalls": 0.921,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.385,
+          "overlapStarsPct": 0.5,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 310,
+          "rhoBalls": 0.924,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.51,
+          "overlapStarsPct": 0.25,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 320,
+          "rhoBalls": 0.925,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.573,
+          "overlapStarsPct": 0.5,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 330,
+          "rhoBalls": 0.921,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.608,
+          "overlapStarsPct": 0.5,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 340,
+          "rhoBalls": 0.92,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.706,
+          "overlapStarsPct": 0.5,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 350,
+          "rhoBalls": 0.926,
+          "overlapBallsPct": 0.917,
+          "rhoStars": 0.825,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 360,
+          "rhoBalls": 0.945,
+          "overlapBallsPct": 1,
+          "rhoStars": 0.846,
+          "overlapStarsPct": 0.5,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 370,
+          "rhoBalls": 0.938,
+          "overlapBallsPct": 0.917,
+          "rhoStars": 0.832,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 380,
+          "rhoBalls": 0.957,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.776,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 390,
+          "rhoBalls": 0.927,
+          "overlapBallsPct": 0.667,
+          "rhoStars": 0.797,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 400,
+          "rhoBalls": 0.927,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.86,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": true,
+          "okBoth": true
+        },
+        {
+          "N": 410,
+          "rhoBalls": 0.913,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.797,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": false,
+          "okBoth": false
+        },
+        {
+          "N": 420,
+          "rhoBalls": 0.914,
+          "overlapBallsPct": 0.75,
+          "rhoStars": 0.951,
+          "overlapStarsPct": 1,
+          "okBalls": true,
+          "okStars": true,
+          "okBoth": true
+        },
+        {
+          "N": 430,
+          "rhoBalls": 0.935,
+          "overlapBallsPct": 0.833,
+          "rhoStars": 0.965,
+          "overlapStarsPct": 1,
+          "okBalls": true,
+          "okStars": true,
+          "okBoth": true
+        },
+        {
+          "N": 440,
+          "rhoBalls": 0.947,
+          "overlapBallsPct": 0.917,
+          "rhoStars": 0.951,
+          "overlapStarsPct": 0.75,
+          "okBalls": true,
+          "okStars": true,
+          "okBoth": true
+        },
+        {
+          "N": 450,
+          "rhoBalls": 0.964,
+          "overlapBallsPct": 1,
+          "rhoStars": 0.93,
+          "overlapStarsPct": 1,
+          "okBalls": true,
+          "okStars": true,
+          "okBoth": true
+        }
+      ],
+      "dynamic": {
+        "SERIES_STEP": 150,
+        "MIN_TAIL": 400,
+        "series": [
+          {
+            "endIndex": 0,
+            "endDate": "2026-01-27",
+            "NStarBoth": 420
+          },
+          {
+            "endIndex": 150,
+            "endDate": "2024-08-06",
+            "NStarBoth": 280
+          },
+          {
+            "endIndex": 300,
+            "endDate": "2023-02-28",
+            "NStarBoth": 110
+          },
+          {
+            "endIndex": 450,
+            "endDate": "2021-09-21",
+            "NStarBoth": 160
+          },
+          {
+            "endIndex": 600,
+            "endDate": "2020-04-14",
+            "NStarBoth": 210
+          },
+          {
+            "endIndex": 750,
+            "endDate": "2018-11-06",
+            "NStarBoth": 200
+          },
+          {
+            "endIndex": 900,
+            "endDate": "2017-05-30",
+            "NStarBoth": 180
+          },
+          {
+            "endIndex": 1050,
+            "endDate": "2015-12-22",
+            "NStarBoth": 150
+          },
+          {
+            "endIndex": 1200,
+            "endDate": "2014-07-15",
+            "NStarBoth": 170
+          },
+          {
+            "endIndex": 1350,
+            "endDate": "2013-02-05",
+            "NStarBoth": 140
+          },
+          {
+            "endIndex": 1500,
+            "endDate": "2011-08-30",
+            "NStarBoth": 180
+          }
+        ]
+      }
+    }
+  ]
+}
