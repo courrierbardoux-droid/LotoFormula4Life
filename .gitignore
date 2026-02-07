@@ -51,3 +51,17 @@ frontend/server/data/*.json
 
 # Drizzle migrations (optional - generated)
 drizzle/
+
+# --- Documentation / specs (racine) - non nécessaires pour le site déployé ---
+/*.md
+
+# --- Scripts de backup et reverse (locaux uniquement) ---
+MAKE_*.ps1
+
+# --- Sauvegardes frontend (avant reverse / backups manuels) ---
+frontend/backup_*/
+frontend/sauvegarde-*.md
+frontend/docs/*.md
+
+# --- Présentations / exports lourds ---
+*.pptx
