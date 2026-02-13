@@ -294,6 +294,74 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
     }
   });
 
+  // ==========================================
+  // ROUTES SETTINGS (Console)
+  // ==========================================
+
+  // Sauvegarder les réglages de la console (fenêtres et presets)
+  app.put('/api/user-settings/windows', requireAuth, async (req, res) => {
+    try {
+      if (!hasDatabase) return res.json({ success: true }); // Mock mode: rien à faire (localStorage gère)
+
+      const user = req.user as any;
+      const { poolWindows, poolWindowPresetNumbers } = req.body;
+
+      const { db } = await import('../db');
+      const { userConsoleSettings } = await import('../db/schema');
+      const { eq } = await import('drizzle-orm');
+
+      // Vérifier si une entrée existe déjà
+      const [existing] = await db.select().from(userConsoleSettings).where(eq(userConsoleSettings.userId, user.id));
+
+      if (existing) {
+        const updates: any = { updatedAt: new Date() };
+        if (poolWindows) updates.poolWindows = poolWindows;
+        if (poolWindowPresetNumbers) updates.poolWindowPresetNumbers = poolWindowPresetNumbers;
+
+        await db.update(userConsoleSettings)
+          .set(updates)
+          .where(eq(userConsoleSettings.id, existing.id));
+      } else {
+        await db.insert(userConsoleSettings).values({
+          userId: user.id,
+          poolWindows: poolWindows || {},
+          poolWindowPresetNumbers: poolWindowPresetNumbers || {},
+        });
+      }
+
+      res.json({ success: true });
+    } catch (err) {
+      console.error('[API] Erreur sauvegarde settings windows:', err);
+      res.status(500).json({ error: 'Erreur serveur' });
+    }
+  });
+
+  // Récupérer les réglages
+  app.get('/api/user-settings/windows', requireAuth, async (req, res) => {
+    try {
+      if (!hasDatabase) return res.json({});
+
+      const user = req.user as any;
+      const { db } = await import('../db');
+      const { userConsoleSettings } = await import('../db/schema');
+      const { eq } = await import('drizzle-orm');
+
+      const [settings] = await db.select().from(userConsoleSettings).where(eq(userConsoleSettings.userId, user.id));
+
+      if (settings) {
+        res.json({
+          poolWindows: settings.poolWindows,
+          poolWindowPresetNumbers: settings.poolWindowPresetNumbers
+        });
+      } else {
+        res.json({});
+      }
+    } catch (err) {
+      console.error('[API] Erreur chargement settings windows:', err);
+      res.status(500).json({ error: 'Erreur serveur' });
+    }
+  });
+
   // Token one-time pour connexion WebSocket chat
   app.post('/api/chat-ws-token', requireAuth, (req, res) => {
     const user = req.user as any;
