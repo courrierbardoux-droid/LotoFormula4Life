@@ -43,11 +43,24 @@ export async function computeAndPersistWinnersForDraw(opts: {
   const [draw] = await db.select().from(draws).where(eq(draws.date, drawDate)).limit(1);
   if (!draw) return { success: false, error: `Tirage introuvable en DB (${drawDate})` };
 
-  const numbers = Array.isArray(draw.numbers) ? (draw.numbers as number[]) : [];
-  const stars = Array.isArray(draw.stars) ? (draw.stars as number[]) : [];
+  const numbers = Array.isArray(draw.numbers) ? (draw.numbers as any[]).map(Number) : [];
+  const stars = Array.isArray(draw.stars) ? (draw.stars as any[]).map(Number) : [];
 
   const [payout] = await db.select().from(drawPayouts).where(eq(drawPayouts.drawDate, drawDate)).limit(1);
-  const payoutMap: Record<string, number | null> = (payout?.payouts as any) || {};
+  const rawPayoutMap: Record<string, number | null> = (payout?.payouts as any) || {};
+
+  // Seuls les 13 rangs officiels EuroMillions (hors Étoile+)
+  const OFFICIAL_RANKS = new Set([
+    '5+2', '5+1', '5+0',
+    '4+2', '4+1', '4+0',
+    '3+2', '3+1', '3+0',
+    '2+2', '2+1', '2+0',
+    '1+2',
+  ]);
+  const payoutMap: Record<string, number | null> = {};
+  for (const [k, v] of Object.entries(rawPayoutMap)) {
+    if (OFFICIAL_RANKS.has(k)) payoutMap[k] = v;
+  }
 
   // Grilles qui visaient ce tirage
   const rows = await db
@@ -63,8 +76,8 @@ export async function computeAndPersistWinnersForDraw(opts: {
   const now = new Date();
 
   for (const { grid, user } of rows as any[]) {
-    const gNums: number[] = Array.isArray(grid.numbers) ? grid.numbers : [];
-    const gStars: number[] = Array.isArray(grid.stars) ? grid.stars : [];
+    const gNums: number[] = Array.isArray(grid.numbers) ? (grid.numbers as any[]).map(Number) : [];
+    const gStars: number[] = Array.isArray(grid.stars) ? (grid.stars as any[]).map(Number) : [];
 
     const matchNum = gNums.filter((n) => numbers.includes(n)).length;
     const matchStar = gStars.filter((s) => stars.includes(s)).length;

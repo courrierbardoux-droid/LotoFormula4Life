@@ -161,8 +161,8 @@ export default function UserActivityHistory() {
                   grids.map((grid) => {
                     const isHighlighted = highlightedGrids.has(grid.id);
                     const isPulseStopped = pulseStoppedIds.has(grid.id) || !!grid.adminSeenAt;
-                    const drawNums = grid.drawNumbers ?? [];
-                    const drawStars = grid.drawStars ?? [];
+                    const drawNums = (grid.drawNumbers ?? []).map(Number);
+                    const drawStars = (grid.drawStars ?? []).map(Number);
 
                     return (
                       <tr
@@ -186,7 +186,7 @@ export default function UserActivityHistory() {
                         </td>
                         <td className="p-2">
                           <div className="flex justify-center gap-0.5 md:gap-1 scale-75 origin-center">
-                            {grid.numbers.map((n) => (
+                            {grid.numbers.map(Number).map((n) => (
                               <LottoBall
                                 key={n}
                                 number={n}
@@ -196,7 +196,7 @@ export default function UserActivityHistory() {
                               />
                             ))}
                             <div className="w-2 flex items-center justify-center text-zinc-600 text-xs">|</div>
-                            {grid.stars.map((n) => (
+                            {grid.stars.map(Number).map((n) => (
                               <LottoBall
                                 key={n}
                                 number={n}

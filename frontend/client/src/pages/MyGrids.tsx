@@ -154,8 +154,8 @@ export default function MyGrids() {
                       const isSelected = selectedGrids.includes(grid.id);
                       const isHighlighted = highlightedGrids.has(grid.id);
                       const isPulseStopped = pulseStoppedIds.has(grid.id);
-                      const drawNums = grid.drawNumbers ?? [];
-                      const drawStars = grid.drawStars ?? [];
+                      const drawNums = (grid.drawNumbers ?? []).map(Number);
+                      const drawStars = (grid.drawStars ?? []).map(Number);
 
                       return (
                         <tr
@@ -182,23 +182,23 @@ export default function MyGrids() {
                           </td>
                           <td className="py-1.5 px-0">
                             <div className="flex justify-center gap-0.5 md:gap-1 scale-75 origin-center">
-                              {grid.numeros.map(n => (
+                              {grid.numeros.map(Number).map(n => (
                                 <LottoBall
                                   key={n}
                                   number={n}
                                   size="sm"
-                                  isWinning={grid.status === 'Gagné' && drawNums.includes(n)}
+                                  isWinning={drawNums.length > 0 && drawNums.includes(n)}
                                   pulse={grid.status === 'Gagné' && drawNums.includes(n) && !isPulseStopped}
                                 />
                               ))}
                               <div className="w-2 flex items-center justify-center text-zinc-600 text-xs">|</div>
-                              {grid.etoiles.map(n => (
+                              {grid.etoiles.map(Number).map(n => (
                                 <LottoBall
                                   key={n}
                                   number={n}
                                   size="sm"
                                   isStar
-                                  isWinning={grid.status === 'Gagné' && drawStars.includes(n)}
+                                  isWinning={drawStars.length > 0 && drawStars.includes(n)}
                                   pulse={grid.status === 'Gagné' && drawStars.includes(n) && !isPulseStopped}
                                 />
                               ))}

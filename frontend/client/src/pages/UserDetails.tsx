@@ -53,11 +53,11 @@ export default function UserDetails() {
   const [playedGrids, setPlayedGrids] = useState<PlayedGrid[]>([]);
   const [loading, setLoading] = useState(true);
   // (Gagnants) : supprimé — aucun calcul/affichage "gagnant" ici.
-  
+
   // Tri
   const [connectionSort, setConnectionSort] = useState<'date' | 'alpha'>('date');
   const [gridSort, setGridSort] = useState<'date' | 'alpha'>('date');
-  
+
   // États pour l'édition
   const [editingField, setEditingField] = useState<'username' | 'email' | 'password' | null>(null);
   const [editValue, setEditValue] = useState('');
@@ -66,7 +66,7 @@ export default function UserDetails() {
   const [showPassword, setShowPassword] = useState(false);
   const [saving, setSaving] = useState(false);
   const editInputRef = React.useRef<HTMLDivElement>(null);
-  
+
   // Gestionnaire de clic en dehors pour annuler l'édition
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -87,7 +87,7 @@ export default function UserDetails() {
       document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [editingField]);
-  
+
   useEffect(() => {
     const loadUserDetails = async () => {
       try {
@@ -97,17 +97,17 @@ export default function UserDetails() {
         const res = await fetch(`/api/admin/user/${params.userId}/details`, {
           credentials: 'include',
         });
-        
+
         if (!res.ok) {
           toast.error('Utilisateur non trouvé');
           setLocation(backParam ? decodeURIComponent(backParam) : '/settings/users');
           return;
         }
-        
+
         const data = await res.json();
         setUserData(data.user);
         setConnections(data.connections);
-        
+
         // Charger les grilles avec résultats (status, rang, montant)
         try {
           const gridsRes = await fetch(`/api/admin/user/${params.userId}/grids/with-results`, { credentials: 'include' });
@@ -127,19 +127,19 @@ export default function UserDetails() {
         setLoading(false);
       }
     };
-    
+
     loadUserDetails();
   }, [params.userId]);
 
   // (Gagnants) : supprimé — aucun chargement du dernier tirage / calcul de gains / logs associés.
-  
+
   const handleTogglePopup = async () => {
     if (!userData) return;
-    
-    const nextStatus = userData.popupStatus === 'active' ? 'reduced' 
-                     : userData.popupStatus === 'reduced' ? 'disabled' 
-                     : 'active';
-    
+
+    const nextStatus = userData.popupStatus === 'active' ? 'reduced'
+      : userData.popupStatus === 'reduced' ? 'disabled'
+        : 'active';
+
     try {
       const res = await fetch(`/api/users/${userData.id}/popup`, {
         method: 'PATCH',
@@ -147,7 +147,7 @@ export default function UserDetails() {
         credentials: 'include',
         body: JSON.stringify({ popupStatus: nextStatus }),
       });
-      
+
       if (res.ok) {
         setUserData(prev => prev ? { ...prev, popupStatus: nextStatus } : null);
         const statusLabel = nextStatus === 'active' ? 'Actif' : nextStatus === 'reduced' ? 'Réduit' : 'Désactivé';
@@ -157,7 +157,7 @@ export default function UserDetails() {
       toast.error('Erreur mise à jour popup');
     }
   };
-  
+
   // Fonctions d'édition email/login/password
   const startEdit = (field: 'username' | 'email' | 'password') => {
     if (!userData) return;
@@ -169,7 +169,7 @@ export default function UserDetails() {
       setEditValue(field === 'username' ? userData.username : userData.email);
     }
   };
-  
+
   const cancelEdit = () => {
     setEditingField(null);
     setEditValue('');
@@ -177,10 +177,10 @@ export default function UserDetails() {
     setConfirmPassword('');
     setShowPassword(false);
   };
-  
+
   const saveEdit = async () => {
     if (!userData || !editingField) return;
-    
+
     if (editingField === 'password') {
       if (!newPassword.trim()) {
         toast.error('Le mot de passe ne peut pas être vide');
@@ -204,7 +204,7 @@ export default function UserDetails() {
         return;
       }
     }
-    
+
     setSaving(true);
     try {
       const body: any = {};
@@ -213,19 +213,19 @@ export default function UserDetails() {
       } else {
         body[editingField] = editValue.trim();
       }
-      
+
       console.log('[Frontend] Sending update request:', { userId: userData.id, field: editingField, body });
-      
+
       const res = await fetch(`/api/admin/user/${userData.id}/update`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify(body),
       });
-      
+
       const data = await res.json();
       console.log('[Frontend] Update response:', { status: res.status, ok: res.ok, data });
-      
+
       if (res.ok && data.success) {
         // Recharger les données utilisateur depuis le serveur pour avoir les valeurs à jour
         try {
@@ -262,7 +262,7 @@ export default function UserDetails() {
       setSaving(false);
     }
   };
-  
+
   const formatDate = (dateStr: string) => {
     try {
       return format(new Date(dateStr), 'dd MMM yyyy HH:mm', { locale: frLocale });
@@ -270,7 +270,7 @@ export default function UserDetails() {
       return dateStr;
     }
   };
-  
+
   const calculateDuration = (login: string, logout: string | null) => {
     if (!logout) return 'En cours...';
     const start = new Date(login).getTime();
@@ -281,7 +281,7 @@ export default function UserDetails() {
     if (hours > 0) return `${hours}h ${mins % 60}m`;
     return `${mins}m`;
   };
-  
+
   const getRoleColor = (role: string) => {
     switch (role) {
       case 'admin': return 'bg-red-900 text-red-200 border-red-500/50';
@@ -290,21 +290,21 @@ export default function UserDetails() {
       default: return 'bg-zinc-800 text-zinc-400 border-zinc-600';
     }
   };
-  
+
   const sortedConnections = [...connections].sort((a, b) => {
     if (connectionSort === 'date') {
       return new Date(b.loginAt).getTime() - new Date(a.loginAt).getTime();
     }
     return 0; // Alpha doesn't make sense for connections
   });
-  
+
   const sortedGrids = [...playedGrids].sort((a, b) => {
     if (gridSort === 'date') {
       return new Date(b.playedAt).getTime() - new Date(a.playedAt).getTime();
     }
     return (a.name || '').localeCompare(b.name || '');
   });
-  
+
   if (loading) {
     return (
       <CasinoLayout>
@@ -316,9 +316,9 @@ export default function UserDetails() {
       </CasinoLayout>
     );
   }
-  
+
   if (!userData) return null;
-  
+
   return (
     <CasinoLayout>
       <div className="max-w-6xl mx-auto p-4 md:p-8 space-y-6">
@@ -336,7 +336,7 @@ export default function UserDetails() {
           </button>
           <h1 className="text-3xl font-orbitron text-casino-gold">DÉTAILS UTILISATEUR</h1>
         </div>
-        
+
         {/* User Info Card */}
         <div className="bg-zinc-900/90 border border-zinc-700 rounded-xl p-6 shadow-xl">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -375,7 +375,7 @@ export default function UserDetails() {
                 )}
               </div>
             </div>
-            
+
             {/* Email - Éditable */}
             <div className="flex items-center gap-3">
               <button
@@ -411,7 +411,7 @@ export default function UserDetails() {
                 )}
               </div>
             </div>
-            
+
             {/* Password - Éditable */}
             <div className="flex items-center gap-3">
               <button
@@ -478,7 +478,7 @@ export default function UserDetails() {
                 )}
               </div>
             </div>
-            
+
             {/* Role */}
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 rounded-full bg-zinc-800 flex items-center justify-center">
@@ -494,7 +494,7 @@ export default function UserDetails() {
                 </span>
               </div>
             </div>
-            
+
             {/* Registration Date */}
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 rounded-full bg-zinc-800 flex items-center justify-center">
@@ -508,7 +508,7 @@ export default function UserDetails() {
               </div>
             </div>
           </div>
-          
+
           {/* Popup Toggle (for VIP/Abonné only) */}
           {(userData.role === 'vip' || userData.role === 'abonne') && (
             <div className="mt-6 pt-6 border-t border-zinc-700 flex items-center justify-between">
@@ -540,7 +540,7 @@ export default function UserDetails() {
             </div>
           )}
         </div>
-        
+
         {/* Connection History */}
         <div className="bg-zinc-900/90 border border-zinc-700 rounded-xl overflow-hidden shadow-xl">
           <div className="bg-black px-6 py-4 flex items-center justify-between border-b border-zinc-700">
@@ -555,7 +555,7 @@ export default function UserDetails() {
               Tri: {connectionSort === 'date' ? 'Date' : 'Alpha'}
             </button>
           </div>
-          
+
           <div className="max-h-[300px] overflow-y-auto">
             {sortedConnections.length === 0 ? (
               <div className="p-8 text-center text-zinc-500">Aucune connexion enregistrée</div>
@@ -585,7 +585,7 @@ export default function UserDetails() {
             )}
           </div>
         </div>
-        
+
         {/* Played Grids */}
         <div className="bg-zinc-900/90 border border-zinc-700 rounded-xl overflow-hidden shadow-xl">
           <div className="bg-black px-6 py-4 flex items-center justify-between border-b border-zinc-700">
@@ -600,7 +600,7 @@ export default function UserDetails() {
               Tri: {gridSort === 'date' ? 'Date' : 'Alpha'}
             </button>
           </div>
-          
+
           <div className="max-h-[400px] overflow-y-auto">
             {sortedGrids.length === 0 ? (
               <div className="p-8 text-center text-zinc-500">Aucune grille jouée</div>
@@ -619,68 +619,68 @@ export default function UserDetails() {
                 <tbody className="font-rajdhani">
                   {sortedGrids.map(grid => {
                     const isWon = grid.status === 'Gagné';
-                    const drawNums = grid.drawNumbers ?? [];
-                    const drawStars = grid.drawStars ?? [];
-                    
+                    const drawNums = (grid.drawNumbers ?? []).map(Number);
+                    const drawStars = (grid.drawStars ?? []).map(Number);
+
                     return (
-                    <tr
-                      key={grid.id}
-                      className={cn(
-                        "border-b border-zinc-800 transition-all",
-                        "hover:bg-white/5",
-                        isWon && "bg-green-900/20 border-green-500/30"
-                      )}
-                    >
-                      <td className="p-3 text-zinc-300 text-sm whitespace-nowrap">{formatDate(grid.playedAt)}</td>
-                      <td className="p-3">
-                        <div className="flex items-center gap-1">
-                          {(grid.numbers as number[]).map(n => (
-                            <LottoBall
-                              key={n}
-                              number={n}
-                              size="sm"
-                              isWinning={isWon && drawNums.includes(n)}
-                              pulse={isWon && drawNums.includes(n)}
-                            />
-                          ))}
-                          <div className="w-2 flex items-center justify-center text-zinc-600 text-xs">|</div>
-                          {(grid.stars as number[]).map(s => (
-                            <LottoBall
-                              key={s}
-                              number={s}
-                              size="sm"
-                              isStar
-                              isWinning={isWon && drawStars.includes(s)}
-                              pulse={isWon && drawStars.includes(s)}
-                            />
-                          ))}
-                        </div>
-                      </td>
-                      <td className="p-3 text-zinc-500 text-sm whitespace-nowrap">
-                        {grid.targetDate ? format(new Date(grid.targetDate), 'dd MMM yyyy', { locale: frLocale }) : '—'}
-                      </td>
-                      <td className="p-3 text-center text-zinc-400 text-sm">
-                        {isWon && grid.matchNum != null && grid.matchStar != null
-                          ? getRankLabel(grid.matchNum, grid.matchStar)
-                          : '-'}
-                      </td>
-                      <td className="p-3 text-center">
-                        {isWon ? (
-                          <Badge className="bg-green-700 text-green-100 border-green-500 animate-pulse">
-                            Gagné
-                          </Badge>
-                        ) : (
-                          <span className="text-zinc-500">-</span>
+                      <tr
+                        key={grid.id}
+                        className={cn(
+                          "border-b border-zinc-800 transition-all",
+                          "hover:bg-white/5",
+                          isWon && "bg-green-900/20 border-green-500/30"
                         )}
-                      </td>
-                      <td className="p-3 text-center text-zinc-300 text-sm">
-                        {isWon
-                          ? grid.gainCents != null
-                            ? (grid.gainCents / 100).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })
-                            : '?'
-                          : '-'}
-                      </td>
-                    </tr>
+                      >
+                        <td className="p-3 text-zinc-300 text-sm whitespace-nowrap">{formatDate(grid.playedAt)}</td>
+                        <td className="p-3">
+                          <div className="flex items-center gap-1">
+                            {(grid.numbers as number[]).map(Number).map(n => (
+                              <LottoBall
+                                key={n}
+                                number={n}
+                                size="sm"
+                                isWinning={isWon && drawNums.includes(n)}
+                                pulse={isWon && drawNums.includes(n)}
+                              />
+                            ))}
+                            <div className="w-2 flex items-center justify-center text-zinc-600 text-xs">|</div>
+                            {(grid.stars as number[]).map(Number).map(s => (
+                              <LottoBall
+                                key={s}
+                                number={s}
+                                size="sm"
+                                isStar
+                                isWinning={isWon && drawStars.includes(s)}
+                                pulse={isWon && drawStars.includes(s)}
+                              />
+                            ))}
+                          </div>
+                        </td>
+                        <td className="p-3 text-zinc-500 text-sm whitespace-nowrap">
+                          {grid.targetDate ? format(new Date(grid.targetDate), 'dd MMM yyyy', { locale: frLocale }) : '—'}
+                        </td>
+                        <td className="p-3 text-center text-zinc-400 text-sm">
+                          {isWon && grid.matchNum != null && grid.matchStar != null
+                            ? getRankLabel(grid.matchNum, grid.matchStar)
+                            : '-'}
+                        </td>
+                        <td className="p-3 text-center">
+                          {isWon ? (
+                            <Badge className="bg-green-700 text-green-100 border-green-500 animate-pulse">
+                              Gagné
+                            </Badge>
+                          ) : (
+                            <span className="text-zinc-500">-</span>
+                          )}
+                        </td>
+                        <td className="p-3 text-center text-zinc-300 text-sm">
+                          {isWon
+                            ? grid.gainCents != null
+                              ? (grid.gainCents / 100).toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })
+                              : '?'
+                            : '-'}
+                        </td>
+                      </tr>
                     );
                   })}
                 </tbody>
@@ -688,7 +688,7 @@ export default function UserDetails() {
             )}
           </div>
         </div>
-        
+
         {/* Back Button */}
         <div className="flex justify-center pt-4">
           <CasinoButton

@@ -1363,9 +1363,14 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
       if (!row) {
         return res.json({ poolWindows: null, poolWindowPresetNumbers: null });
       }
+      const pw = row.poolWindows as any;
+      const presets = pw?._presets ?? null;
+      // Retourner poolWindows sans le champ interne _presets
+      const { _presets, ...cleanPoolWindows } = pw ?? {};
       return res.json({
-        poolWindows: row.poolWindows ?? null,
+        poolWindows: cleanPoolWindows ?? null,
         poolWindowPresetNumbers: row.poolWindowPresetNumbers ?? null,
+        poolWindowPresets: presets,
       });
     } catch (e) {
       return res.status(500).json({ error: 'Erreur récupération settings' });
@@ -1379,7 +1384,7 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
         return res.json({ ok: true });
       }
       const user = req.user as any;
-      const { poolWindows, poolWindowPresetNumbers } = req.body ?? {};
+      const { poolWindows, poolWindowPresetNumbers, poolWindowPresets } = req.body ?? {};
       if (!poolWindows || !poolWindowPresetNumbers) {
         return res.status(400).json({ error: 'Payload incomplet' });
       }
@@ -1393,7 +1398,7 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
         await db
           .update(userConsoleSettings)
           .set({
-            poolWindows,
+            poolWindows: { ...poolWindows, _presets: poolWindowPresets ?? undefined },
             poolWindowPresetNumbers,
             updatedAt: new Date(),
           })
@@ -1401,7 +1406,7 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
       } else {
         await db.insert(userConsoleSettings).values({
           userId: user.id,
-          poolWindows,
+          poolWindows: { ...poolWindows, _presets: poolWindowPresets ?? undefined },
           poolWindowPresetNumbers,
           updatedAt: new Date(),
         });
@@ -1428,18 +1433,25 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
       const [lastDrawRow] = await db.select().from(draws).orderBy(desc(draws.date)).limit(1);
       const lastDrawDateStr = lastDrawRow ? String(lastDrawRow.date).split('T')[0] : null;
       const userWins = await db.select().from(winningGrids).where(eq(winningGrids.userId, user.id));
-      const targetDatesMap: Record<string, true> = {};
-      for (const w of userWins as any[]) {
-        const d = String(w.targetDate).split('T')[0];
-        targetDatesMap[d] = true;
+
+      // Collecter TOUTES les targetDates des grilles (pas seulement les gagnantes)
+      const allTargetDatesMap: Record<string, true> = {};
+      for (const g of userGridsList as any[]) {
+        if (g.targetDate) {
+          const d = String(g.targetDate).split('T')[0];
+          allTargetDatesMap[d] = true;
+        }
       }
-      const targetDates = Object.keys(targetDatesMap);
+      const allTargetDates = Object.keys(allTargetDatesMap);
+
+      // Charger les tirages pour TOUTES les dates ciblées
       const drawsMap = new Map<string, any>();
-      if (targetDates.length > 0) {
+      if (allTargetDates.length > 0) {
         const { inArray } = await import('drizzle-orm');
-        const drawsList = await db.select().from(draws).where(inArray(draws.date, targetDates));
+        const drawsList = await db.select().from(draws).where(inArray(draws.date, allTargetDates));
         for (const d of drawsList) drawsMap.set(String(d.date).split('T')[0], d);
       }
+
       const winsByGrid = new Map<number, { w: any; draw: any }>();
       for (const w of userWins) {
         const dateStr = String(w.targetDate).split('T')[0];
@@ -1460,7 +1472,11 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
           const stars = Array.isArray(win.draw?.stars) ? win.draw.stars : [];
           return { id: g.id, odlId: g.odlId, numbers: g.numbers, stars: g.stars, playedAt: g.playedAt, targetDate: g.targetDate, name: g.name, createdAt: g.createdAt, status: 'Gagné' as const, gainCents: win.w.gainCents, matchNum: win.w.matchNum, matchStar: win.w.matchStar, winningGridId: win.w.id, drawNumbers: nums, drawStars: stars };
         }
-        return { id: g.id, odlId: g.odlId, numbers: g.numbers, stars: g.stars, playedAt: g.playedAt, targetDate: g.targetDate, name: g.name, createdAt: g.createdAt, status: 'Perdu' as const, gainCents: null, matchNum: undefined, matchStar: undefined, winningGridId: undefined, drawNumbers: undefined, drawStars: undefined };
+        // Grille perdante : fournir quand même les données du tirage pour la surbrillance visuelle
+        const drawForDate = targetStr ? drawsMap.get(targetStr) : null;
+        const lostDrawNums = Array.isArray(drawForDate?.numbers) ? drawForDate.numbers : undefined;
+        const lostDrawStars = Array.isArray(drawForDate?.stars) ? drawForDate.stars : undefined;
+        return { id: g.id, odlId: g.odlId, numbers: g.numbers, stars: g.stars, playedAt: g.playedAt, targetDate: g.targetDate, name: g.name, createdAt: g.createdAt, status: 'Perdu' as const, gainCents: null, matchNum: undefined, matchStar: undefined, winningGridId: undefined, drawNumbers: lostDrawNums, drawStars: lostDrawStars };
       });
       res.json(result);
     } catch (err) {

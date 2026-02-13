@@ -11,6 +11,7 @@ const LS_POOL_WINDOWS_KEY = "loto_poolWindows_v1";
 const EVENT_POOL_WINDOWS_CHANGED = "loto:poolWindowsChanged";
 const LS_POOL_WINDOW_PRESET_NUMBERS_KEY = "loto_poolWindowPresetNumbers_v1";
 const EVENT_POOL_WINDOW_PRESET_NUMBERS_CHANGED = "loto:poolWindowPresetNumbersChanged";
+const LS_POOL_WINDOW_PRESETS_KEY = "loto_poolWindowPresets_v1";
 
 function safeParseFreqConfig(raw: string | null): FrequencyConfig | null {
   if (!raw) return null;
@@ -58,6 +59,7 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
 
   const getPoolWindowsStorageKey = (userId?: number) => `loto_poolWindows_v1_u${userId ?? "unknown"}`;
   const getPresetNumbersStorageKey = (userId?: number) => `loto_poolWindowPresetNumbers_v1_u${userId ?? "unknown"}`;
+  const getPresetsStorageKey = (userId?: number) => `loto_poolWindowPresets_v1_u${userId ?? "unknown"}`;
 
   const approxTimeFromDraws = (draws: number) => {
     // EuroMillions: ~2 tirages/semaine => 1 tirage ≈ 3,5 jours.
@@ -267,12 +269,34 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
     return { ...defaultPoolWindows, high, surrepr: high };
   });
 
+  const [poolWindowPresets, setPoolWindowPresets] = useState<Record<PoolKey, WindowPreset>>(() => {
+    // Priorité 1: presets sauvegardés en localStorage
+    const presetsKey = user?.id ? getPresetsStorageKey(user.id) : LS_POOL_WINDOW_PRESETS_KEY;
+    try {
+      const saved = localStorage.getItem(presetsKey);
+      if (saved) {
+        const parsed = JSON.parse(saved) as Record<PoolKey, WindowPreset>;
+        if (parsed.high && parsed.surrepr && parsed.trend && parsed.dormeur) return parsed;
+      }
+    } catch { /* fallback */ }
+    // Priorité 2: deviner à partir des valeurs (rétrocompat)
+    return {
+      high: windowToPreset("high", poolWindows.high),
+      surrepr: windowToPreset("surrepr", poolWindows.surrepr),
+      trend: windowToPreset("trend", poolWindows.trend),
+      dormeur: windowToPreset("dormeur", poolWindows.dormeur),
+    };
+  });
+
   // AUTO-APPLY (Tableau 1): on persiste et on notifie dès que la fenêtre change.
   useEffect(() => {
     const key = user?.id ? getPoolWindowsStorageKey(user.id) : LS_POOL_WINDOWS_KEY;
     localStorage.setItem(key, JSON.stringify(poolWindows));
+    // Persister aussi les presets sélectionnés
+    const presetsKey = user?.id ? getPresetsStorageKey(user.id) : LS_POOL_WINDOW_PRESETS_KEY;
+    localStorage.setItem(presetsKey, JSON.stringify(poolWindowPresets));
     window.dispatchEvent(new Event(EVENT_POOL_WINDOWS_CHANGED));
-  }, [poolWindows, user?.id]);
+  }, [poolWindows, poolWindowPresets, user?.id]);
 
   // Charger depuis la DB (par utilisateur) au 1er rendu
   useEffect(() => {
@@ -302,13 +326,21 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
           safeParsePresetNumbers(localStorage.getItem(getPresetNumbersStorageKey(user.id))) ??
           defaultPresetNumbers;
 
-        // 2) Fenêtres actives
+        // 2) Presets sélectionnés (noms: strict/standard/souple/dynamic/all/custom)
+        const serverPresets = data?.poolWindowPresets as Record<PoolKey, WindowPreset> | null;
+
+        // 3) Fenêtres actives
         const serverPoolWindowsRaw = data?.poolWindows ?? null;
         const serverPoolWindows = serverPoolWindowsRaw ? safeParsePoolWindows(JSON.stringify(serverPoolWindowsRaw)) : null;
         if (serverPoolWindows) {
           localStorage.setItem(getPoolWindowsStorageKey(user.id), JSON.stringify(serverPoolWindows));
           hasLoadedUserWindowsRef.current = true;
           setPoolWindows(serverPoolWindows);
+          // Restaurer les presets sauvegardés (priorité sur windowToPreset)
+          if (serverPresets) {
+            localStorage.setItem(getPresetsStorageKey(user.id), JSON.stringify(serverPresets));
+            setPoolWindowPresets(serverPresets);
+          }
           return;
         }
 
@@ -322,6 +354,7 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
         localStorage.setItem(getPoolWindowsStorageKey(user.id), JSON.stringify(dynamicDefaults));
         hasLoadedUserWindowsRef.current = true;
         setPoolWindows(dynamicDefaults);
+        setPoolWindowPresets({ high: "dynamic", surrepr: "dynamic", trend: "dynamic", dormeur: "dynamic" });
       } catch {
         hasLoadedUserWindowsRef.current = true;
       }
@@ -345,6 +378,7 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
           body: JSON.stringify({
             poolWindows,
             poolWindowPresetNumbers: presetNumbers,
+            poolWindowPresets: poolWindowPresets,
           }),
         });
       } catch {
@@ -352,25 +386,15 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
       }
     }, 400);
     return () => window.clearTimeout(id);
-  }, [poolWindows, presetNumbers, user?.id]);
+  }, [poolWindows, presetNumbers, poolWindowPresets, user?.id]);
 
-  const [poolWindowPresets, setPoolWindowPresets] = useState<Record<PoolKey, WindowPreset>>(() => ({
-    high: windowToPreset("high", poolWindows.high),
-    surrepr: windowToPreset("surrepr", poolWindows.surrepr),
-    trend: windowToPreset("trend", poolWindows.trend),
-    dormeur: windowToPreset("dormeur", poolWindows.dormeur),
-  }));
+  // NOTE: poolWindowPresets est déclaré plus haut (après poolWindows)
 
-  // Garder les radios en phase si la fenêtre change (reset / chargement / custom)
-  useEffect(() => {
-    setPoolWindowPresets({
-      high: windowToPreset("high", poolWindows.high),
-      surrepr: windowToPreset("surrepr", poolWindows.surrepr),
-      trend: windowToPreset("trend", poolWindows.trend),
-      dormeur: windowToPreset("dormeur", poolWindows.dormeur),
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [poolWindows]);
+  // Garder les radios en phase SEULEMENT quand la fenêtre change de façon externe
+  // (reset / custom input) — ne pas écraser les presets sauvegardés s'ils existent déjà
+  // Cette logique est maintenant gérée par le chargement DB + localStorage ci-dessus
+  // Le useEffect de synchro reste comme fallback pour les changements manuels de custom
+  // (mais ne doit pas écraser un preset sauvegardé)
 
   useEffect(() => {
   }, [poolWindowPresets.surrepr, presetNumbers.surrepr?.dynamicDraws, presetNumbers.surrepr?.standardDraws]);
@@ -383,17 +407,10 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
     setPoolWindowPresets((prev) => ({ ...prev, high: windowToPreset("high", existing) }));
   }, []);
 
-  useEffect(() => {
-    // Si l'utilisateur change les presets numériques, on recalcule la radio sélectionnée (utile au rechargement / migration)
-    setPoolWindowPresets((prev) => ({
-      ...prev,
-      high: windowToPreset("high", poolWindows.high),
-      surrepr: windowToPreset("surrepr", poolWindows.surrepr),
-      trend: windowToPreset("trend", poolWindows.trend),
-      dormeur: windowToPreset("dormeur", poolWindows.dormeur),
-    }));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [presetNumbers]);
+  // NOTE: L'ancien useEffect qui recalculait les presets via windowToPreset() quand presetNumbers
+  // changeait a été supprimé. Les presets sont maintenant persistés par nom (ex: "dynamic")
+  // et ne dépendent plus de la correspondance valeur ↔ preset.
+  // Le commitPresetNumber gère déjà la mise à jour de la fenêtre active si besoin.
 
   const persistPresetNumbers = (next: PoolWindowPresetNumbers) => {
     const key = user?.id ? getPresetNumbersStorageKey(user.id) : LS_POOL_WINDOW_PRESET_NUMBERS_KEY;
@@ -407,7 +424,7 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
         ? clampInt(nextValue, 1, 100, presetNumbers[k][key])
         : key === "strictTrendR" || key === "standardTrendR" || key === "soupleTrendR" || key === "dynamicTrendR"
           ? clampInt(nextValue, 5, 500, presetNumbers[k][key])
-        : clampInt(nextValue, 1, 5000, presetNumbers[k][key]);
+          : clampInt(nextValue, 1, 5000, presetNumbers[k][key]);
 
     setPresetNumbers((prev) => {
       const next: PoolWindowPresetNumbers = {
@@ -573,6 +590,15 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
                           <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-2">
                             {(k === "high"
                               ? [
+                                { id: "strict", presetKey: "strictDraws" as const },
+                                { id: "standard", presetKey: "standardDraws" as const },
+                                { id: "souple", presetKey: "soupleDraws" as const },
+                                { id: "dynamic", presetKey: "dynamicDraws" as const },
+                                { id: "all", presetKey: null },
+                                { id: "custom", presetKey: null },
+                              ]
+                              : k === "surrepr"
+                                ? [
                                   { id: "strict", presetKey: "strictDraws" as const },
                                   { id: "standard", presetKey: "standardDraws" as const },
                                   { id: "souple", presetKey: "soupleDraws" as const },
@@ -580,8 +606,8 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
                                   { id: "all", presetKey: null },
                                   { id: "custom", presetKey: null },
                                 ]
-                              : k === "surrepr"
-                                ? [
+                                : k === "trend"
+                                  ? [
                                     { id: "strict", presetKey: "strictDraws" as const },
                                     { id: "standard", presetKey: "standardDraws" as const },
                                     { id: "souple", presetKey: "soupleDraws" as const },
@@ -589,30 +615,21 @@ export function SettingsPage({ mode = "all" }: { mode?: SettingsMode }) {
                                     { id: "all", presetKey: null },
                                     { id: "custom", presetKey: null },
                                   ]
-                              : k === "trend"
-                                ? [
-                                    { id: "strict", presetKey: "strictDraws" as const },
-                                    { id: "standard", presetKey: "standardDraws" as const },
-                                    { id: "souple", presetKey: "soupleDraws" as const },
-                                    { id: "dynamic", presetKey: "dynamicDraws" as const },
-                                    { id: "all", presetKey: null },
-                                    { id: "custom", presetKey: null },
-                                  ]
-                              : k === "dormeur"
-                                ? [
-                                    { id: "strict", presetKey: "strictDraws" as const },
-                                    { id: "standard", presetKey: "standardDraws" as const },
-                                    { id: "souple", presetKey: "soupleDraws" as const },
-                                    { id: "dynamic", presetKey: "dynamicDraws" as const },
-                                    { id: "all", presetKey: null },
-                                    { id: "custom", presetKey: null },
-                                  ]
-                                : [
-                                    { id: "years3", label: "yearsShort" as const },
-                                    { id: "years10", label: "yearsLong" as const },
-                                    { id: "all", label: "Complet (2004 → aujourd'hui)" },
-                                    { id: "custom", label: "Autre / Custom" },
-                                  ]
+                                  : k === "dormeur"
+                                    ? [
+                                      { id: "strict", presetKey: "strictDraws" as const },
+                                      { id: "standard", presetKey: "standardDraws" as const },
+                                      { id: "souple", presetKey: "soupleDraws" as const },
+                                      { id: "dynamic", presetKey: "dynamicDraws" as const },
+                                      { id: "all", presetKey: null },
+                                      { id: "custom", presetKey: null },
+                                    ]
+                                    : [
+                                      { id: "years3", label: "yearsShort" as const },
+                                      { id: "years10", label: "yearsLong" as const },
+                                      { id: "all", label: "Complet (2004 → aujourd'hui)" },
+                                      { id: "custom", label: "Autre / Custom" },
+                                    ]
                             ).map((opt: any) => (
                               <label
                                 key={`${k}-${opt.id}`}

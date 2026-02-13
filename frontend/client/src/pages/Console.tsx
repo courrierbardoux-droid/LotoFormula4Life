@@ -821,16 +821,29 @@ export default function Console() {
 
     // Mettre à jour la valeur "dynamicDraws" dans les presets (utilisé par Settings).
     try {
-      const raw = localStorage.getItem(LS_POOL_WINDOW_PRESET_NUMBERS_KEY);
+      // FIX: Utiliser la clé user-specific pour que Settings.tsx puisse la lire
+      const presetsKey = user?.id ? `loto_poolWindowPresetNumbers_v1_u${user.id}` : "loto_poolWindowPresetNumbers_v1";
+      const raw = localStorage.getItem(presetsKey);
       const parsed = raw ? (JSON.parse(raw) as any) : null;
       const next = parsed && typeof parsed === "object" ? { ...parsed } : {};
       next.high = { ...(next.high ?? {}), dynamicDraws };
-      localStorage.setItem(LS_POOL_WINDOW_PRESET_NUMBERS_KEY, JSON.stringify(next));
-      window.dispatchEvent(new Event(EVENT_POOL_WINDOW_PRESET_NUMBERS_CHANGED));
+      localStorage.setItem(presetsKey, JSON.stringify(next));
+      window.dispatchEvent(new Event("loto:poolWindowPresetNumbersChanged"));
+
+      // Sauvegarder aussi en DB pour persistance (via l'API existante)
+      if (user?.id) {
+        fetch("/api/user-settings/windows", {
+          method: "PUT",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ poolWindowPresetNumbers: next }),
+        }).catch(() => { });
+      }
 
       // Si la fenêtre High actuelle correspondait à l'ancien "dynamicDraws", on la recolle au nouveau.
       const oldDynamic = typeof parsed?.high?.dynamicDraws === "number" ? parsed.high.dynamicDraws : null;
-      const rawW = localStorage.getItem(LS_POOL_WINDOWS_KEY);
+      const windowsKey = user?.id ? `loto_poolWindows_v1_u${user.id}` : "loto_poolWindows_v1";
+      const rawW = localStorage.getItem(windowsKey);
       if (rawW) {
         const w = JSON.parse(rawW) as any;
         const high = w?.high;
@@ -844,14 +857,24 @@ export default function Console() {
             ...w,
             high: { ...high, customValue: dynamicDraws },
           };
-          localStorage.setItem(LS_POOL_WINDOWS_KEY, JSON.stringify(updated));
-          window.dispatchEvent(new Event(EVENT_POOL_WINDOWS_CHANGED));
+          localStorage.setItem(windowsKey, JSON.stringify(updated));
+          window.dispatchEvent(new Event("loto:poolWindowsChanged"));
+
+          // Sauvegarder la fenêtre active aussi
+          if (user?.id) {
+            fetch("/api/user-settings/windows", {
+              method: "PUT",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ poolWindows: updated }),
+            }).catch(() => { });
+          }
         }
       }
     } catch {
       // si localStorage est indisponible, on ne bloque pas la console
     }
-  }, [fullHistory]);
+  }, [fullHistory, user?.id]);
 
   // --- SURRÉPRÉSENTATION (z-score) : valeur Dynamique (calculée automatiquement) ---
   useEffect(() => {
@@ -1011,16 +1034,28 @@ export default function Console() {
     const dynamicDraws = clamp(round10(standardNStar), bounds.min, bounds.max);
 
     try {
-      const raw = localStorage.getItem(LS_POOL_WINDOW_PRESET_NUMBERS_KEY);
+      // FIX: Utiliser la clé user-specific
+      const presetsKey = user?.id ? `loto_poolWindowPresetNumbers_v1_u${user.id}` : "loto_poolWindowPresetNumbers_v1";
+      const raw = localStorage.getItem(presetsKey);
       const parsed = raw ? (JSON.parse(raw) as any) : null;
       const next = parsed && typeof parsed === "object" ? { ...parsed } : {};
       next.surrepr = { ...(next.surrepr ?? {}), dynamicDraws };
-      localStorage.setItem(LS_POOL_WINDOW_PRESET_NUMBERS_KEY, JSON.stringify(next));
-      window.dispatchEvent(new Event(EVENT_POOL_WINDOW_PRESET_NUMBERS_CHANGED));
+      localStorage.setItem(presetsKey, JSON.stringify(next));
+      window.dispatchEvent(new Event("loto:poolWindowPresetNumbersChanged"));
+
+      if (user?.id) {
+        fetch("/api/user-settings/windows", {
+          method: "PUT",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ poolWindowPresetNumbers: next }),
+        }).catch(() => { });
+      }
 
       const oldDynamic = typeof parsed?.surrepr?.dynamicDraws === "number" ? parsed.surrepr.dynamicDraws : null;
 
-      const rawW = localStorage.getItem(LS_POOL_WINDOWS_KEY);
+      const windowsKey = user?.id ? `loto_poolWindows_v1_u${user.id}` : "loto_poolWindows_v1";
+      const rawW = localStorage.getItem(windowsKey);
       if (rawW) {
         const w = JSON.parse(rawW) as any;
         const sur = w?.surrepr;
@@ -1034,14 +1069,23 @@ export default function Console() {
             ...w,
             surrepr: { ...sur, customValue: dynamicDraws },
           };
-          localStorage.setItem(LS_POOL_WINDOWS_KEY, JSON.stringify(updated));
-          window.dispatchEvent(new Event(EVENT_POOL_WINDOWS_CHANGED));
+          localStorage.setItem(windowsKey, JSON.stringify(updated));
+          window.dispatchEvent(new Event("loto:poolWindowsChanged"));
+
+          if (user?.id) {
+            fetch("/api/user-settings/windows", {
+              method: "PUT",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ poolWindows: updated }),
+            }).catch(() => { });
+          }
         }
       }
     } catch {
       // no-op
     }
-  }, [fullHistory]);
+  }, [fullHistory, user?.id]);
 
   // --- TENDANCE (W,R) : valeur Dynamique (calculée automatiquement) ---
   useEffect(() => {
@@ -1167,18 +1211,30 @@ export default function Console() {
     const dynamicR = clamp(round5(standard.RStar), bounds.R.min, bounds.R.max);
 
     try {
-      const raw = localStorage.getItem(LS_POOL_WINDOW_PRESET_NUMBERS_KEY);
+      // FIX: Utiliser la clé user-specific
+      const presetsKey = user?.id ? `loto_poolWindowPresetNumbers_v1_u${user.id}` : "loto_poolWindowPresetNumbers_v1";
+      const raw = localStorage.getItem(presetsKey);
       const parsed = raw ? (JSON.parse(raw) as any) : null;
       const next = parsed && typeof parsed === "object" ? { ...parsed } : {};
       const oldW = typeof parsed?.trend?.dynamicDraws === "number" ? parsed.trend.dynamicDraws : null;
       const oldR = typeof parsed?.trend?.dynamicTrendR === "number" ? parsed.trend.dynamicTrendR : null;
 
       next.trend = { ...(next.trend ?? {}), dynamicDraws: dynamicW, dynamicTrendR: dynamicR };
-      localStorage.setItem(LS_POOL_WINDOW_PRESET_NUMBERS_KEY, JSON.stringify(next));
-      window.dispatchEvent(new Event(EVENT_POOL_WINDOW_PRESET_NUMBERS_CHANGED));
+      localStorage.setItem(presetsKey, JSON.stringify(next));
+      window.dispatchEvent(new Event("loto:poolWindowPresetNumbersChanged"));
+
+      if (user?.id) {
+        fetch("/api/user-settings/windows", {
+          method: "PUT",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ poolWindowPresetNumbers: next }),
+        }).catch(() => { });
+      }
 
       // Si la fenêtre Trend actuelle correspondait à l'ancien couple dynamique, on la recolle au nouveau.
-      const rawW = localStorage.getItem(LS_POOL_WINDOWS_KEY);
+      const windowsKey = user?.id ? `loto_poolWindows_v1_u${user.id}` : "loto_poolWindows_v1";
+      const rawW = localStorage.getItem(windowsKey);
       if (rawW) {
         const w = JSON.parse(rawW) as any;
         const t = w?.trend;
@@ -1193,14 +1249,23 @@ export default function Console() {
             ...w,
             trend: { ...t, customValue: dynamicW, trendPeriodR: dynamicR },
           };
-          localStorage.setItem(LS_POOL_WINDOWS_KEY, JSON.stringify(updated));
-          window.dispatchEvent(new Event(EVENT_POOL_WINDOWS_CHANGED));
+          localStorage.setItem(windowsKey, JSON.stringify(updated));
+          window.dispatchEvent(new Event("loto:poolWindowsChanged"));
+
+          if (user?.id) {
+            fetch("/api/user-settings/windows", {
+              method: "PUT",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ poolWindows: updated }),
+            }).catch(() => { });
+          }
         }
       }
     } catch {
       // no-op
     }
-  }, [fullHistory]);
+  }, [fullHistory, user?.id]);
 
   // --- DORMEUR (absence / retard) : valeur Dynamique (calculée automatiquement) ---
   useEffect(() => {
@@ -1264,15 +1329,27 @@ export default function Console() {
     const dynamicDraws = clamp(round10(standardNStar), bounds.min, bounds.max);
 
     try {
-      const raw = localStorage.getItem(LS_POOL_WINDOW_PRESET_NUMBERS_KEY);
+      // FIX: Utiliser la clé user-specific
+      const presetsKey = user?.id ? `loto_poolWindowPresetNumbers_v1_u${user.id}` : "loto_poolWindowPresetNumbers_v1";
+      const raw = localStorage.getItem(presetsKey);
       const parsed = raw ? (JSON.parse(raw) as any) : null;
       const next = parsed && typeof parsed === "object" ? { ...parsed } : {};
       next.dormeur = { ...(next.dormeur ?? {}), dynamicDraws };
-      localStorage.setItem(LS_POOL_WINDOW_PRESET_NUMBERS_KEY, JSON.stringify(next));
-      window.dispatchEvent(new Event(EVENT_POOL_WINDOW_PRESET_NUMBERS_CHANGED));
+      localStorage.setItem(presetsKey, JSON.stringify(next));
+      window.dispatchEvent(new Event("loto:poolWindowPresetNumbersChanged"));
+
+      if (user?.id) {
+        fetch("/api/user-settings/windows", {
+          method: "PUT",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ poolWindowPresetNumbers: next }),
+        }).catch(() => { });
+      }
 
       const oldDynamic = typeof parsed?.dormeur?.dynamicDraws === "number" ? parsed.dormeur.dynamicDraws : null;
-      const rawW = localStorage.getItem(LS_POOL_WINDOWS_KEY);
+      const windowsKey = user?.id ? `loto_poolWindows_v1_u${user.id}` : "loto_poolWindows_v1";
+      const rawW = localStorage.getItem(windowsKey);
       if (rawW) {
         const w = JSON.parse(rawW) as any;
         const d = w?.dormeur;
@@ -1283,14 +1360,23 @@ export default function Console() {
           (oldDynamic != null ? d.customValue === oldDynamic : false)
         ) {
           const updated = { ...w, dormeur: { ...d, customValue: dynamicDraws } };
-          localStorage.setItem(LS_POOL_WINDOWS_KEY, JSON.stringify(updated));
-          window.dispatchEvent(new Event(EVENT_POOL_WINDOWS_CHANGED));
+          localStorage.setItem(windowsKey, JSON.stringify(updated));
+          window.dispatchEvent(new Event("loto:poolWindowsChanged"));
+
+          if (user?.id) {
+            fetch("/api/user-settings/windows", {
+              method: "PUT",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ poolWindows: updated }),
+            }).catch(() => { });
+          }
         }
       }
     } catch {
       // no-op
     }
-  }, [fullHistory]);
+  }, [fullHistory, user?.id]);
 
   // PURE MODE STATE REMOVED
 
