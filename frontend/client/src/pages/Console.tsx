@@ -222,12 +222,19 @@ type PresetConfig = {
 
   // NOUVEAUX PARAMÈTRES
   hazardLevel: number;        // VIVIER : taille du vivier (0-10)
-  tendencyLevel: number;     // STATS : 0 = hasard pur, 10 = stats pures (défaut 0)
-  influenceFreq: number;     // Influence Fréquence (0-10) dans le mix F/S/T
+  chaosLevel: number;         // CHAOS : 0 = Pure, 10 = Total Chaos (remplace tendencyLevel)
+  manifestationBalance: number; // MANIFESTATION : -5 (High) à +5 (Dormeur)
+  manifestationBias: boolean;   // Bias à 0 : false=High, true=Dormeur
+
+  // ANCIENS PARAMÈTRES (pour compatibilité ou supprimés)
+  // tendanceLevel removed
+  dormeurBallLevel?: number; // Kept for compatibility (0-10)
+  dormeurStarLevel?: number; // Kept for compatibility
+
+  influenceFreq: number;     // Influence Fréquence (0-10)
   influenceSurrepr: number;  // Influence Surreprésentation (0-10)
   influenceTrend: number;    // Influence Tendance (0-10)
-  dormeurBallLevel: number;   // Dormeur Boules (0-10) => 0%..100%
-  dormeurStarLevel: number;   // Dormeur Étoiles (0-10) => 0%..100%
+
   emailNotify: boolean;       // Email activé
   smsNotify: boolean;         // SMS activé
   numCount: number;           // Nombre de numéros (tarif)
@@ -451,13 +458,18 @@ export default function Console() {
   const [avoidFriday, setAvoidFriday] = useState(false);
   const [emailNotify, setEmailNotify] = useState(true);
   const [smsNotify, setSmsNotify] = useState(false);
-  const [hazardLevel, setHazardLevel] = useState(0); // VIVIER : 0..10 (taille vivier)
-  const [tendencyLevel, setTendencyLevel] = useState(0); // STATS : 0 = hasard pur, 10 = stats pures (défaut 0)
+
+  // --- KNOB STATES ---
+  const [hazardLevel, setHazardLevel] = useState(0); // VIVIER (0-10)
+  const [chaosLevel, setChaosLevel] = useState(0);   // CHAOS (0-10)
+  const [manifestationBalance, setManifestationBalance] = useState(0); // MANIFESTATION (-5 to +5)
+  const [manifestationBias, setManifestationBias] = useState(false);   // False = High Bias, True = Dormeur Bias
+
+
   const [influenceFreq, setInfluenceFreq] = useState(10);   // Influence Fréquence (0-10)
   const [influenceSurrepr, setInfluenceSurrepr] = useState(10); // Influence Surreprés (0-10)
   const [influenceTrend, setInfluenceTrend] = useState(10);     // Influence Tendance (0-10)
-  const [dormeurBallLevel, setDormeurBallLevel] = useState(0); // 0..10 => 0%..100% de dormeurs (boules)
-  const [dormeurStarLevel, setDormeurStarLevel] = useState(0); // 0..10 => 0%..100% de dormeurs (étoiles)
+
   const [isWeightsEnabled, setIsWeightsEnabled] = useState(true);
   const [koRunCounts, setKoRunCounts] = useState<Record<string, number>>({}); // clé: `${targetDate}|${koGrad}`
   const [dbComboKeysByTargetDate, setDbComboKeysByTargetDate] = useState<Record<string, string[]>>({});
@@ -1430,9 +1442,24 @@ export default function Console() {
           if (state.influenceSurrepr !== undefined) setInfluenceSurrepr(Math.max(0, Math.min(10, state.influenceSurrepr)));
           if (state.influenceTrend !== undefined) setInfluenceTrend(Math.max(0, Math.min(10, state.influenceTrend)));
           if (state.hazardLevel !== undefined) setHazardLevel(Math.max(0, Math.min(10, state.hazardLevel)));
-          if (state.tendencyLevel !== undefined) setTendencyLevel(Math.max(0, Math.min(10, state.tendencyLevel)));
-          if (state.dormeurBallLevel !== undefined) setDormeurBallLevel(Math.max(0, Math.min(10, state.dormeurBallLevel)));
-          if (state.dormeurStarLevel !== undefined) setDormeurStarLevel(Math.max(0, Math.min(10, state.dormeurStarLevel)));
+
+          // Migrate old states to new
+          if (state.chaosLevel !== undefined) {
+            setChaosLevel(Math.max(0, Math.min(10, state.chaosLevel)));
+          } else if (state.tendencyLevel !== undefined) {
+            // Old Tendency: 10=Pure, 0=Random. New Chaos: 0=Pure, 10=Chaos.
+            setChaosLevel(10 - Math.max(0, Math.min(10, state.tendencyLevel)));
+          }
+
+          if (state.manifestationBalance !== undefined) {
+            setManifestationBalance(Math.max(-5, Math.min(5, state.manifestationBalance)));
+          } else if (state.dormeurBallLevel !== undefined) {
+            // Old Dormeur: 0..10. Map to -5..+5
+            setManifestationBalance(Math.max(0, Math.min(10, state.dormeurBallLevel)) - 5);
+          }
+
+          if (state.manifestationBias !== undefined) setManifestationBias(state.manifestationBias);
+
 
           // Manual selection & SOURCES
           if (state.selectedNumbers) setSelectedNumbers(state.selectedNumbers);
@@ -1480,9 +1507,10 @@ export default function Console() {
       weightStarHigh, weightStarMid, weightStarLow, weightStarDormeur,
       influenceFreq, influenceSurrepr, influenceTrend,
       hazardLevel,
-      tendencyLevel,
-      dormeurBallLevel,
-      dormeurStarLevel,
+      chaosLevel,
+      manifestationBalance,
+      manifestationBias,
+
       selectedNumbers, selectedStars,
       numberSources, starSources,
       isSimplifiedMode,
@@ -1499,9 +1527,9 @@ export default function Console() {
     weightStarHigh, weightStarMid, weightStarLow, weightStarDormeur,
     influenceFreq, influenceSurrepr, influenceTrend,
     hazardLevel,
-    tendencyLevel,
-    dormeurBallLevel,
-    dormeurStarLevel,
+    chaosLevel,
+    manifestationBalance,
+    manifestationBias,
     selectedNumbers, selectedStars,
     numberSources, starSources,
     isSimplifiedMode,
@@ -1522,6 +1550,12 @@ export default function Console() {
       // Reset all knobs to 0
       setWeightHigh(0);
       setWeightStarHigh(0); setWeightStarMid(0); setWeightStarLow(0); setWeightStarDormeur(0);
+
+      // Reset Manifestation/Chaos/Vivier
+      setManifestationBalance(0);
+      setChaosLevel(0);
+      setHazardLevel(0);
+
       toast.info("Pondérations DÉSACTIVÉES (Mode 0)");
     } else {
       setIsWeightsEnabled(true);
@@ -1530,8 +1564,12 @@ export default function Console() {
         // Load saved data (BALL weights only - star weights are neutralized)
         const data = weightPresetsData[presetId];
         setWeightHigh(data.weightHigh);
-        setDormeurBallLevel(data.dormeurBallLevel);
-        setDormeurStarLevel(data.dormeurBallLevel);
+
+        // Map old dormeurBallLevel (0-10) to manifestationBalance (-5 to +5)
+        // 0 -> -5 (High), 5 -> 0 (Mix), 10 -> +5 (Dormeur)
+        if (data.dormeurBallLevel !== undefined) {
+          setManifestationBalance(Math.max(-5, Math.min(5, data.dormeurBallLevel - 5)));
+        }
 
         // NEUTRALIZED: Star weights are no longer loaded from presets
         // They are derived from ball weights proportions
@@ -1564,7 +1602,8 @@ export default function Console() {
       ...prev,
       [selectedWeightPreset]: {
         weightHigh,
-        dormeurBallLevel,
+        // Map manifestationBalance (-5 to +5) back to dormeurBallLevel (0-10) for storage compatibility
+        dormeurBallLevel: manifestationBalance + 5,
         isSimplified: isSimplifiedMode
       }
     }));
@@ -1583,7 +1622,7 @@ export default function Console() {
       ...prev,
       [presetId]: {
         weightHigh,
-        dormeurBallLevel,
+        dormeurBallLevel: manifestationBalance + 5,
         isSimplified: isSimplifiedMode
       }
     }));
@@ -2488,8 +2527,9 @@ export default function Console() {
   const resetToDefault = () => {
     // Reset weights
     setWeightHigh(0);
-    setDormeurBallLevel(0);
-    setDormeurStarLevel(0);
+    // Dormeur level managed by Manifestation
+    // setDormeurBallLevel(0);
+    // setDormeurStarLevel(0);
     setWeightStarHigh(0);
     setWeightStarMid(0);
     setWeightStarLow(0);
@@ -2502,9 +2542,9 @@ export default function Console() {
 
     // Reset hazard, tendency and dormeur
     setHazardLevel(0);
-    setTendencyLevel(0);
-    setDormeurBallLevel(0);
-    setDormeurStarLevel(0);
+    setChaosLevel(0);
+    setManifestationBalance(0);
+    setManifestationBias(false);
 
     // Mode is NOT reset - it's always based on user role
     // If user is Admin/VIP/Abonné, mode stays 'manual'
@@ -2586,8 +2626,12 @@ export default function Console() {
           // Mode is NOT restored from preset - it's always based on user role
 
           // Restore nouveaux paramètres (avec valeurs par défaut pour rétrocompatibilité)
+          // Restore nouveaux paramètres (avec valeurs par défaut pour rétrocompatibilité)
           if (presetData.hazardLevel !== undefined) setHazardLevel(Math.max(0, Math.min(10, presetData.hazardLevel)));
-          if (presetData.tendencyLevel !== undefined) setTendencyLevel(presetData.tendencyLevel);
+          if (presetData.chaosLevel !== undefined) setChaosLevel(presetData.chaosLevel);
+          if (presetData.manifestationBalance !== undefined) setManifestationBalance(presetData.manifestationBalance);
+          if (presetData.manifestationBias !== undefined) setManifestationBias(presetData.manifestationBias);
+
           if (presetData.influenceFreq !== undefined) setInfluenceFreq(Math.max(0, Math.min(10, presetData.influenceFreq)));
           if (presetData.influenceSurrepr !== undefined) setInfluenceSurrepr(Math.max(0, Math.min(10, presetData.influenceSurrepr)));
           if (presetData.influenceTrend !== undefined) setInfluenceTrend(Math.max(0, Math.min(10, presetData.influenceTrend)));
@@ -2635,12 +2679,12 @@ export default function Console() {
       mode,
       // Nouveaux paramètres
       hazardLevel,
-      tendencyLevel,
+      chaosLevel,
+      manifestationBalance,
+      manifestationBias,
       influenceFreq,
       influenceSurrepr,
       influenceTrend,
-      dormeurBallLevel,
-      dormeurStarLevel,
       emailNotify,
       smsNotify,
       numCount: selectedTariff?.nums || 5,
@@ -2707,12 +2751,12 @@ export default function Console() {
       mode,
       // Nouveaux paramètres
       hazardLevel,
-      tendencyLevel,
+      chaosLevel,
+      manifestationBalance,
+      manifestationBias,
       influenceFreq,
       influenceSurrepr,
       influenceTrend,
-      dormeurBallLevel,
-      dormeurStarLevel,
       emailNotify,
       smsNotify,
       numCount: selectedTariff?.nums || 5,
@@ -2774,8 +2818,11 @@ export default function Console() {
 
         // Restore all settings
         setWeightHigh(config.weightHigh);
-        if (config.dormeurBallLevel !== undefined) setDormeurBallLevel(config.dormeurBallLevel);
-        if (config.dormeurStarLevel !== undefined) setDormeurStarLevel(config.dormeurStarLevel);
+        // Map old dormeurBallLevel (0-10) to manifestationBalance (-5 to +5)
+        if (config.dormeurBallLevel !== undefined) {
+          setManifestationBalance(Math.max(-5, Math.min(5, config.dormeurBallLevel - 5)));
+        }
+        // Star level ignored/neutralized
 
         setWeightStarHigh(config.weightStarHigh);
         setWeightStarMid(config.weightStarMid);
@@ -2785,8 +2832,12 @@ export default function Console() {
         // Mode is NOT restored from config - it's always based on user role
 
         // Restore nouveaux paramètres (avec vérification pour rétrocompatibilité)
+        // Restore nouveaux paramètres (avec vérification pour rétrocompatibilité)
         if (config.hazardLevel !== undefined) setHazardLevel(Math.max(0, Math.min(10, config.hazardLevel)));
-        if (config.tendencyLevel !== undefined) setTendencyLevel(config.tendencyLevel);
+        if (config.chaosLevel !== undefined) setChaosLevel(config.chaosLevel);
+        if (config.manifestationBalance !== undefined) setManifestationBalance(config.manifestationBalance);
+        if (config.manifestationBias !== undefined) setManifestationBias(config.manifestationBias);
+
         if (config.influenceFreq !== undefined) setInfluenceFreq(Math.max(0, Math.min(10, config.influenceFreq)));
         if (config.influenceSurrepr !== undefined) setInfluenceSurrepr(Math.max(0, Math.min(10, config.influenceSurrepr)));
         if (config.influenceTrend !== undefined) setInfluenceTrend(Math.max(0, Math.min(10, config.influenceTrend)));
@@ -3146,8 +3197,8 @@ export default function Console() {
             return sorted.map(s => s.num);
           }
 
-          // STATS (tendencyLevel) : 0 = hasard pur, 10 = stats pures (pole stricte). Défaut 0.
-          const statsLevel = Math.max(0, Math.min(10, tendencyLevel));
+          // STATS (chaosLevel) : 0 = Pure (TopN), 10 = Total Chaos.
+          const statsLevel = 10 - Math.max(0, Math.min(10, chaosLevel));
 
           // STATS 9–10 : application stricte = prendre les « count » premiers (pole position)
           if (statsLevel >= 9) {
@@ -3159,7 +3210,7 @@ export default function Console() {
             return pickedSlice.map(s => s.num);
           }
 
-          // STATS 0 : hasard pur = tirage aléatoire sans remise dans le vivier (panier qu’on gigote)
+          // STATS 0 : hasard pur
           if (statsLevel <= 0.5) {
             const shuffled = [...sorted].sort(() => Math.random() - 0.5);
             const pickedSlice = shuffled.slice(0, count);
@@ -3170,8 +3221,7 @@ export default function Console() {
             return pickedSlice.map(s => s.num);
           }
 
-          // STATS entre 1 et 9 : illusion « panier qu’on gigote » — plus STATS est haut, plus on reste proche de la pole
-          // Poids par rang : exp(-rang / temp), temp = (10 - statsLevel) * 0.5 + 0.2
+          // STATS entre 1 et 9 : illusion « panier qu’on gigote »
           const temp = (10 - statsLevel) * 0.5 + 0.2;
           const indices = Array.from({ length: maxPool }, (_, i) => i);
           const pickedIndices: number[] = [];
@@ -3207,10 +3257,9 @@ export default function Console() {
         };
 
         // Check if weights are all zero (pure stats mode)
-        // Now only checks ball weights since star weights are derived from balls
         const weightsAreZero = weightTotalNums === 0;
 
-        // Helper: Determine source category for a number based on which pool it came from
+        // Helper: Determine source category
         const getSourceCategory = (num: number, isStar: boolean): 'high' | 'dormeur' => {
           if (isStar) {
             if (poolStarHigh.includes(num)) return 'high';
@@ -3222,7 +3271,6 @@ export default function Console() {
           return 'high'; // fallback
         };
 
-        // Anti-doublons pour le tirage visé: DB + session (autoDraws)
         const forbiddenKeys = new Set<string>(forbiddenDbKeys);
         autoDraws.forEach(d => {
           if (d?.nums?.length && d?.stars?.length) forbiddenKeys.add(comboKey(d.nums, d.stars));
@@ -3232,7 +3280,6 @@ export default function Console() {
         let foundUnique = false;
 
         for (let attempt = 0; attempt < maxUniqAttempts; attempt++) {
-          // Ré-initialiser à chaque tentative
           calculatedNums = [];
           calculatedStars = [];
           calcNumSources = {};
@@ -3243,102 +3290,105 @@ export default function Console() {
           forceExplore = attempt > 0;
           koLocalAttempt = attempt;
 
-          if (!isWeightsEnabled || weightsAreZero) {
-            // --- PURE STATISTICS MODE ---
-            calculatedNums = pickWithStats(combinedNumPool, allNumStats, totalNums, [], poolDormeur, false).sort((a, b) => a - b);
-            calculatedNums.forEach(num => {
-              calcNumSources[num] = getSourceCategory(num, false);
-            });
+          // DETERMINE COUNTS BASED ON MANIFESTATION BALANCE
+          // Balance -5 .. 5
+          // < 0 : High Bias
+          // > 0 : Dormeur Bias
+          // 0 : Managed by Bias toggle
 
-            // Stars: always pure stats
-            calculatedStars = pickWithStats(combinedStarPool, allStarStats, totalStars, [], poolStarDormeur, true).sort((a, b) => a - b);
-            calculatedStars.forEach(num => {
-              calcStarSources[num] = getSourceCategory(num, true);
-            });
+          let pctDormeur = 0;
+          if (manifestationBalance < 0) {
+            // -5 -> 0, -1 -> ~30%
+            // Linear: -5 -> 0, 0 -> 0.40
+            pctDormeur = 0.40 * (1 - (manifestationBalance / -5));
+            // Wait, -5 => 1 - 1 = 0 => 0. Correct.
+            // -1 => 1 - 0.2 = 0.8 => 0.32. Correct.
+            // 0 => 1. Correct (0.40).
+
+            // Correct logic: interpolation from -5 (0%) to 0 (40%)
+            pctDormeur = 0.40 * ((manifestationBalance + 5) / 5);
+          } else if (manifestationBalance > 0) {
+            // 0 -> 0.60, 5 -> 1.0
+            pctDormeur = 0.60 + 0.40 * (manifestationBalance / 5);
           } else {
-            // --- WEIGHTED MODE (PONDÉRÉ) ---
-            let wantHigh = Math.max(0, Math.floor(effectiveWeightHigh));
-            let wantDormeur = Math.max(0, Math.floor(effectiveWeightDormeur));
+            // 0
+            pctDormeur = manifestationBias ? 0.60 : 0.40;
+          }
 
-            let sumWant = wantHigh + wantDormeur;
-            while (sumWant > totalNums) {
-              if (wantHigh > 0) wantHigh--;
-              else if (wantDormeur > 0) wantDormeur--;
-              sumWant = wantHigh + wantDormeur;
-            }
+          const targetDormeur = Math.round(totalNums * pctDormeur);
+          const targetHigh = totalNums - targetDormeur;
 
-            const pickedNums: number[] = [];
-            const pickCategory = (pool: number[], count: number) => {
-              if (count <= 0) return;
-              const chosen = pickWithStats(pool, allNumStats, count, pickedNums, poolDormeur, false);
-              chosen.forEach(n => {
-                if (!pickedNums.includes(n)) pickedNums.push(n);
-              });
-            };
+          const targetStarDormeur = Math.round(totalStars * pctDormeur);
+          const targetStarHigh = totalStars - targetStarDormeur;
 
-            pickCategory(poolHigh, wantHigh);
-            pickCategory(poolDormeur, wantDormeur);
+          // Pick Numbers
+          const pickedNums: number[] = [];
 
-            const remainingNumsCount = totalNums - pickedNums.length;
-            if (remainingNumsCount > 0) {
-              const extra = pickWithStats(combinedNumPool, allNumStats, remainingNumsCount, pickedNums, poolDormeur, false);
-              extra.forEach(n => {
-                if (!pickedNums.includes(n)) pickedNums.push(n);
-              });
-            }
-
-            calculatedNums = pickedNums.slice(0, totalNums).sort((a, b) => a - b);
-            calculatedNums.forEach(num => {
-              calcNumSources[num] = getSourceCategory(num, false);
-            });
-
-            // Stars
-            let wantStarHigh = Math.max(0, Math.floor(effectiveStarHigh));
-            let wantStarDormeur = Math.max(0, Math.floor(effectiveStarDormeur));
-
-            let sumStarWant = wantStarHigh + wantStarDormeur;
-            while (sumStarWant > totalStars) {
-              if (wantStarDormeur > 0) wantStarDormeur--;
-              else if (wantStarHigh > 0) wantStarHigh--;
-              sumStarWant = wantStarHigh + wantStarDormeur;
-            }
-
-            const pickedStars: number[] = [];
-            const pickStarCategory = (pool: number[], count: number) => {
-              if (count <= 0) return;
-              const chosen = pickWithStats(pool, allStarStats, count, pickedStars, poolStarDormeur, true);
-              chosen.forEach(n => {
-                if (!pickedStars.includes(n)) pickedStars.push(n);
-              });
-            };
-
-            pickStarCategory(poolStarHigh, wantStarHigh);
-            pickStarCategory(poolStarDormeur, wantStarDormeur);
-
-            const remainingStarsCount = totalStars - pickedStars.length;
-            if (remainingStarsCount > 0) {
-              const extraStars = pickWithStats(combinedStarPool, allStarStats, remainingStarsCount, pickedStars, poolStarDormeur, true);
-              extraStars.forEach(n => {
-                if (!pickedStars.includes(n)) pickedStars.push(n);
-              });
-            }
-
-            calculatedStars = pickedStars.slice(0, totalStars).sort((a, b) => a - b);
-            calculatedStars.forEach(num => {
-              calcStarSources[num] = getSourceCategory(num, true);
+          // High Pool
+          if (targetHigh > 0) {
+            const chosen = pickWithStats(combinedNumPool, allNumStats, targetHigh, pickedNums, poolDormeur, false);
+            chosen.forEach(n => {
+              if (!pickedNums.includes(n)) pickedNums.push(n);
+              calcNumSources[n] = 'high';
             });
           }
 
+          // Dormeur Pool
+          if (targetDormeur > 0) {
+            // Use poolDormeur specifically for Dormeur picks
+            const chosen = pickWithStats(poolDormeur, allNumStats, targetDormeur, pickedNums, poolDormeur, false);
+            chosen.forEach(n => {
+              if (!pickedNums.includes(n)) pickedNums.push(n);
+              calcNumSources[n] = 'dormeur';
+            });
+          }
+
+          // Fill if missing
+          const remaining = totalNums - pickedNums.length;
+          if (remaining > 0) {
+            const extra = pickWithStats(combinedNumPool, allNumStats, remaining, pickedNums, poolDormeur, false);
+            extra.forEach(n => {
+              if (!pickedNums.includes(n)) pickedNums.push(n);
+              calcNumSources[n] = 'high';
+            });
+          }
+          calculatedNums = pickedNums.slice(0, totalNums).sort((a, b) => a - b);
+
+          // Pick Stars
+          const pickedStars: number[] = [];
+          if (targetStarHigh > 0) {
+            const chosen = pickWithStats(combinedStarPool, allStarStats, targetStarHigh, pickedStars, poolStarDormeur, true);
+            chosen.forEach(n => {
+              if (!pickedStars.includes(n)) pickedStars.push(n);
+              calcStarSources[n] = 'high';
+            });
+          }
+          if (targetStarDormeur > 0) {
+            const chosen = pickWithStats(poolStarDormeur, allStarStats, targetStarDormeur, pickedStars, poolStarDormeur, true);
+            chosen.forEach(n => {
+              if (!pickedStars.includes(n)) pickedStars.push(n);
+              calcStarSources[n] = 'dormeur';
+            });
+          }
+          const remainingS = totalStars - pickedStars.length;
+          if (remainingS > 0) {
+            const extra = pickWithStats(combinedStarPool, allStarStats, remainingS, pickedStars, poolStarDormeur, true);
+            extra.forEach(n => {
+              if (!pickedStars.includes(n)) pickedStars.push(n);
+              calcStarSources[n] = 'high';
+            });
+          }
+          calculatedStars = pickedStars.slice(0, totalStars).sort((a, b) => a - b);
+
           // --- DORMEUR % REPLACEMENT (post-processing) ---
-          if (effectiveMode === 'auto' && (dormeurBallLevel > 0 || dormeurStarLevel > 0)) {
+          // Use Manifestation Balance (mapped to 0..10 scale for calc)
+          const dormeurLevel = manifestationBalance + 5;
+          if (effectiveMode === 'auto' && (dormeurLevel > 0)) {
             const k = Math.min(
               totalNums,
-              dormeurBallLevel > 0 ? Math.max(1, Math.round((totalNums * dormeurBallLevel) / 10)) : 0
+              dormeurLevel > 0 ? Math.max(1, Math.round((totalNums * dormeurLevel) / 10)) : 0
             );
-            const ks = Math.min(
-              totalStars,
-              dormeurStarLevel > 0 ? Math.max(1, Math.round((totalStars * dormeurStarLevel) / 10)) : 0
-            );
+            const ks = 0; // Stars dormeur not used in this logic anymore or mapped differently
 
             // 1) Numbers
             if (k > 0) {
@@ -3363,7 +3413,7 @@ export default function Console() {
                 effectiveMode,
                 stars: prev?.stars,
                 nums: {
-                  level: dormeurBallLevel,
+                  level: (manifestationBalance + 5),
                   k,
                   before: beforeNums.slice().sort((a, b) => a - b),
                   toReplace,
@@ -3396,7 +3446,7 @@ export default function Console() {
                 effectiveMode,
                 nums: prev?.nums,
                 stars: {
-                  level: dormeurStarLevel,
+                  level: 0, // Star dormeur not used
                   ks,
                   before: beforeStars.slice().sort((a, b) => a - b),
                   toReplace: toReplaceS,
@@ -3488,8 +3538,8 @@ export default function Console() {
 
     // 2. Reset Weights (Potards) - Numéros
     setWeightHigh(0);
-    setDormeurBallLevel(0);
-    setDormeurStarLevel(0);
+    // setDormeurBallLevel(0);
+    // setDormeurStarLevel(0);
 
     // Weights - Étoiles
     setWeightStarHigh(0);
@@ -3502,7 +3552,8 @@ export default function Console() {
 
     // 4. Reset Vivier, Stat, Dormeur et influences (Fréquence, Surreprés, Tendance)
     setHazardLevel(0);
-    setTendencyLevel(0);
+    setChaosLevel(0);
+    // setTendencyLevel(0);
     setInfluenceFreq(0);
     setInfluenceSurrepr(0);
     setInfluenceTrend(0);
@@ -3941,7 +3992,7 @@ export default function Console() {
                   disabled={!selectedTariff || isGenerating}
                 >
                   {isGenerating ? "..." : (
-                    (weightHigh > 0 || dormeurBallLevel > 0 || dormeurStarLevel > 0)
+                    (weightHigh > 0 || manifestationBalance !== 0 || chaosLevel > 0)
                       ? <span className="text-red-500 font-bold text-center leading-tight text-[10px]">RECHERCHE<br />PONDÉRÉE</span>
                       : "RECHERCHER"
                   )}
@@ -4114,7 +4165,7 @@ export default function Console() {
                     disabled={isGenerating}
                   >
                     {isGenerating ? "..." : (
-                      (weightHigh > 0 || dormeurBallLevel > 0 || dormeurStarLevel > 0)
+                      (weightHigh > 0 || manifestationBalance !== 0 || chaosLevel > 0)
                         ? <span className="text-red-500 font-bold text-center leading-tight text-sm">RECHERCHE<br />PONDÉRÉE</span>
                         : "RECHERCHER"
                     )}
@@ -4171,7 +4222,7 @@ export default function Console() {
             disabled={isGenerating}
           >
             {isGenerating ? "..." : (
-              (weightHigh > 0 || dormeurBallLevel > 0 || dormeurStarLevel > 0)
+              (weightHigh > 0 || manifestationBalance !== 0 || chaosLevel > 0)
                 ? <span className="text-red-500 font-bold text-center leading-tight text-[10px]">RECHERCHE<br />PONDÉRÉE</span>
                 : "RECHERCHER"
             )}
@@ -5008,12 +5059,107 @@ export default function Console() {
                   <div style={{ height: '26px' }} />
 
                   {/* Ligne du bas : +10px au-dessus pour ne faire descendre que cette ligne */}
+                  {/* Ligne du bas : +10px au-dessus pour ne faire descendre que cette ligne */}
                   <div className="w-full flex items-start justify-center" style={{ marginTop: '10px' }}>
-                    <div className="flex items-start justify-center gap-1 w-full px-1">
-                      {/* VIVIER Knob (Left) */}
+                    <div className="flex items-start justify-center gap-1 mt-0 w-full px-1">
+                      {/* MANIFESTATION Knob (Left) */}
                       <div className="flex flex-col items-center gap-4 w-[110px]">
-                        <div className="h-6 flex items-center justify-center w-full text-center relative">
-                          <span className="text-white font-rajdhani font-bold text-lg uppercase tracking-wider">
+                        <div
+                          className={cn(
+                            "h-8 flex items-center justify-center w-full text-center relative cursor-pointer select-none rounded decoration-2 underline-offset-4",
+                            manifestationBalance === 0 ? "hover:underline active:scale-95 transition-all" : ""
+                          )}
+                          onClick={() => {
+                            if (manifestationBalance === 0) {
+                              setManifestationBias(!manifestationBias);
+                              playSound('click');
+                            }
+                          }}
+                          title={manifestationBalance === 0 ? "Cliquer pour alterner la priorité (High vs Dormeur)" : undefined}
+                        >
+                          <span className={cn(
+                            "font-rajdhani font-bold text-lg uppercase tracking-wider transition-colors duration-300",
+                            manifestationBalance < 0 ? "text-white" :
+                              manifestationBalance > 0 ? "text-blue-500" :
+                                manifestationBias ? "text-blue-500" : "text-white"
+                          )}>
+                            {manifestationBalance < 0 ? "MANIFEST." :
+                              manifestationBalance > 0 ? "COMPENS." :
+                                "MAN./COMP."}
+                          </span>
+                        </div>
+
+                        <div className="h-[60px] flex items-center justify-center">
+                          <RotaryKnob
+                            label=""
+                            value={manifestationBalance + 5} // Map -5..5 to 0..10
+                            onChange={(v) => {
+                              const bal = v - 5;
+                              setManifestationBalance(bal);
+                              playSound('knob');
+                            }}
+                            max={10}
+                            size="xl"
+                            knobColor={cn(
+                              "transition-colors duration-300",
+                              (manifestationBalance < 0 || (manifestationBalance === 0 && !manifestationBias))
+                                ? "border-white shadow-[0_0_15px_rgba(255,255,255,0.3)] bg-zinc-900"
+                                : "border-blue-600 shadow-[0_0_15px_rgba(37,99,235,0.4)] bg-zinc-900"
+                            )}
+                            indicatorColor={cn(
+                              "transition-colors duration-300",
+                              (manifestationBalance < 0 || (manifestationBalance === 0 && !manifestationBias))
+                                ? "bg-white"
+                                : "bg-blue-500"
+                            )}
+                            labelClassName="hidden"
+                            valueClassName={cn(
+                              "transition-colors duration-300",
+                              (manifestationBalance < 0 || (manifestationBalance === 0 && !manifestationBias))
+                                ? "text-white"
+                                : "text-blue-500"
+                            )}
+                            displayTransformer={(v) => Math.abs(v - 5)} // Show 5 - 0 - 5
+                          />
+                        </div>
+                        <div className="h-4 -mt-3 text-[10px] text-zinc-500 font-mono">
+                          {manifestationBalance < 0 ? "High" : manifestationBalance > 0 ? "Dormeur" : (manifestationBias ? "Bias: Dormeur" : "Bias: High")}
+                        </div>
+                      </div>
+
+                      {/* CHAOS Knob (Middle) */}
+                      <div className="flex flex-col items-center gap-4 w-[110px]">
+                        <div className="h-8 flex items-center justify-center w-full text-center relative">
+                          <span className="text-zinc-400 font-rajdhani font-bold text-lg uppercase tracking-wider">
+                            CHAOS
+                          </span>
+                        </div>
+
+                        <div className="h-[60px] flex items-center justify-center">
+                          <RotaryKnob
+                            label=""
+                            value={chaosLevel}
+                            onChange={(v) => {
+                              setChaosLevel(v);
+                              playSound('knob');
+                            }}
+                            max={10}
+                            size="xl"
+                            knobColor="border-zinc-500 shadow-[0_0_15px_rgba(0,0,0,0.3)] bg-zinc-300"
+                            indicatorColor="bg-black"
+                            labelClassName="hidden"
+                            valueClassName="text-black"
+                          />
+                        </div>
+                        <div className="h-4 -mt-3 text-[10px] text-zinc-600 font-mono">
+                          Entropie
+                        </div>
+                      </div>
+
+                      {/* VIVIER Knob (Right) */}
+                      <div className="flex flex-col items-center gap-4 w-[110px]">
+                        <div className="h-8 flex items-center justify-center w-full text-center relative">
+                          <span className="text-amber-500 font-rajdhani font-bold text-lg uppercase tracking-wider">
                             VIVIER
                           </span>
                         </div>
@@ -5036,56 +5182,6 @@ export default function Console() {
                           title={`Vivier: ${chaosLabel}`}
                         >
                           {chaosLabel}
-                        </div>
-                      </div>
-
-                      {/* STATS Knob (Middle) */}
-                      <div className="flex flex-col items-center gap-4 w-[110px]">
-                        <div className="h-6 flex items-center justify-center w-full text-center relative">
-                          <span className="text-white font-rajdhani font-bold text-lg uppercase tracking-wider">
-                            STATS
-                          </span>
-                        </div>
-
-                        <div className="h-[60px] flex items-center justify-center">
-                          <RotaryKnob
-                            label=""
-                            value={tendencyLevel}
-                            onChange={(v) => { setTendencyLevel(v); playSound('knob'); }}
-                            max={10}
-                            size="xl"
-                            knobColor="border-white shadow-[0_0_15px_rgba(255,255,255,0.3)] bg-zinc-900"
-                            indicatorColor="bg-white"
-                            labelClassName="hidden"
-                            valueClassName="text-white"
-                          />
-                        </div>
-                      </div>
-
-                      {/* DORMEURS Knob (Right) — 1 bouton, applique Boules + Étoiles */}
-                      <div className="flex flex-col items-center gap-4 w-[110px]">
-                        <div className="h-6 flex items-center justify-center w-full text-center relative">
-                          <span className="text-white font-rajdhani font-bold text-lg uppercase tracking-wider">
-                            DORMEURS
-                          </span>
-                        </div>
-
-                        <div className="h-[60px] flex items-center justify-center">
-                          <RotaryKnob
-                            label=""
-                            value={dormeurBallLevel}
-                            onChange={(v) => {
-                              setDormeurBallLevel(v);
-                              setDormeurStarLevel(v);
-                              playSound('knob');
-                            }}
-                            max={10}
-                            size="xl"
-                            knobColor="border-blue-700 shadow-[0_0_15px_rgba(37,99,235,0.3)] bg-zinc-900"
-                            indicatorColor="bg-blue-600"
-                            labelClassName="hidden"
-                            valueClassName="text-blue-500"
-                          />
                         </div>
                       </div>
                     </div>
@@ -5368,7 +5464,7 @@ export default function Console() {
                         disabled={isGenerating}
                       >
                         {isGenerating ? "..." : (
-                          (weightHigh > 0 || dormeurBallLevel > 0 || dormeurStarLevel > 0 ||
+                          (weightHigh > 0 || manifestationBalance !== 0 || chaosLevel > 0 ||
                             weightStarHigh > 0 || weightStarMid > 0 || weightStarLow > 0 || weightStarDormeur > 0)
                             ? <span className="text-red-500 font-bold text-center leading-tight">RECHERCHE<br />PONDÉRÉE</span>
                             : "RECHERCHER"
@@ -5637,7 +5733,7 @@ export default function Console() {
               highFreqCount: 0, midFreqCount: 0, lowFreqCount: 0,
               highStarCount: 0, midStarCount: 0, lowStarCount: 0,
               weightHigh, weightMid: 0, weightLow: 0,
-              weightDormeur: dormeurBallLevel, // compat debug panel
+              weightDormeur: manifestationBalance + 5, // compat debug panel
               weightStarHigh, weightStarMid, weightStarLow, weightStarDormeur
             }}
             numberSources={numberSources}
