@@ -11,10 +11,12 @@ interface LottoBallProps {
   isWinning?: boolean;
   /** Animation pulse sur la police (avec isWinning) */
   pulse?: boolean;
+  /** Animation pulse blanche éclatante pour le RDV */
+  highlight?: boolean;
   className?: string;
 }
 
-export const LottoBall = ({ number, isStar = false, size = 'md', status = 'default', isWinning = false, pulse = false, className }: LottoBallProps) => {
+export const LottoBall = ({ number, isStar = false, size = 'md', status = 'default', isWinning = false, pulse = false, highlight = false, className }: LottoBallProps) => {
   const sizeClasses = {
     sm: "w-[32px] h-[32px] text-[16px]",
     md: "w-[44px] h-[44px] text-[22px]",
@@ -40,10 +42,11 @@ export const LottoBall = ({ number, isStar = false, size = 'md', status = 'defau
       "bg-gradient-to-br",
       sizeClasses[size],
       statusColors[status],
-      className
+      className,
+      highlight && "animate-[pulse_1s_ease-in-out_infinite] border-white shadow-[0_0_25px_rgba(255,255,255,0.8)] scale-110 z-30"
     )}>
       <span className={numberSpanClass}>{number}</span>
-      
+
       {/* Specular highlight for 3D effect REMOVED per user request */}
       {/* <div className="absolute top-[15%] left-[20%] w-[30%] h-[20%] bg-white rounded-full opacity-60 blur-[1px]" /> */}
     </div>

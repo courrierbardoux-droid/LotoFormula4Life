@@ -17,7 +17,7 @@ import { useChatSocket } from "@/lib/chatSocket";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { fr as frLocale } from "date-fns/locale";
-import { Lock, Unlock, ChevronDown, RotateCcw, ArrowUp, ArrowDown, Minus, RefreshCcw, Settings, Sliders, Calendar, Trash2, Wrench, MessageSquare } from "lucide-react";
+import { Lock, Unlock, ChevronDown, RotateCcw, ArrowUp, ArrowDown, Minus, RefreshCcw, Settings, Sliders, Calendar, Trash2, Wrench, MessageSquare, Sparkles } from "lucide-react";
 import { useUser } from "@/lib/UserContext";
 import {
   getStats,
@@ -33,7 +33,9 @@ import {
   FrequencyConfig,
   PeriodUnit,
   TrendWindowConfig,
-  verifierMiseAJourNecessaire
+  verifierMiseAJourNecessaire,
+  computeAllAppointments,
+  getAppointmentId
 } from "@/lib/lotoService";
 import {
   getPrixGrille,
@@ -99,7 +101,10 @@ const BallGrid = ({
   numberSources,
   starSources,
   category,
-  resolveCategory
+  resolveCategory,
+  highlightRDV,
+  rdvLevel,
+  rdvFaithfuls
 }: {
   stats: DisplayStat[],
   countLimit: number,
@@ -111,7 +116,10 @@ const BallGrid = ({
   category?: 'high' | 'dormeur',
   onToggle: (num: number, type: 'number' | 'star', category?: 'high' | 'dormeur') => void,
   className?: string,
-  resolveCategory?: (num: number, type: 'number' | 'star') => 'high' | 'dormeur' | null
+  resolveCategory?: (num: number, type: 'number' | 'star') => 'high' | 'dormeur' | null,
+  highlightRDV?: boolean,
+  rdvLevel?: number,
+  rdvFaithfuls?: { topNumbers: any[], topStars: any[] } | null
 }) => {
   // The user explicitly asked for the number of balls presented to be IDENTICAL to the countLimit (cursor value).
   const visibleStats = stats.slice(0, countLimit);
@@ -163,6 +171,12 @@ const BallGrid = ({
           }
         }
 
+        const isRDVHighlight = !!(highlightRDV && rdvLevel && rdvLevel > 0 && rdvFaithfuls && (
+          type === 'number'
+            ? rdvFaithfuls.topNumbers.slice(0, rdvLevel).some((f: any) => (f.numero || f.number) === stat.number)
+            : rdvFaithfuls.topStars.slice(0, Math.min(rdvLevel, 8)).some((f: any) => (f.etoile || f.number) === stat.number)
+        ));
+
         return (
           <div
             key={`${type}-${stat.number}`}
@@ -178,6 +192,7 @@ const BallGrid = ({
               isStar={type === 'star'}
               size="md"
               status={status === 'ghost' ? 'default' : status}
+              highlight={isRDVHighlight}
               className={cn(
                 "transition-transform group-hover:scale-110",
                 status === 'ghost' && "border-2 border-green-500/50 text-green-400 shadow-[0_0_10px_rgba(74,222,128,0.3)]"
@@ -469,6 +484,18 @@ export default function Console() {
   const [influenceFreq, setInfluenceFreq] = useState(10);   // Influence Fréquence (0-10)
   const [influenceSurrepr, setInfluenceSurrepr] = useState(10); // Influence Surreprés (0-10)
   const [influenceTrend, setInfluenceTrend] = useState(10);     // Influence Tendance (0-10)
+  const [rdvLevel, setRdvLevel] = useState(0); // R.D.V (0-10)
+  const [highlightRDV, setHighlightRDV] = useState(false); // Highlight RDV faithfuls
+
+  const [appointmentProfiles, setAppointmentProfiles] = useState<{
+    numbers: Record<number, any>,
+    stars: Record<number, any>
+  } | null>(null);
+  const [rdvFaithfuls, setRdvFaithfuls] = useState<{
+    topNumbers: any[],
+    topStars: any[]
+  } | null>(null);
+
 
   const [isWeightsEnabled, setIsWeightsEnabled] = useState(true);
   const [koRunCounts, setKoRunCounts] = useState<Record<string, number>>({}); // clé: `${targetDate}|${koGrad}`
@@ -1442,6 +1469,7 @@ export default function Console() {
           if (state.influenceSurrepr !== undefined) setInfluenceSurrepr(Math.max(0, Math.min(10, state.influenceSurrepr)));
           if (state.influenceTrend !== undefined) setInfluenceTrend(Math.max(0, Math.min(10, state.influenceTrend)));
           if (state.hazardLevel !== undefined) setHazardLevel(Math.max(0, Math.min(10, state.hazardLevel)));
+          if (state.rdvLevel !== undefined) setRdvLevel(Math.max(0, Math.min(10, state.rdvLevel)));
 
           // Migrate old states to new
           if (state.chaosLevel !== undefined) {
@@ -1506,6 +1534,7 @@ export default function Console() {
       weightHigh,
       weightStarHigh, weightStarMid, weightStarLow, weightStarDormeur,
       influenceFreq, influenceSurrepr, influenceTrend,
+      rdvLevel,
       hazardLevel,
       chaosLevel,
       manifestationBalance,
@@ -1526,6 +1555,7 @@ export default function Console() {
     weightHigh,
     weightStarHigh, weightStarMid, weightStarLow, weightStarDormeur,
     influenceFreq, influenceSurrepr, influenceTrend,
+    rdvLevel,
     hazardLevel,
     chaosLevel,
     manifestationBalance,
@@ -1873,6 +1903,42 @@ export default function Console() {
     };
 
     loadData();
+  }, []);
+
+  // --- APPOINTMENTS LOADING ---
+  useEffect(() => {
+    const loadAppointments = async () => {
+      try {
+        const profiles = await computeAllAppointments();
+        setAppointmentProfiles(profiles);
+
+        const nextDraw = getProchainTirage();
+        const aid = getAppointmentId(nextDraw.date);
+
+        // Calculate faithfuls once
+        const topNumbers = Object.values(profiles.numbers)
+          .map(p => ({
+            numero: p.numero,
+            frequency: p.appointments[aid]?.frequency || 0,
+            count: p.appointments[aid]?.count || 104 // default sample size for appointments if not accurately tracked per slot
+          }))
+          .sort((a, b) => b.frequency - a.frequency);
+
+        const topStars = Object.values(profiles.stars)
+          .map(p => ({
+            etoile: p.etoile,
+            frequency: p.appointments[aid]?.frequency || 0,
+            count: p.appointments[aid]?.count || 104
+          }))
+          .sort((a, b) => b.frequency - a.frequency);
+
+        setRdvFaithfuls({ topNumbers, topStars });
+
+      } catch (err) {
+        console.error("Failed to load appointment profiles", err);
+      }
+    };
+    loadAppointments();
   }, []);
 
   // --- RECALCULATE STATS ON CONFIG CHANGE ---
@@ -3057,6 +3123,7 @@ export default function Console() {
         const wF = Math.max(0, Math.min(10, influenceFreq)) / 10;
         const wS = Math.max(0, Math.min(10, influenceSurrepr)) / 10;
         const wT = Math.max(0, Math.min(10, influenceTrend)) / 10;
+        const wR = Math.max(0, Math.min(10, rdvLevel)) / 10;
 
         // Coefficients d’influence graduée : priorité 1 = base (1), priorité 2 (0.4), priorité 3 (0.25)
         const coefP1 = 1.0;
@@ -3098,7 +3165,20 @@ export default function Console() {
           const coefs = [coefP1, coefP2, coefP3];
           let score = 0;
           for (let i = 0; i < 3; i++) score += coefs[i] * contributions[priorities[i]];
-          return score;
+
+          // RDV Influence (Bonus proportionnel à la fidélité au RDV visé)
+          let rdvBonus = 0;
+          if (wR > 0 && appointmentProfiles) {
+            const nextDrawAID = getAppointmentId(getProchainTirage().date);
+            const profiles = isStar ? appointmentProfiles.stars : appointmentProfiles.numbers;
+            const p = profiles[stat.number];
+            if (p && p.appointments[nextDrawAID]) {
+              // On utilise la fréquence au RDV comme base du bonus (normalisé 0..1)
+              rdvBonus = (p.appointments[nextDrawAID].frequency / 100) * wR;
+            }
+          }
+
+          return score + rdvBonus;
         };
 
         // Construire les viviers effectifs par score (puis tiebreak via Priorités de tri)
@@ -3146,25 +3226,34 @@ export default function Console() {
         const poolHigh = combinedNumPool;
         const poolStarHigh = combinedStarPool;
 
+
         // Helper to pick based on CHAOS (scénario), TENDANCES (capée) et DORMEUR
         // Track "selection score" (finalScore) used during picks for later dormeur replacement.
         const selectionScoreNums: Record<number, number> = {};
         const selectionScoreStars: Record<number, number> = {};
         let forceExplore = false;
         let koLocalAttempt = 0;
-        const pickWithStats = (pool: number[], stats: PoolItem[], count: number, exclude: number[] = [], dormeurPool: number[] = [], isStarContext: boolean = false) => {
+        const pickWithStats = (pool: number[], stats: PoolItem[], count: number, exclude: number[] = [], dormeurPool: number[] = [], isStarContext: boolean = false, isDormeurPick: boolean = false) => {
           const uniquePool = Array.from(new Set(pool)).filter(n => !exclude.includes(n));
 
           const statByNumber = new Map(stats.map(s => [s.number, s] as const));
           const poolWithStats = uniquePool.map(num => {
             const stat = statByNumber.get(num);
             const isDormeur = dormeurPool.includes(num);
-            const finalScore = scoreFromStat(stat, isStarContext);
+
+            // Si on cherche un Dormeur (isDormeurPick=true), le critère EST L'ABSENCE (l'écart).
+            // On bypass les poids (Fréquence/Tendance) pour garantir le meilleur dormeur.
+            // Sinon, on utilise le score pondéré classique.
+            const finalScore = isDormeurPick
+              ? (stat?.absence ?? 0)
+              : scoreFromStat(stat, isStarContext);
+
             return {
               num,
               frequency: stat?.frequency ?? 0,
               trendScore: stat?.trend ?? 0,
               surreprZ: stat?.surreprZ ?? 0,
+              absence: stat?.absence ?? 0, // NEW: Track absence for tie-break
               isDormeur,
               finalScore
             };
@@ -3172,6 +3261,12 @@ export default function Console() {
 
           const priorities = [sortPriority1, sortPriority2, sortPriority3];
           const tieBreak = (a: typeof poolWithStats[number], b: typeof poolWithStats[number]) => {
+            // Si on cherche un dormeur, le tie-break secondaire est aussi l'absence (si finalScore égal)
+            if (isDormeurPick) {
+              const dAbs = b.absence - a.absence;
+              if (dAbs !== 0) return dAbs;
+            }
+
             for (const p of priorities) {
               const d =
                 p === 'frequency' ? (b.frequency - a.frequency) :
@@ -3198,7 +3293,9 @@ export default function Console() {
           }
 
           // STATS (chaosLevel) : 0 = Pure (TopN), 10 = Total Chaos.
-          const statsLevel = 10 - Math.max(0, Math.min(10, chaosLevel));
+          // Relax stats level slightly on retries (forceExplore) to allow variation if strict top is blocked
+          const rawStatsLevel = 10 - Math.max(0, Math.min(10, chaosLevel));
+          const statsLevel = forceExplore ? Math.max(0, rawStatsLevel - (koLocalAttempt * 0.5)) : rawStatsLevel;
 
           // STATS 9–10 : application stricte = prendre les « count » premiers (pole position)
           if (statsLevel >= 9) {
@@ -3326,7 +3423,7 @@ export default function Console() {
 
           // High Pool
           if (targetHigh > 0) {
-            const chosen = pickWithStats(combinedNumPool, allNumStats, targetHigh, pickedNums, poolDormeur, false);
+            const chosen = pickWithStats(combinedNumPool, allNumStats, targetHigh, pickedNums, poolDormeur, false, false);
             chosen.forEach(n => {
               if (!pickedNums.includes(n)) pickedNums.push(n);
               calcNumSources[n] = 'high';
@@ -3336,7 +3433,8 @@ export default function Console() {
           // Dormeur Pool
           if (targetDormeur > 0) {
             // Use poolDormeur specifically for Dormeur picks
-            const chosen = pickWithStats(poolDormeur, allNumStats, targetDormeur, pickedNums, poolDormeur, false);
+            // PASS isDormeurPick = true to force Absence scoring
+            const chosen = pickWithStats(poolDormeur, allNumStats, targetDormeur, pickedNums, poolDormeur, false, true);
             chosen.forEach(n => {
               if (!pickedNums.includes(n)) pickedNums.push(n);
               calcNumSources[n] = 'dormeur';
@@ -3346,7 +3444,7 @@ export default function Console() {
           // Fill if missing
           const remaining = totalNums - pickedNums.length;
           if (remaining > 0) {
-            const extra = pickWithStats(combinedNumPool, allNumStats, remaining, pickedNums, poolDormeur, false);
+            const extra = pickWithStats(combinedNumPool, allNumStats, remaining, pickedNums, poolDormeur, false, false);
             extra.forEach(n => {
               if (!pickedNums.includes(n)) pickedNums.push(n);
               calcNumSources[n] = 'high';
@@ -3357,14 +3455,15 @@ export default function Console() {
           // Pick Stars
           const pickedStars: number[] = [];
           if (targetStarHigh > 0) {
-            const chosen = pickWithStats(combinedStarPool, allStarStats, targetStarHigh, pickedStars, poolStarDormeur, true);
+            const chosen = pickWithStats(combinedStarPool, allStarStats, targetStarHigh, pickedStars, poolStarDormeur, true, false);
             chosen.forEach(n => {
               if (!pickedStars.includes(n)) pickedStars.push(n);
               calcStarSources[n] = 'high';
             });
           }
           if (targetStarDormeur > 0) {
-            const chosen = pickWithStats(poolStarDormeur, allStarStats, targetStarDormeur, pickedStars, poolStarDormeur, true);
+            // PASS isDormeurPick = true to force Absence scoring for Stars too
+            const chosen = pickWithStats(poolStarDormeur, allStarStats, targetStarDormeur, pickedStars, poolStarDormeur, true, true);
             chosen.forEach(n => {
               if (!pickedStars.includes(n)) pickedStars.push(n);
               calcStarSources[n] = 'dormeur';
@@ -3372,7 +3471,7 @@ export default function Console() {
           }
           const remainingS = totalStars - pickedStars.length;
           if (remainingS > 0) {
-            const extra = pickWithStats(combinedStarPool, allStarStats, remainingS, pickedStars, poolStarDormeur, true);
+            const extra = pickWithStats(combinedStarPool, allStarStats, remainingS, pickedStars, poolStarDormeur, true, false);
             extra.forEach(n => {
               if (!pickedStars.includes(n)) pickedStars.push(n);
               calcStarSources[n] = 'high';
@@ -3397,11 +3496,18 @@ export default function Console() {
               scored.sort((a, b) => a.score - b.score);
               const toReplace = scored.slice(0, k).map(x => x.n);
               const remaining = calculatedNums.filter(n => !toReplace.includes(n));
-              const dormeurPoolFull = dormeurStats.map(s => s.number);
+              const expected = targetNums;
+              // Correction: We should allow picking numbers that were in 'toReplace' IF they are the best candidates.
+              // Otherwise we force 'Next Best' which is wrong when 'toReplace' contained the Top ones.
+
+              // Shift the candidate window if retrying (koLocalAttempt > 0) to avoid infinite loop on blocked Top 
+              const dormeurPoolFull = dormeurStats.map(s => s.number).slice(Math.floor(koLocalAttempt / 2));
+
               const injected: number[] = [];
               for (const cand of dormeurPoolFull) {
                 if (injected.length >= k) break;
-                if (remaining.includes(cand) || injected.includes(cand) || toReplace.includes(cand)) continue;
+                // Only skip if already in FINAL Selection (remaining or injected)
+                if (remaining.includes(cand) || injected.includes(cand)) continue;
                 injected.push(cand);
               }
               toReplace.forEach(n => { delete calcNumSources[n]; });
@@ -3846,6 +3952,35 @@ export default function Console() {
     setSendCount(nextCount);
     setSendingMessage(`${grillesToSend} GRILLE(S) ENVOYÉE(S)`);
 
+    // MANUAL UPDATE of Forbidden Keys (Instant Protection)
+    // We inject the sent keys directly into state so handleGenerate sees them immediately
+    // without waiting for a re-fetch.
+    if (autoDraws.length > 0) {
+      const nextDraw = getProchainTirage();
+      const targetDateKey = nextDraw.date.toISOString().split('T')[0];
+      const newKeys: string[] = [];
+
+      // Helper duplicate of comboKey logic (or move comboKey to utils if needed, but simple enough here)
+      const computeKey = (nums: number[], stars: number[]) => {
+        const n = [...nums].sort((a, b) => a - b).join("-");
+        const s = [...stars].sort((a, b) => a - b).join("-");
+        return `${n}|${s}`;
+      };
+
+      for (const draw of autoDraws) {
+        if (draw.nums.length > 0 && draw.stars.length > 0) {
+          newKeys.push(computeKey(draw.nums, draw.stars));
+        }
+      }
+
+      setDbComboKeysByTargetDate(prev => {
+        const existing = prev[targetDateKey] ?? [];
+        // avoid duplicates in array
+        const merged = Array.from(new Set([...existing, ...newKeys]));
+        return { ...prev, [targetDateKey]: merged };
+      });
+    }
+
     playSound('bling');
 
     // Vider les autoDraws après l'envoi
@@ -3890,158 +4025,206 @@ export default function Console() {
   const ActionsControls = ({ variant = 'panel' }: { variant?: 'panel' | 'rack' }) => {
     if (variant === 'rack') {
       return (
-        <div className="w-full h-full flex flex-col items-center justify-evenly">
-          {/* Send / Trash / Envois (au-dessus des boutons Rechercher/Valider) */}
-          <div className="flex flex-col items-center gap-1">
-            <div className="flex items-center gap-2">
-              <div className="rounded-xl overflow-hidden">
-                <CasinoButton
-                  variant="primary"
-                  size="md"
-                  className={cn(
-                    // Calqué sur le format des boutons RECHERCHER / VALIDER
-                    "rounded-none text-sm px-4 py-[10px] w-[140px] flex items-center justify-center",
-                    // Couleur (bleu clair) à la place du jaune
-                    "bg-gradient-to-b from-sky-400 to-sky-600 text-white border-sky-300 shadow-[0_0_10px_rgba(56,189,248,0.35)] hover:shadow-[0_0_18px_rgba(56,189,248,0.6)]",
-                    autoDraws.length === 0 ? "opacity-50 cursor-not-allowed" : ""
-                  )}
-                  onClick={handleSend}
-                  disabled={autoDraws.length === 0}
-                >
-                  {isSending ? "..." : "ENVOYER"}
-                </CasinoButton>
-              </div>
-
-              <div className="flex items-center gap-2 ml-1 text-[22px] text-zinc-300 font-bold">
-                <span>Envois:</span>
-                <span className="text-casino-gold tabular-nums">{sendCount}</span>
-                {sendCount > 0 && (
-                  <button
-                    onClick={resetSendCount}
-                    className="p-0.5 text-zinc-500 hover:text-white transition-colors"
-                    title="Remettre à zéro"
-                  >
-                    <RotateCcw size={12} />
-                  </button>
-                )}
-              </div>
-
-              {!showClearConfirm ? (
-                <button
-                  id="trash-actions-rack"
-                  onClick={() => setShowClearConfirm(true)}
-                  className="w-11 h-11 flex items-center justify-center bg-red-900/30 border border-red-500/50 rounded-lg text-red-500 hover:bg-red-900/50 hover:text-red-400 hover:border-red-400 transition-all"
-                  title="Effacer l'historique"
-                >
-                  <Trash2 size={18} />
-                </button>
-              ) : (
-                <div className="flex items-center gap-1 bg-black border border-red-500 rounded-lg p-1 animate-in fade-in duration-200">
-                  <button
-                    onClick={() => {
-                      setAutoDraws([]);
-                      setGeneratedNumbers([]);
-                      setGeneratedStars([]);
-                      setSelectedNumbers([]);
-                      setSelectedStars([]);
-                      setNumberSources({});
-                      setStarSources({});
-                      setShowClearConfirm(false);
-                      playSound('click');
-                      toast.success("Historique effacé");
-                    }}
-                    className="px-2 py-1 bg-red-600 hover:bg-red-500 text-white text-[10px] font-bold rounded"
-                  >
-                    OK
-                  </button>
-                  <button
-                    onClick={() => setShowClearConfirm(false)}
-                    className="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[10px] font-bold rounded"
-                  >
-                    NON
-                  </button>
+        <div className="w-full h-full flex flex-row">
+          {/* Left Half: Priority Matrix (Moved here) */}
+          <div className="w-1/2 h-full flex items-center justify-center -translate-y-1">
+            <div className="w-full max-w-[200px] bg-black/30 rounded-lg border border-zinc-800 p-1.5 flex flex-col justify-center gap-1 scale-[1.7] origin-center shadow-[0_0_15px_rgba(0,0,0,0.5)]">
+              {/* Fréquence Row */}
+              <div className="flex items-center justify-between">
+                <span className="text-[9px] font-semibold text-zinc-400">Fréquence</span>
+                <div className="flex gap-1">
+                  {[1, 2, 3].map(priority => (
+                    <button
+                      key={`col-freq-${priority}`}
+                      onClick={() => { playSound('click'); const oldPriority = sortPriority1 === 'frequency' ? 1 : sortPriority2 === 'frequency' ? 2 : 3; if (priority === 1) { const current = sortPriority1; setSortPriority1('frequency'); if (oldPriority === 2) setSortPriority2(current); else if (oldPriority === 3) setSortPriority3(current); } else if (priority === 2) { const current = sortPriority2; setSortPriority2('frequency'); if (oldPriority === 1) setSortPriority1(current); else if (oldPriority === 3) setSortPriority3(current); } else { const current = sortPriority3; setSortPriority3('frequency'); if (oldPriority === 1) setSortPriority1(current); else if (oldPriority === 2) setSortPriority2(current); } }}
+                      className={cn("w-5 h-5 rounded-full text-[10px] font-bold transition-all", (priority === 1 && sortPriority1 === 'frequency') || (priority === 2 && sortPriority2 === 'frequency') || (priority === 3 && sortPriority3 === 'frequency') ? "bg-green-500 text-white shadow-[0_0_8px_rgba(34,197,94,0.6)]" : "bg-zinc-700 text-zinc-400 hover:bg-zinc-600")}
+                    >{priority}</button>
+                  ))}
                 </div>
-              )}
+              </div>
+              {/* Surreprés Row */}
+              <div className="flex items-center justify-between">
+                <span className="text-[9px] font-semibold text-zinc-400">Surreprésentation</span>
+                <div className="flex gap-1">
+                  {[1, 2, 3].map(priority => (
+                    <button
+                      key={`col-surrepr-${priority}`}
+                      onClick={() => { playSound('click'); const oldPriority = sortPriority1 === 'surrepr' ? 1 : sortPriority2 === 'surrepr' ? 2 : 3; if (priority === 1) { const current = sortPriority1; setSortPriority1('surrepr'); if (oldPriority === 2) setSortPriority2(current); else if (oldPriority === 3) setSortPriority3(current); } else if (priority === 2) { const current = sortPriority2; setSortPriority2('surrepr'); if (oldPriority === 1) setSortPriority1(current); else if (oldPriority === 3) setSortPriority3(current); } else { const current = sortPriority3; setSortPriority3('surrepr'); if (oldPriority === 1) setSortPriority1(current); else if (oldPriority === 2) setSortPriority2(current); } }}
+                      className={cn("w-5 h-5 rounded-full text-[10px] font-bold transition-all", (priority === 1 && sortPriority1 === 'surrepr') || (priority === 2 && sortPriority2 === 'surrepr') || (priority === 3 && sortPriority3 === 'surrepr') ? "bg-violet-500 text-white shadow-[0_0_8px_rgba(139,92,246,0.6)]" : "bg-zinc-700 text-zinc-400 hover:bg-zinc-600")}
+                    >{priority}</button>
+                  ))}
+                </div>
+              </div>
+              {/* Tendance Row */}
+              <div className="flex items-center justify-between">
+                <span className="text-[9px] font-semibold text-zinc-400">Tendance</span>
+                <div className="flex gap-1">
+                  {[1, 2, 3].map(priority => (
+                    <button
+                      key={`col-trend-${priority}`}
+                      onClick={() => { playSound('click'); const oldPriority = sortPriority1 === 'trend' ? 1 : sortPriority2 === 'trend' ? 2 : 3; if (priority === 1) { const current = sortPriority1; setSortPriority1('trend'); if (oldPriority === 2) setSortPriority2(current); else if (oldPriority === 3) setSortPriority3(current); } else if (priority === 2) { const current = sortPriority2; setSortPriority2('trend'); if (oldPriority === 1) setSortPriority1(current); else if (oldPriority === 3) setSortPriority3(current); } else { const current = sortPriority3; setSortPriority3('trend'); if (oldPriority === 1) setSortPriority1(current); else if (oldPriority === 2) setSortPriority2(current); } }}
+                      className={cn("w-5 h-5 rounded-full text-[10px] font-bold transition-all", (priority === 1 && sortPriority1 === 'trend') || (priority === 2 && sortPriority2 === 'trend') || (priority === 3 && sortPriority3 === 'trend') ? "bg-red-500 text-white shadow-[0_0_8px_rgba(239,68,68,0.6)]" : "bg-zinc-700 text-zinc-400 hover:bg-zinc-600")}
+                    >{priority}</button>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
 
-          {/* Ligne du bas : dupliquée de la ligne du haut, puis adaptée (Rechercher / Email / Toggle) */}
-          <div className="flex flex-col items-center gap-1">
-            <div className="flex items-center gap-2">
-              <div className="rounded-xl overflow-hidden">
-                <CasinoButton
-                  variant="primary"
-                  size="md"
-                  className={cn(
-                    // Même gabarit que ENVOYER (ligne du haut)
-                    "rounded-none text-sm px-4 py-[10px] w-[140px] flex items-center justify-center",
-                    // Couleurs : rouge si pas de tarif, vert si OK (pas de shadow)
-                    !selectedTariff
-                      ? "bg-gradient-to-b from-red-600 to-red-900 text-white border-red-500 cursor-not-allowed"
-                      : "bg-gradient-to-b from-green-600 to-green-900 border-green-500 text-white hover:from-green-500 hover:to-green-800",
-                    isGenerating ? "opacity-60 cursor-not-allowed" : ""
-                  )}
-                  onClick={() => {
-                    if (!selectedTariff || isGenerating) {
-                      playSound('error');
-                      return;
-                    }
-                    // En manuel, on lance la recherche auto (même comportement qu'avant)
-                    handleGenerate(mode === 'manual' ? 'auto' : undefined);
-                  }}
-                  disabled={!selectedTariff || isGenerating}
-                >
-                  {isGenerating ? "..." : (
-                    (weightHigh > 0 || manifestationBalance !== 0 || chaosLevel > 0)
-                      ? <span className="text-red-500 font-bold text-center leading-tight text-[10px]">RECHERCHE<br />PONDÉRÉE</span>
-                      : "RECHERCHER"
-                  )}
-                </CasinoButton>
-              </div>
+          {/* Right Half: Content */}
+          <div className="w-1/2 h-full flex flex-col items-center justify-evenly">
+            {/* Send / Trash / Envois (au-dessus des boutons Rechercher/Valider) */}
+            <div className="flex flex-col items-center gap-1">
+              <div className="flex items-center gap-2">
+                <div className="rounded-xl overflow-hidden">
+                  <CasinoButton
+                    variant="primary"
+                    size="md"
+                    className={cn(
+                      // Calqué sur le format des boutons RECHERCHER / VALIDER
+                      "rounded-none text-sm px-4 py-[10px] w-[140px] flex items-center justify-center",
+                      // Couleur (bleu clair) à la place du jaune
+                      "bg-gradient-to-b from-sky-400 to-sky-600 text-white border-sky-300 shadow-[0_0_10px_rgba(56,189,248,0.35)] hover:shadow-[0_0_18px_rgba(56,189,248,0.6)]",
+                      autoDraws.length === 0 ? "opacity-50 cursor-not-allowed" : ""
+                    )}
+                    onClick={handleSend}
+                    disabled={autoDraws.length === 0}
+                  >
+                    {isSending ? "..." : "ENVOYER"}
+                  </CasinoButton>
+                </div>
 
-              {/* Invité uniquement : libellé "par Email" */}
-              {isInvite && (
                 <div className="flex items-center gap-2 ml-1 text-[22px] text-zinc-300 font-bold">
-                  <span className="whitespace-nowrap">par Email</span>
-                </div>
-              )}
-
-              {/* Remplace la corbeille par le toggle Email (invités uniquement) */}
-              {isInvite ? (
-                <div className="w-11 h-11 flex items-center justify-center ml-[10px]">
-                  <ToggleSwitch
-                    checked={emailModeEnabled}
-                    onChange={setEmailModeEnabled}
-                    className="scale-75 -rotate-90"
-                  />
-                </div>
-              ) : (
-                // Admin/VIP : on garde la logique "Valider" uniquement en manuel
-                mode === 'manual' && (
-                  <div className="rounded-xl overflow-hidden">
-                    <CasinoButton
-                      size="md"
-                      variant={(!selectedTariff || selectedNumbers.length !== selectedTariff?.nums || selectedStars.length !== selectedTariff?.stars) ? "danger" : "primary"}
-                      className={cn(
-                        "rounded-none text-sm px-4 py-[10px] w-[140px] flex items-center justify-center",
-                        (!selectedTariff || selectedNumbers.length !== selectedTariff?.nums || selectedStars.length !== selectedTariff?.stars)
-                          ? "bg-gradient-to-b from-red-600 to-red-900 border-red-500 cursor-not-allowed"
-                          : "bg-gradient-to-b from-green-600 to-green-900 border-green-500 text-white hover:from-green-500 hover:to-green-800"
-                      )}
-                      onClick={() => {
-                        if (!selectedTariff || selectedNumbers.length !== selectedTariff?.nums || selectedStars.length !== selectedTariff?.stars) {
-                          playSound('error');
-                          return;
-                        }
-                        handleGenerate('manual');
-                      }}
-                      disabled={isGenerating}
+                  <span>Envois:</span>
+                  <span className="text-casino-gold tabular-nums">{sendCount}</span>
+                  {sendCount > 0 && (
+                    <button
+                      onClick={resetSendCount}
+                      className="p-0.5 text-zinc-500 hover:text-white transition-colors"
+                      title="Remettre à zéro"
                     >
-                      {isGenerating ? "..." : "VALIDER"}
-                    </CasinoButton>
+                      <RotateCcw size={12} />
+                    </button>
+                  )}
+                </div>
+
+                {!showClearConfirm ? (
+                  <button
+                    id="trash-actions-rack"
+                    onClick={() => setShowClearConfirm(true)}
+                    className="w-11 h-11 flex items-center justify-center bg-red-900/30 border border-red-500/50 rounded-lg text-red-500 hover:bg-red-900/50 hover:text-red-400 hover:border-red-400 transition-all"
+                    title="Effacer l'historique"
+                  >
+                    <Trash2 size={18} />
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-1 bg-black border border-red-500 rounded-lg p-1 animate-in fade-in duration-200">
+                    <button
+                      onClick={() => {
+                        setAutoDraws([]);
+                        setGeneratedNumbers([]);
+                        setGeneratedStars([]);
+                        setSelectedNumbers([]);
+                        setSelectedStars([]);
+                        setNumberSources({});
+                        setStarSources({});
+                        setShowClearConfirm(false);
+                        playSound('click');
+                        toast.success("Historique effacé");
+                      }}
+                      className="px-2 py-1 bg-red-600 hover:bg-red-500 text-white text-[10px] font-bold rounded"
+                    >
+                      OK
+                    </button>
+                    <button
+                      onClick={() => setShowClearConfirm(false)}
+                      className="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[10px] font-bold rounded"
+                    >
+                      NON
+                    </button>
                   </div>
-                )
-              )}
+                )}
+              </div>
+            </div>
+
+            {/* Ligne du bas : dupliquée de la ligne du haut, puis adaptée (Rechercher / Email / Toggle) */}
+            <div className="flex flex-col items-center gap-1">
+              <div className="flex items-center gap-2">
+                <div className="rounded-xl overflow-hidden">
+                  <CasinoButton
+                    variant="primary"
+                    size="md"
+                    className={cn(
+                      // Même gabarit que ENVOYER (ligne du haut)
+                      "rounded-none text-sm px-4 py-[10px] w-[140px] flex items-center justify-center",
+                      // Couleurs : rouge si pas de tarif, vert si OK (pas de shadow)
+                      !selectedTariff
+                        ? "bg-gradient-to-b from-red-600 to-red-900 text-white border-red-500 cursor-not-allowed"
+                        : "bg-gradient-to-b from-green-600 to-green-900 border-green-500 text-white hover:from-green-500 hover:to-green-800",
+                      isGenerating ? "opacity-60 cursor-not-allowed" : ""
+                    )}
+                    onClick={() => {
+                      if (!selectedTariff || isGenerating) {
+                        playSound('error');
+                        return;
+                      }
+                      // En manuel, on lance la recherche auto (même comportement qu'avant)
+                      handleGenerate(mode === 'manual' ? 'auto' : undefined);
+                    }}
+                    disabled={!selectedTariff || isGenerating}
+                  >
+                    {isGenerating ? "..." : (
+                      (weightHigh > 0 || manifestationBalance !== 0 || chaosLevel > 0)
+                        ? <span className="text-red-500 font-bold text-center leading-tight text-[10px]">RECHERCHE<br />PONDÉRÉE</span>
+                        : "RECHERCHER"
+                    )}
+                  </CasinoButton>
+                </div>
+
+                {/* Invité uniquement : libellé "par Email" */}
+                {isInvite && (
+                  <div className="flex items-center gap-2 ml-1 text-[22px] text-zinc-300 font-bold">
+                    <span className="whitespace-nowrap">par Email</span>
+                  </div>
+                )}
+
+                {/* Remplace la corbeille par le toggle Email (invités uniquement) */}
+                {isInvite ? (
+                  <div className="w-11 h-11 flex items-center justify-center ml-[10px]">
+                    <ToggleSwitch
+                      checked={emailModeEnabled}
+                      onChange={setEmailModeEnabled}
+                      className="scale-75 -rotate-90"
+                    />
+                  </div>
+                ) : (
+                  // Admin/VIP : on garde la logique "Valider" uniquement en manuel
+                  mode === 'manual' && (
+                    <div className="rounded-xl overflow-hidden">
+                      <CasinoButton
+                        size="md"
+                        variant={(!selectedTariff || selectedNumbers.length !== selectedTariff?.nums || selectedStars.length !== selectedTariff?.stars) ? "danger" : "primary"}
+                        className={cn(
+                          "rounded-none text-sm px-4 py-[10px] w-[140px] flex items-center justify-center",
+                          (!selectedTariff || selectedNumbers.length !== selectedTariff?.nums || selectedStars.length !== selectedTariff?.stars)
+                            ? "bg-gradient-to-b from-red-600 to-red-900 border-red-500 cursor-not-allowed"
+                            : "bg-gradient-to-b from-green-600 to-green-900 border-green-500 text-white hover:from-green-500 hover:to-green-800"
+                        )}
+                        onClick={() => {
+                          if (!selectedTariff || selectedNumbers.length !== selectedTariff?.nums || selectedStars.length !== selectedTariff?.stars) {
+                            playSound('error');
+                            return;
+                          }
+                          handleGenerate('manual');
+                        }}
+                        disabled={isGenerating}
+                      >
+                        {isGenerating ? "..." : "VALIDER"}
+                      </CasinoButton>
+                    </div>
+                  )
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -4843,6 +5026,9 @@ export default function Console() {
                             onToggle={toggleSelection}
                             className={isSimplifiedMode ? "py-0 justify-between w-full" : "py-0 justify-start gap-[4px]"}
                             resolveCategory={isSimplifiedMode ? undefined : resolveCategory}
+                            highlightRDV={highlightRDV}
+                            rdvLevel={rdvLevel}
+                            rdvFaithfuls={rdvFaithfuls}
                           />
                         </div>
                       )}
@@ -4863,6 +5049,9 @@ export default function Console() {
                             onToggle={toggleSelection}
                             className={isSimplifiedMode ? "py-0 justify-between w-full" : "py-0 justify-start gap-[4px]"}
                             resolveCategory={undefined}
+                            highlightRDV={highlightRDV}
+                            rdvLevel={rdvLevel}
+                            rdvFaithfuls={rdvFaithfuls}
                           />
                         </div>
                       )}
@@ -4883,6 +5072,9 @@ export default function Console() {
                             onToggle={toggleSelection}
                             className={isSimplifiedMode ? "py-0 justify-between w-full" : "py-0 justify-start gap-[4px]"}
                             resolveCategory={undefined}
+                            highlightRDV={highlightRDV}
+                            rdvLevel={rdvLevel}
+                            rdvFaithfuls={rdvFaithfuls}
                           />
                         </div>
                       )}
@@ -4911,6 +5103,9 @@ export default function Console() {
                             onToggle={toggleSelection}
                             className={isSimplifiedMode ? "py-0 justify-between w-full" : "py-0 justify-start gap-[4px]"}
                             resolveCategory={isSimplifiedMode ? undefined : resolveCategory}
+                            highlightRDV={highlightRDV}
+                            rdvLevel={rdvLevel}
+                            rdvFaithfuls={rdvFaithfuls}
                           />
                         </div>
                       )}
@@ -4921,14 +5116,29 @@ export default function Console() {
 
               <SectionPanel
                 title={
-                  <span>REALISER LES TIRAGES</span>
+                  <div className="w-full grid grid-cols-2 items-center">
+                    {/* Left: PRIORITÉS DE TRI (Centered in Left Column) */}
+                    <div className="text-center">
+                      <span className="text-zinc-300 font-bold text-[10px] sm:text-xs tracking-widest uppercase drop-shadow-md whitespace-nowrap">
+                        PRIORITÉS DE TRI
+                      </span>
+                    </div>
+
+                    {/* Right: RÉALISER LES TIRAGES (Centered in Right Column) */}
+                    <div className="text-center px-1">
+                      <span className="font-orbitron text-casino-gold text-lg tracking-widest uppercase truncate whitespace-nowrap block">
+                        RÉALISER LES TIRAGES
+                      </span>
+                    </div>
+                  </div>
                 }
                 disabled={!isWeightsEnabled}
                 headerAction={
-                  <div className="flex items-center gap-3 pr-2">
-                    <div className="scale-[0.85] origin-right">
+                  <div className="flex items-center gap-2">
+                    <div className="scale-[0.85] origin-right whitespace-nowrap">
                       <ProchainTirageSimple />
                     </div>
+                    {/* Unique LED on the right, as requested (since overriding headerAction removes default) */}
                     <LEDIndicator active={true} color="green" />
                   </div>
                 }
@@ -4953,18 +5163,9 @@ export default function Console() {
               <div className="bg-[#111] border-2 border-zinc-800 rounded-xl p-2 flex flex-col items-center justify-start gap-2 shadow-inner relative overflow-hidden min-h-[465px] flex-shrink-0">
                 <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-zinc-800/20 via-black to-black pointer-events-none" />
 
-                <div className="w-full space-y-1 relative z-10 pt-1">
-                  <div className="flex items-center justify-between border-b border-zinc-800 pb-1 mb-1">
-                    <div className="text-center font-orbitron text-lg text-zinc-500 flex-1">EQUILIBRER</div>
-                    <LEDIndicator active={false} color="green" />
-                  </div>
-                  {/* Espace réservé - toggles supprimés */}
-                </div>
-
-                <div className="w-full h-px bg-zinc-800 my-1" />
 
                 {/* HAZARD CONTROL */}
-                <div className="w-full space-y-2 relative z-10 flex flex-col items-center h-[198px] flex-shrink-0 justify-center -mt-[10px] pb-3">
+                <div className="w-full relative z-10 flex flex-col items-center flex-1 justify-end -mt-[10px] pb-0 gap-0">
                   <div className="flex flex-col w-full mb-1 items-center justify-center relative h-[60px]">
                     {/* Top Line */}
                     <div className="w-full h-px bg-zinc-800 absolute top-2" />
@@ -4983,341 +5184,176 @@ export default function Console() {
                     <div className="w-full h-px bg-zinc-800 absolute bottom-2" />
                   </div>
 
-                  {/* NOUVELLE LIGNE : Knobs 1, 2, 3 (sans action) */}
-                  <div className="flex items-start justify-center gap-1 mt-4 w-full px-1">
-                    {/* Knob FRÉQUENCE (Left) */}
-                    <div className="flex flex-col items-center gap-4 w-[110px]">
-                      <div className="h-6 flex items-center justify-center w-full text-center relative">
-                        <span className="text-white font-rajdhani font-bold text-lg uppercase tracking-wider">
-                          FRÉQUENCE
-                        </span>
+                  {/* CONTAINER 1: WEIGHT KNOBS (Top) */}
+                  <div className="flex-1 w-full flex items-center justify-center p-0 bg-black/20">
+                    <div className="flex items-start justify-center gap-1 w-full px-1 -translate-y-2.5">
+                      {/* Knob FRÉQUENCE (Left) */}
+                      <div className="flex flex-col items-center gap-2 w-[90px]">
+                        <div className="h-5 flex items-center justify-center w-full text-center relative mb-0">
+                          <span className="text-white font-rajdhani font-bold text-base uppercase tracking-wider">FRÉQUENCE</span>
+                        </div>
+                        <div className="h-[80px] flex items-center justify-center">
+                          <RotaryKnob
+                            label=""
+                            value={influenceFreq}
+                            onChange={(v) => { setInfluenceFreq(v); playSound('knob'); }}
+                            max={10}
+                            size="ml"
+                            knobColor="border-green-700 shadow-[0_0_10px_rgba(22,163,74,0.3)] bg-zinc-900"
+                            indicatorColor="bg-green-600"
+                            labelClassName="hidden"
+                            valueClassName="text-green-500"
+                          />
+                        </div>
                       </div>
-
-                      <div className="h-[60px] flex items-center justify-center">
-                        <RotaryKnob
-                          label=""
-                          value={influenceFreq}
-                          onChange={(v) => { setInfluenceFreq(v); playSound('knob'); }}
-                          max={10}
-                          size="xl"
-                          knobColor="border-green-700 shadow-[0_0_15px_rgba(22,163,74,0.3)] bg-zinc-900"
-                          indicatorColor="bg-green-600"
-                          labelClassName="hidden"
-                          valueClassName="text-green-500"
-                        />
+                      {/* Knob SURREPRÉS (Middle) */}
+                      <div className="flex flex-col items-center gap-2 w-[90px]">
+                        <div className="h-5 flex items-center justify-center w-full text-center relative mb-0">
+                          <span className="text-white font-rajdhani font-bold text-base uppercase tracking-wider">SURREPRÉS</span>
+                        </div>
+                        <div className="h-[80px] flex items-center justify-center">
+                          <RotaryKnob
+                            label=""
+                            value={influenceSurrepr}
+                            onChange={(v) => { setInfluenceSurrepr(v); playSound('knob'); }}
+                            max={10}
+                            size="ml"
+                            knobColor="border-violet-700 shadow-[0_0_10px_rgba(124,58,237,0.3)] bg-zinc-900"
+                            indicatorColor="bg-violet-600"
+                            labelClassName="hidden"
+                            valueClassName="text-violet-500"
+                          />
+                        </div>
                       </div>
-                    </div>
-
-                    {/* Knob SURREPRÉS (Middle) */}
-                    <div className="flex flex-col items-center gap-4 w-[110px]">
-                      <div className="h-6 flex items-center justify-center w-full text-center relative">
-                        <span className="text-white font-rajdhani font-bold text-lg uppercase tracking-wider">
-                          SURREPRÉS
-                        </span>
-                      </div>
-
-                      <div className="h-[60px] flex items-center justify-center">
-                        <RotaryKnob
-                          label=""
-                          value={influenceSurrepr}
-                          onChange={(v) => { setInfluenceSurrepr(v); playSound('knob'); }}
-                          max={10}
-                          size="xl"
-                          knobColor="border-violet-700 shadow-[0_0_15px_rgba(124,58,237,0.3)] bg-zinc-900"
-                          indicatorColor="bg-violet-600"
-                          labelClassName="hidden"
-                          valueClassName="text-violet-500"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Knob TENDANCE (Right) */}
-                    <div className="flex flex-col items-center gap-4 w-[110px]">
-                      <div className="h-6 flex items-center justify-center w-full text-center relative">
-                        <span className="text-white font-rajdhani font-bold text-lg uppercase tracking-wider">
-                          TENDANCE
-                        </span>
-                      </div>
-
-                      <div className="h-[60px] flex items-center justify-center">
-                        <RotaryKnob
-                          label=""
-                          value={influenceTrend}
-                          onChange={(v) => { setInfluenceTrend(v); playSound('knob'); }}
-                          max={10}
-                          size="xl"
-                          knobColor="border-red-700 shadow-[0_0_15px_rgba(220,38,38,0.3)] bg-zinc-900"
-                          indicatorColor="bg-red-600"
-                          labelClassName="hidden"
-                          valueClassName="text-red-500"
-                        />
+                      {/* Knob TENDANCE (Right) */}
+                      <div className="flex flex-col items-center gap-2 w-[90px]">
+                        <div className="h-5 flex items-center justify-center w-full text-center relative mb-0">
+                          <span className="text-white font-rajdhani font-bold text-base uppercase tracking-wider">TENDANCE</span>
+                        </div>
+                        <div className="h-[80px] flex items-center justify-center">
+                          <RotaryKnob
+                            label=""
+                            value={influenceTrend}
+                            onChange={(v) => { setInfluenceTrend(v); playSound('knob'); }}
+                            max={10}
+                            size="ml"
+                            knobColor="border-red-700 shadow-[0_0_10px_rgba(220,38,38,0.3)] bg-zinc-900"
+                            indicatorColor="bg-red-600"
+                            labelClassName="hidden"
+                            valueClassName="text-red-500"
+                          />
+                        </div>
                       </div>
                     </div>
                   </div>
 
-                  {/* Padding entre les deux lignes de knobs (26px) */}
-                  <div style={{ height: '26px' }} />
-
-                  {/* Ligne du bas : +10px au-dessus pour ne faire descendre que cette ligne */}
-                  {/* Ligne du bas : +10px au-dessus pour ne faire descendre que cette ligne */}
-                  <div className="w-full flex items-start justify-center" style={{ marginTop: '10px' }}>
-                    <div className="flex items-start justify-center gap-1 mt-0 w-full px-1">
+                  {/* CONTAINER 2: CONTROL KNOBS (Middle) */}
+                  <div className="flex-1 w-full flex items-center justify-center p-0 mt-0 bg-black/20">
+                    <div className="flex items-start justify-center gap-1 w-full px-1 -translate-y-2.5">
                       {/* MANIFESTATION Knob (Left) */}
-                      <div className="flex flex-col items-center gap-4 w-[110px]">
+                      <div className="flex flex-col items-center gap-2 w-[90px]">
                         <div
-                          className={cn(
-                            "h-8 flex items-center justify-center w-full text-center relative cursor-pointer select-none rounded decoration-2 underline-offset-4",
-                            manifestationBalance === 0 ? "hover:underline active:scale-95 transition-all" : ""
-                          )}
-                          onClick={() => {
-                            if (manifestationBalance === 0) {
-                              setManifestationBias(!manifestationBias);
-                              playSound('click');
-                            }
-                          }}
+                          className={cn("h-6 flex items-center justify-center w-full text-center relative cursor-pointer select-none rounded decoration-2 underline-offset-4 mb-0", manifestationBalance === 0 ? "hover:underline active:scale-95 transition-all" : "")}
+                          onClick={() => { if (manifestationBalance === 0) { setManifestationBias(!manifestationBias); playSound('click'); } }}
                           title={manifestationBalance === 0 ? "Cliquer pour alterner la priorité (High vs Dormeur)" : undefined}
                         >
-                          <span className={cn(
-                            "font-rajdhani font-bold text-lg uppercase tracking-wider transition-colors duration-300",
-                            manifestationBalance < 0 ? "text-white" :
-                              manifestationBalance > 0 ? "text-blue-500" :
-                                manifestationBias ? "text-blue-500" : "text-white"
-                          )}>
-                            {manifestationBalance < 0 ? "MANIFEST." :
-                              manifestationBalance > 0 ? "COMPENS." :
-                                "MAN./COMP."}
+                          <span className={cn("font-rajdhani font-bold text-base uppercase tracking-wider transition-colors duration-300", manifestationBalance < 0 ? "text-white" : manifestationBalance > 0 ? "text-blue-500" : manifestationBias ? "text-blue-500" : "text-white")}>
+                            {manifestationBalance < 0 ? "MANIFEST." : manifestationBalance > 0 ? "COMPENS." : "MAN./COMP."}
                           </span>
                         </div>
-
-                        <div className="h-[60px] flex items-center justify-center">
+                        <div className="h-[80px] flex items-center justify-center">
                           <RotaryKnob
                             label=""
-                            value={manifestationBalance + 5} // Map -5..5 to 0..10
-                            onChange={(v) => {
-                              const bal = v - 5;
-                              setManifestationBalance(bal);
-                              playSound('knob');
-                            }}
+                            value={manifestationBalance + 5}
+                            onChange={(v) => { const bal = v - 5; setManifestationBalance(bal); playSound('knob'); }}
                             max={10}
-                            size="xl"
-                            knobColor={cn(
-                              "transition-colors duration-300",
-                              (manifestationBalance < 0 || (manifestationBalance === 0 && !manifestationBias))
-                                ? "border-white shadow-[0_0_15px_rgba(255,255,255,0.3)] bg-zinc-900"
-                                : "border-blue-600 shadow-[0_0_15px_rgba(37,99,235,0.4)] bg-zinc-900"
-                            )}
-                            indicatorColor={cn(
-                              "transition-colors duration-300",
-                              (manifestationBalance < 0 || (manifestationBalance === 0 && !manifestationBias))
-                                ? "bg-white"
-                                : "bg-blue-500"
-                            )}
+                            size="ml"
+                            knobColor={cn("transition-colors duration-300", (manifestationBalance < 0 || (manifestationBalance === 0 && !manifestationBias)) ? "border-white shadow-[0_0_10px_rgba(255,255,255,0.3)] bg-zinc-900" : "border-blue-600 shadow-[0_0_10px_rgba(37,99,235,0.4)] bg-zinc-900")}
+                            indicatorColor={cn("transition-colors duration-300", (manifestationBalance < 0 || (manifestationBalance === 0 && !manifestationBias)) ? "bg-white" : "bg-blue-500")}
                             labelClassName="hidden"
-                            valueClassName={cn(
-                              "transition-colors duration-300",
-                              (manifestationBalance < 0 || (manifestationBalance === 0 && !manifestationBias))
-                                ? "text-white"
-                                : "text-blue-500"
-                            )}
-                            displayTransformer={(v) => Math.abs(v - 5)} // Show 5 - 0 - 5
+                            valueClassName={cn("transition-colors duration-300", (manifestationBalance < 0 || (manifestationBalance === 0 && !manifestationBias)) ? "text-white" : "text-blue-500")}
+                            displayTransformer={(v) => Math.abs(v - 5)}
                           />
                         </div>
-                        <div className="h-4 -mt-3 text-[10px] text-zinc-500 font-mono">
+                        <div className="h-3 mt-2.5 text-[11px] text-zinc-500 font-mono">
                           {manifestationBalance < 0 ? "High" : manifestationBalance > 0 ? "Dormeur" : (manifestationBias ? "Bias: Dormeur" : "Bias: High")}
                         </div>
                       </div>
-
                       {/* CHAOS Knob (Middle) */}
-                      <div className="flex flex-col items-center gap-4 w-[110px]">
-                        <div className="h-8 flex items-center justify-center w-full text-center relative">
-                          <span className="text-zinc-400 font-rajdhani font-bold text-lg uppercase tracking-wider">
-                            CHAOS
-                          </span>
+                      <div className="flex flex-col items-center gap-2 w-[90px]">
+                        <div className="h-6 flex items-center justify-center w-full text-center relative mb-0">
+                          <span className="text-zinc-400 font-rajdhani font-bold text-base uppercase tracking-wider">CHAOS</span>
                         </div>
-
-                        <div className="h-[60px] flex items-center justify-center">
+                        <div className="h-[80px] flex items-center justify-center">
                           <RotaryKnob
                             label=""
                             value={chaosLevel}
-                            onChange={(v) => {
-                              setChaosLevel(v);
-                              playSound('knob');
-                            }}
+                            onChange={(v) => { setChaosLevel(v); playSound('knob'); }}
                             max={10}
-                            size="xl"
-                            knobColor="border-zinc-500 shadow-[0_0_15px_rgba(0,0,0,0.3)] bg-zinc-300"
+                            size="ml"
+                            knobColor="border-zinc-500 shadow-[0_0_10px_rgba(0,0,0,0.3)] bg-zinc-300"
                             indicatorColor="bg-black"
                             labelClassName="hidden"
                             valueClassName="text-black"
                           />
                         </div>
-                        <div className="h-4 -mt-3 text-[10px] text-zinc-600 font-mono">
-                          Entropie
-                        </div>
+                        <div className="h-3 mt-2.5 text-[11px] text-zinc-600 font-mono">Entropie</div>
                       </div>
-
                       {/* VIVIER Knob (Right) */}
-                      <div className="flex flex-col items-center gap-4 w-[110px]">
-                        <div className="h-8 flex items-center justify-center w-full text-center relative">
-                          <span className="text-amber-500 font-rajdhani font-bold text-lg uppercase tracking-wider">
-                            VIVIER
-                          </span>
+                      <div className="flex flex-col items-center gap-2 w-[90px]">
+                        <div className="h-6 flex items-center justify-center w-full text-center relative mb-0">
+                          <span className="text-amber-500 font-rajdhani font-bold text-base uppercase tracking-wider">VIVIER</span>
                         </div>
-
-                        <div className="h-[60px] flex items-center justify-center">
+                        <div className="h-[80px] flex items-center justify-center">
                           <RotaryKnob
                             label=""
                             value={hazardLevel}
                             onChange={(v) => { setHazardLevel(v); playSound('knob'); }}
                             max={10}
-                            size="xl"
-                            knobColor="border-amber-700 shadow-[0_0_15px_rgba(180,83,9,0.3)] bg-zinc-900"
+                            size="ml"
+                            knobColor="border-amber-700 shadow-[0_0_10px_rgba(180,83,9,0.3)] bg-zinc-900"
                             indicatorColor="bg-amber-600"
                             labelClassName="hidden"
                             valueClassName="text-amber-500"
                           />
                         </div>
-                        <div
-                          className="h-4 -mt-3 flex items-center justify-center w-full text-center font-mono text-[11px] tracking-wider text-amber-400/90 select-none"
-                          title={`Vivier: ${chaosLabel}`}
-                        >
+                        <div className="h-3 mt-[10.5px] flex items-center justify-center w-full text-center font-mono text-[11px] tracking-wider text-amber-400/90 select-none" title={`Vivier: ${chaosLabel}`}>
                           {chaosLabel}
                         </div>
                       </div>
                     </div>
                   </div>
-                </div>
 
-                {/* Priorité de tri — déplacé depuis « Réaliser les tirages », zoom +10% */}
-                <div className="w-full flex justify-center pt-2 pb-1 relative z-10" style={{ marginTop: '45px' }}>
-                  <div className="w-64 origin-center" style={{ transform: 'scale(1.2)' }}>
-                    <div className="w-full bg-black/30 rounded-lg border border-zinc-700 p-4">
-                      <div className="text-sm font-bold text-zinc-400 mb-3 text-center">PRIORITÉS DE TRI</div>
-                      <div className="flex flex-col gap-2">
-                        {/* Ligne Fréquence - VERT */}
-                        <div className="flex items-center justify-between">
-                          <span className="text-base font-semibold text-zinc-300">Fréquence</span>
-                          <div className="flex gap-2">
-                            {[1, 2, 3].map(priority => (
-                              <button
-                                key={`col-freq-${priority}`}
-                                onClick={() => {
-                                  playSound('click');
-                                  const oldPriority = sortPriority1 === 'frequency' ? 1 : sortPriority2 === 'frequency' ? 2 : 3;
-                                  if (priority === 1) {
-                                    const current = sortPriority1;
-                                    setSortPriority1('frequency');
-                                    if (oldPriority === 2) setSortPriority2(current);
-                                    else if (oldPriority === 3) setSortPriority3(current);
-                                  } else if (priority === 2) {
-                                    const current = sortPriority2;
-                                    setSortPriority2('frequency');
-                                    if (oldPriority === 1) setSortPriority1(current);
-                                    else if (oldPriority === 3) setSortPriority3(current);
-                                  } else {
-                                    const current = sortPriority3;
-                                    setSortPriority3('frequency');
-                                    if (oldPriority === 1) setSortPriority1(current);
-                                    else if (oldPriority === 2) setSortPriority2(current);
-                                  }
-                                }}
-                                className={cn(
-                                  "w-7 h-7 rounded-full text-sm font-bold transition-all",
-                                  (priority === 1 && sortPriority1 === 'frequency') ||
-                                    (priority === 2 && sortPriority2 === 'frequency') ||
-                                    (priority === 3 && sortPriority3 === 'frequency')
-                                    ? "bg-green-500 text-white shadow-[0_0_8px_rgba(34,197,94,0.6)]"
-                                    : "bg-zinc-700 text-zinc-400 hover:bg-zinc-600"
-                                )}
-                              >
-                                {priority}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                        {/* Ligne Surreprés. - VIOLET */}
-                        <div className="flex items-center justify-between">
-                          <span className="text-base font-semibold text-zinc-300">Surreprés.</span>
-                          <div className="flex gap-2">
-                            {[1, 2, 3].map(priority => (
-                              <button
-                                key={`col-surrepr-${priority}`}
-                                onClick={() => {
-                                  playSound('click');
-                                  const oldPriority = sortPriority1 === 'surrepr' ? 1 : sortPriority2 === 'surrepr' ? 2 : 3;
-                                  if (priority === 1) {
-                                    const current = sortPriority1;
-                                    setSortPriority1('surrepr');
-                                    if (oldPriority === 2) setSortPriority2(current);
-                                    else if (oldPriority === 3) setSortPriority3(current);
-                                  } else if (priority === 2) {
-                                    const current = sortPriority2;
-                                    setSortPriority2('surrepr');
-                                    if (oldPriority === 1) setSortPriority1(current);
-                                    else if (oldPriority === 3) setSortPriority3(current);
-                                  } else {
-                                    const current = sortPriority3;
-                                    setSortPriority3('surrepr');
-                                    if (oldPriority === 1) setSortPriority1(current);
-                                    else if (oldPriority === 2) setSortPriority2(current);
-                                  }
-                                }}
-                                className={cn(
-                                  "w-7 h-7 rounded-full text-sm font-bold transition-all",
-                                  (priority === 1 && sortPriority1 === 'surrepr') ||
-                                    (priority === 2 && sortPriority2 === 'surrepr') ||
-                                    (priority === 3 && sortPriority3 === 'surrepr')
-                                    ? "bg-violet-500 text-white shadow-[0_0_8px_rgba(139,92,246,0.6)]"
-                                    : "bg-zinc-700 text-zinc-400 hover:bg-zinc-600"
-                                )}
-                              >
-                                {priority}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
-                        {/* Ligne Tendance - ROUGE */}
-                        <div className="flex items-center justify-between">
-                          <span className="text-base font-semibold text-zinc-300">Tendance</span>
-                          <div className="flex gap-2">
-                            {[1, 2, 3].map(priority => (
-                              <button
-                                key={`col-trend-${priority}`}
-                                onClick={() => {
-                                  playSound('click');
-                                  const oldPriority = sortPriority1 === 'trend' ? 1 : sortPriority2 === 'trend' ? 2 : 3;
-                                  if (priority === 1) {
-                                    const current = sortPriority1;
-                                    setSortPriority1('trend');
-                                    if (oldPriority === 2) setSortPriority2(current);
-                                    else if (oldPriority === 3) setSortPriority3(current);
-                                  } else if (priority === 2) {
-                                    const current = sortPriority2;
-                                    setSortPriority2('trend');
-                                    if (oldPriority === 1) setSortPriority1(current);
-                                    else if (oldPriority === 3) setSortPriority3(current);
-                                  } else {
-                                    const current = sortPriority3;
-                                    setSortPriority3('trend');
-                                    if (oldPriority === 1) setSortPriority1(current);
-                                    else if (oldPriority === 2) setSortPriority2(current);
-                                  }
-                                }}
-                                className={cn(
-                                  "w-7 h-7 rounded-full text-sm font-bold transition-all",
-                                  (priority === 1 && sortPriority1 === 'trend') ||
-                                    (priority === 2 && sortPriority2 === 'trend') ||
-                                    (priority === 3 && sortPriority3 === 'trend')
-                                    ? "bg-red-500 text-white shadow-[0_0_8px_rgba(239,68,68,0.6)]"
-                                    : "bg-zinc-700 text-zinc-400 hover:bg-zinc-600"
-                                )}
-                              >
-                                {priority}
-                              </button>
-                            ))}
-                          </div>
-                        </div>
+                  {/* CONTAINER 3: R.D.V KNOB (White Sparkly) */}
+                  <div className="flex-1 w-full flex items-center justify-center p-0 mt-0 bg-black/20">
+                    <div className="flex flex-col items-center gap-2 w-[90px]">
+                      <div
+                        className="h-6 flex items-center justify-center w-full text-center relative cursor-pointer select-none group"
+                        onClick={() => { setHighlightRDV(!highlightRDV); playSound('bling'); }}
+                        title="Cliquer pour mettre en lumière les fidèles du tirage"
+                      >
+                        <span className={cn(
+                          "font-rajdhani font-bold text-base uppercase tracking-wider transition-all duration-500",
+                          highlightRDV ? "text-white drop-shadow-[0_0_8px_rgba(255,255,255,1)] scale-110" : "text-zinc-400 group-hover:text-zinc-200"
+                        )}>
+                          R.D.V
+                        </span>
+                        {highlightRDV && <Sparkles size={12} className="absolute -right-1 -top-1 text-white animate-pulse" />}
                       </div>
+                      <div className="h-[80px] flex items-center justify-center">
+                        <RotaryKnob
+                          label=""
+                          value={rdvLevel}
+                          onChange={(v) => { setRdvLevel(v); playSound('knob'); }}
+                          max={10}
+                          size="ml"
+                          knobColor="border-zinc-200 shadow-[0_0_15px_rgba(255,255,255,0.4)] bg-zinc-900"
+                          indicatorColor="bg-white"
+                          labelClassName="hidden"
+                          valueClassName="text-white drop-shadow-[0_0_5px_rgba(255,255,255,0.5)] font-bold"
+                        />
+                      </div>
+                      <div className="h-3 mt-2.5 text-[11px] text-zinc-500 font-mono">Fidélité</div>
                     </div>
                   </div>
                 </div>
@@ -5386,6 +5422,9 @@ export default function Console() {
                             onToggle={toggleSelection}
                             className={isSimplifiedMode ? "py-0 justify-evenly w-full" : "py-0 justify-start gap-[4px]"}
                             resolveCategory={isSimplifiedMode ? undefined : resolveCategory}
+                            highlightRDV={highlightRDV}
+                            rdvLevel={rdvLevel}
+                            rdvFaithfuls={rdvFaithfuls}
                           />
                         </div>
                       )}
@@ -5407,6 +5446,9 @@ export default function Console() {
                             onToggle={toggleSelection}
                             className={isSimplifiedMode ? "py-0 justify-evenly w-full" : "py-0 justify-start gap-[4px]"}
                             resolveCategory={undefined}
+                            highlightRDV={highlightRDV}
+                            rdvLevel={rdvLevel}
+                            rdvFaithfuls={rdvFaithfuls}
                           />
                         </div>
                       )}
@@ -5785,6 +5827,6 @@ export default function Console() {
 
         </div>
       </div>
-    </CasinoLayout>
+    </CasinoLayout >
   );
 }

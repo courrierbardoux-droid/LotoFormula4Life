@@ -25,6 +25,7 @@ import PopupEmailManagementRedirect from "@/pages/PopupEmailManagementRedirect";
 import Settings from "@/pages/Settings";
 import SettingsWindows from "@/pages/SettingsWindows";
 import UserActivityHistory from "@/pages/UserActivityHistory";
+import Appointments from "@/pages/Appointments";
 
 // Protected Route Wrapper
 function ProtectedRoute({ component: Component, adminOnly = false }: { component: React.ComponentType, adminOnly?: boolean }) {
@@ -40,7 +41,7 @@ function ProtectedRoute({ component: Component, adminOnly = false }: { component
     setTimeout(() => {
       console.log('[ProtectedRoute] ÉTAPE 2 (après pause): Toujours en chargement...');
     }, 100);
-    
+
     // Afficher un écran de chargement pendant la vérification
     return (
       <div className="min-h-screen w-full bg-background flex items-center justify-center">
@@ -68,7 +69,7 @@ function ProtectedRoute({ component: Component, adminOnly = false }: { component
   }
 
   console.log('[ProtectedRoute] ÉTAPE 5: Utilisateur trouvé:', user.username, 'role:', user.role);
-  
+
   if (adminOnly && user.role !== 'admin') {
     console.log('[ProtectedRoute] ÉTAPE 6: Accès admin requis mais utilisateur n\'est pas admin, redirection vers /dashboard...');
     setTimeout(() => {
@@ -90,24 +91,28 @@ function Router() {
   return (
     <Switch>
       <Route path="/" component={Login} />
-      
+
       {/* The main dashboard/console is shared but adapts to role */}
       <Route path="/dashboard">
         <ProtectedRoute component={Console} />
       </Route>
       <Route path="/admin">
-         {/* Alias for dashboard but maybe we force admin check if user tries to access /admin directly */}
-         <ProtectedRoute component={Console} />
+        {/* Alias for dashboard but maybe we force admin check if user tries to access /admin directly */}
+        <ProtectedRoute component={Console} />
       </Route>
 
       <Route path="/presentation" component={Presentation} />
-      
+
       <Route path="/profile">
         <ProtectedRoute component={Profile} />
       </Route>
-      
+
       <Route path="/history" component={History} />
-      
+
+      <Route path="/appointments">
+        <ProtectedRoute component={Appointments} />
+      </Route>
+
       <Route path="/my-grids">
         <ProtectedRoute component={MyGrids} />
       </Route>
@@ -131,18 +136,19 @@ function Router() {
       <Route path="/settings/users/history">
         <ProtectedRoute component={UserActivityHistory} adminOnly />
       </Route>
-      
+
       <Route path="/rules" component={Rules} />
       <Route path="/cgu" component={CGU} />
-      
+
       <Route path="/subscribers">
         <ProtectedRoute component={SubscribersRedirect} adminOnly />
       </Route>
-      
+
+
       <Route path="/popup-email-management">
         <ProtectedRoute component={PopupEmailManagementRedirect} adminOnly />
       </Route>
-      
+
       {/* Page détails utilisateur (admin only) */}
       <Route path="/user/:userId">
         <ProtectedRoute component={UserDetails} adminOnly />

@@ -29,6 +29,28 @@ export interface StatsNumeros {
   };
 }
 
+export interface AppointmentStat {
+  appointmentId: number; // WW-D (ex: 101, 522)
+  week: number;
+  day: 1 | 2; // 1: Mardi, 2: Vendredi
+  count: number;
+  frequency: number; // normalized or percentage
+}
+
+export interface NumberAppointmentProfile {
+  numero: number;
+  appointments: Record<number, AppointmentStat>;
+  top3: AppointmentStat[];
+  fidelityScore: number;
+}
+
+export interface StarAppointmentProfile {
+  etoile: number;
+  appointments: Record<number, AppointmentStat>;
+  top3: AppointmentStat[];
+  fidelityScore: number;
+}
+
 let cachedTirages: Tirage[] | null = null;
 let cachedStats: StatsNumeros | null = null;
 
@@ -41,14 +63,14 @@ const STORAGE_TIMESTAMP_KEY = 'euromillions_history_timestamp';
  */
 export function mettreAJourCache(nouveauxTirages: Tirage[]) {
   // Trier par date décroissante (plus récent en premier)
-  const tiragesTries = [...nouveauxTirages].sort((a, b) => 
+  const tiragesTries = [...nouveauxTirages].sort((a, b) =>
     new Date(b.date).getTime() - new Date(a.date).getTime()
   );
-  
+
   // Mettre à jour le cache mémoire
   cachedTirages = tiragesTries;
   cachedStats = null; // Force le recalcul des statistiques au prochain appel
-  
+
   // Sauvegarder dans localStorage pour persistance
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(tiragesTries));
@@ -78,8 +100,8 @@ export function viderCache() {
  * Compare la date du dernier tirage avec les dates de tirage EuroMillions (mardi/vendredi 21h)
  * Retourne le tirage manquant le plus RÉCENT (pas le premier)
  */
-export function verifierMiseAJourNecessaire(dernierTirage: Tirage | null): { 
-  necessaire: boolean; 
+export function verifierMiseAJourNecessaire(dernierTirage: Tirage | null): {
+  necessaire: boolean;
   dateTirageManquant: Date | null;
   message: string;
 } {
@@ -89,14 +111,14 @@ export function verifierMiseAJourNecessaire(dernierTirage: Tirage | null): {
 
   const now = new Date();
   const derniereDateTirage = new Date(dernierTirage.date);
-  
+
   // Collecter TOUS les tirages manquants entre le dernier tirage et maintenant
   const tiragesManquants: Date[] = [];
-  
+
   // Chercher les dates de tirage entre le dernier tirage et maintenant
   let dateCourante = new Date(derniereDateTirage);
   dateCourante.setDate(dateCourante.getDate() + 1); // Commencer le lendemain
-  
+
   while (dateCourante <= now) {
     const jour = dateCourante.getDay();
     // Mardi (2) ou Vendredi (5)
@@ -104,24 +126,24 @@ export function verifierMiseAJourNecessaire(dernierTirage: Tirage | null): {
       // Vérifier si c'est après 21h30 (pour laisser le temps au tirage)
       const heureActuelle = now.getHours();
       const memeJour = dateCourante.toDateString() === now.toDateString();
-      
+
       if (!memeJour || heureActuelle >= 22) {
         tiragesManquants.push(new Date(dateCourante));
       }
     }
     dateCourante.setDate(dateCourante.getDate() + 1);
   }
-  
+
   // Si des tirages manquent, retourner le PLUS RÉCENT
   if (tiragesManquants.length > 0) {
     const dernierManquant = tiragesManquants[tiragesManquants.length - 1];
-    return { 
-      necessaire: true, 
+    return {
+      necessaire: true,
       dateTirageManquant: dernierManquant,
       message: `Tirage du ${dernierManquant.toLocaleDateString('fr-FR')} manquant`
     };
   }
-  
+
   return { necessaire: false, dateTirageManquant: null, message: "Base à jour" };
 }
 
@@ -174,14 +196,14 @@ export async function chargerHistorique(): Promise<Tirage[]> {
     const response = await fetch('/data/euromillions_historique_complet_2004-2025.csv');
     const text = await response.text();
     const lines = text.trim().split('\n');
-    
+
     // Ignorer l'en-tête (première ligne)
     const tirages: Tirage[] = [];
-    
+
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i].trim();
       if (!line) continue;
-      
+
       const cols = line.split(';');
       if (cols.length < 8) continue;
 
@@ -203,7 +225,7 @@ export async function chargerHistorique(): Promise<Tirage[]> {
 
     // Sort by date descending (newest first)
     tirages.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-    
+
     cachedTirages = tirages;
     console.log(`[LotoService] Chargé depuis CSV: ${tirages.length} tirages. Dernier: ${tirages[0]?.date}`);
     return tirages;
@@ -216,46 +238,46 @@ export async function chargerHistorique(): Promise<Tirage[]> {
 export type PeriodUnit = 'weeks' | 'months' | 'years' | 'draws';
 
 export interface FrequencyConfig {
-    type: 'all' | 'last_year' | 'last_20' | 'custom';
-    customValue?: number;
-    customUnit?: PeriodUnit;
+  type: 'all' | 'last_year' | 'last_20' | 'custom';
+  customValue?: number;
+  customUnit?: PeriodUnit;
 }
 
 /** Config Tendance : Fenêtre W (via customValue quand customUnit=draws) + Période récente R (tirages). */
 export type TrendWindowConfig = FrequencyConfig & { trendPeriodR?: number };
 
 export function filterTirages(tirages: Tirage[], config: FrequencyConfig): Tirage[] {
-    if (!tirages || tirages.length === 0) return [];
+  if (!tirages || tirages.length === 0) return [];
 
-    switch (config.type) {
-        case 'all':
-            return tirages;
-        case 'last_20':
-            return tirages.slice(0, 20);
-        case 'last_year':
-            const oneYearAgo = new Date();
-            oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
-            return tirages.filter(t => new Date(t.date) >= oneYearAgo);
-        case 'custom':
-            if (!config.customValue || !config.customUnit) return tirages;
-            
-            if (config.customUnit === 'draws') {
-                return tirages.slice(0, config.customValue);
-            }
-            
-            const cutoffDate = new Date();
-            if (config.customUnit === 'weeks') {
-                cutoffDate.setDate(cutoffDate.getDate() - (config.customValue * 7));
-            } else if (config.customUnit === 'months') {
-                cutoffDate.setMonth(cutoffDate.getMonth() - config.customValue);
-            } else if (config.customUnit === 'years') {
-                cutoffDate.setFullYear(cutoffDate.getFullYear() - config.customValue);
-            }
-            
-            return tirages.filter(t => new Date(t.date) >= cutoffDate);
-        default:
-            return tirages;
-    }
+  switch (config.type) {
+    case 'all':
+      return tirages;
+    case 'last_20':
+      return tirages.slice(0, 20);
+    case 'last_year':
+      const oneYearAgo = new Date();
+      oneYearAgo.setFullYear(oneYearAgo.getFullYear() - 1);
+      return tirages.filter(t => new Date(t.date) >= oneYearAgo);
+    case 'custom':
+      if (!config.customValue || !config.customUnit) return tirages;
+
+      if (config.customUnit === 'draws') {
+        return tirages.slice(0, config.customValue);
+      }
+
+      const cutoffDate = new Date();
+      if (config.customUnit === 'weeks') {
+        cutoffDate.setDate(cutoffDate.getDate() - (config.customValue * 7));
+      } else if (config.customUnit === 'months') {
+        cutoffDate.setMonth(cutoffDate.getMonth() - config.customValue);
+      } else if (config.customUnit === 'years') {
+        cutoffDate.setFullYear(cutoffDate.getFullYear() - config.customValue);
+      }
+
+      return tirages.filter(t => new Date(t.date) >= cutoffDate);
+    default:
+      return tirages;
+  }
 }
 
 export interface ComputeStatsOptions {
@@ -267,13 +289,13 @@ export function computeStatsFromTirages(tirages: Tirage[], options?: ComputeStat
   const { freqNumeros, freqEtoiles } = calculerFrequencesAbsolues(tirages);
   const freqNumerosNorm = normaliserFrequences(freqNumeros);
   const freqEtoilesNorm = normaliserFrequences(freqEtoiles);
-  
+
   // Note: Absences and Tendances always need context of "recent" vs "total" or just "latest".
   const { absenceNumeros, absenceEtoiles } = calculerAbsences(tirages);
-  
+
   const periodRecente = options?.trendPeriodRecente ?? 65;
   const { tendancesNumeros, tendancesEtoiles } = calculerTendances(tirages, periodRecente);
-  
+
   const categoriesNum = categoriserNumeros(freqNumeros);
   const categoriesEtoiles = categoriserEtoiles(freqEtoiles);
 
@@ -294,11 +316,11 @@ export function computeStatsFromTirages(tirages: Tirage[], options?: ComputeStat
 export function calculerFrequencesAbsolues(tirages: Tirage[]) {
   const freqNumeros: Record<number, number> = {};
   const freqEtoiles: Record<number, number> = {};
-  
+
   // Initialiser à 0
   for (let i = 1; i <= 50; i++) freqNumeros[i] = 0;
   for (let i = 1; i <= 12; i++) freqEtoiles[i] = 0;
-  
+
   // Compter
   for (const tirage of tirages) {
     for (const num of tirage.numeros) {
@@ -308,7 +330,7 @@ export function calculerFrequencesAbsolues(tirages: Tirage[]) {
       if (freqEtoiles[etoile] !== undefined) freqEtoiles[etoile]++;
     }
   }
-  
+
   return { freqNumeros, freqEtoiles };
 }
 
@@ -316,14 +338,14 @@ export function normaliserFrequences(frequences: Record<number, number>): Record
   const values = Object.values(frequences);
   const min = Math.min(...values);
   const max = Math.max(...values);
-  
+
   const normalisees: Record<number, number> = {};
-  
+
   for (const [num, freq] of Object.entries(frequences)) {
     // Normalisation min-max sur 0-100
     normalisees[parseInt(num)] = Math.round(((freq - min) / (max - min)) * 100);
   }
-  
+
   return normalisees;
 }
 
@@ -331,28 +353,28 @@ export function calculerAbsences(tirages: Tirage[]) {
   // Tirages sont déjà triés par date décroissante
   const absenceNumeros: Record<number, number> = {};
   const absenceEtoiles: Record<number, number> = {};
-  
+
   // Initialiser avec le nombre total de tirages (jamais sorti = max)
   for (let i = 1; i <= 50; i++) absenceNumeros[i] = tirages.length;
   for (let i = 1; i <= 12; i++) absenceEtoiles[i] = tirages.length;
-  
+
   // Parcourir du plus récent au plus ancien
   for (let i = 0; i < tirages.length; i++) {
     const tirage = tirages[i];
-    
+
     for (const num of tirage.numeros) {
       if (absenceNumeros[num] === tirages.length) {
         absenceNumeros[num] = i; // Position = nombre de tirages depuis dernière sortie
       }
     }
-    
+
     for (const etoile of tirage.etoiles) {
       if (absenceEtoiles[etoile] === tirages.length) {
         absenceEtoiles[etoile] = i;
       }
     }
   }
-  
+
   return { absenceNumeros, absenceEtoiles };
 }
 
@@ -365,26 +387,29 @@ export function calculerTendances(tirages: Tirage[], periodRecente: number = 65)
   const R = Math.min(periodRecente, tirages.length) || 1;
   const recent = tirages.slice(0, R);
   const total = tirages;
-  
+
   const { freqNumeros: freqRecenteNum, freqEtoiles: freqRecenteEtoile } = calculerFrequencesAbsolues(recent);
   const { freqNumeros: freqTotaleNum, freqEtoiles: freqTotaleEtoile } = calculerFrequencesAbsolues(total);
-  
+
   const tendancesNumeros: Record<number, { direction: 'hausse' | 'baisse' | 'stable'; score: number }> = {};
   const tendancesEtoiles: Record<number, { direction: 'hausse' | 'baisse' | 'stable'; score: number }> = {};
-  
+
   for (let num = 1; num <= 50; num++) {
     const freqAttendue = total.length > 0 ? (freqTotaleNum[num] / total.length) * R : 0;
     const freqReelle = freqRecenteNum[num] ?? 0;
     const ratio = freqAttendue > 0 ? freqReelle / freqAttendue : 0;
-    
+
     let direction: 'hausse' | 'baisse' | 'stable';
     let score: number;
     if (ratio > 1.2) {
       direction = 'hausse';
-      score = Math.min(10, Math.round((ratio - 1) * 10));
+      // Ajustement : Hausse doit être > Stable (5). Donc min 6, max 10.
+      // On décale le score : (ratio-1)*10 commence vers 2 (pour 1.2). On ajoute 4 => 6.
+      score = Math.min(10, Math.max(6, Math.round((ratio - 1) * 10) + 4));
     } else if (ratio < 0.8) {
       direction = 'baisse';
-      score = Math.max(0, Math.round(ratio * 5));
+      // Baisse : de 0 à 4 (Strictement < 5)
+      score = Math.min(4, Math.max(0, Math.round(ratio * 5)));
     } else {
       direction = 'stable';
       score = 5;
@@ -396,22 +421,23 @@ export function calculerTendances(tirages: Tirage[], periodRecente: number = 65)
     const freqAttendue = total.length > 0 ? (freqTotaleEtoile[num] / total.length) * R : 0;
     const freqReelle = freqRecenteEtoile[num] ?? 0;
     const ratio = freqAttendue > 0 ? freqReelle / freqAttendue : 0;
-    
+
     let direction: 'hausse' | 'baisse' | 'stable';
     let score: number;
     if (ratio > 1.2) {
       direction = 'hausse';
-      score = Math.min(10, Math.round((ratio - 1) * 10));
+      // Ajustement : Hausse doit être > Stable (5). Donc min 6, max 10.
+      score = Math.min(10, Math.max(6, Math.round((ratio - 1) * 10) + 4));
     } else if (ratio < 0.8) {
       direction = 'baisse';
-      score = Math.max(0, Math.round(ratio * 5));
+      score = Math.min(4, Math.max(0, Math.round(ratio * 5)));
     } else {
       direction = 'stable';
       score = 5;
     }
     tendancesEtoiles[num] = { direction, score };
   }
-  
+
   return { tendancesNumeros, tendancesEtoiles };
 }
 
@@ -430,12 +456,12 @@ export function categoriserNumeros(freqNumeros: Record<number, number>) {
   // DYNAMIC SORTING based on actual frequencies passed
   // This ensures that when we change the period, the categories (High/Mid/Low) 
   // update to reflect the new champions of that period.
-  
+
   const sorted = Object.entries(freqNumeros)
     .map(([num, freq]) => ({ numero: parseInt(num), frequence: freq }))
     .sort((a, b) => {
-        if (b.frequence !== a.frequence) return b.frequence - a.frequence;
-        return a.numero - b.numero; // Stability fallback
+      if (b.frequence !== a.frequence) return b.frequence - a.frequence;
+      return a.numero - b.numero; // Stability fallback
     });
 
   // Top 17 -> High
@@ -444,7 +470,7 @@ export function categoriserNumeros(freqNumeros: Record<number, number>) {
   const moyenne = sorted.slice(17, 34);
   // Rest -> Low
   const basse = sorted.slice(34, 50);
-  
+
   return {
     elevee,
     moyenne,
@@ -458,12 +484,12 @@ export function categoriserEtoiles(freqEtoiles: Record<number, number>) {
   const sorted = Object.entries(freqEtoiles)
     .map(([num, freq]) => ({ numero: parseInt(num), frequence: freq }))
     .sort((a, b) => {
-        if (b.frequence !== a.frequence) {
-            return b.frequence - a.frequence;
-        }
-        return a.numero - b.numero;
+      if (b.frequence !== a.frequence) {
+        return b.frequence - a.frequence;
+      }
+      return a.numero - b.numero;
     });
-  
+
   // LOGIQUE DE TRI ÉTOILES (Top 1-4, 5-8, 9-12)
   return {
     elevee: sorted.slice(0, 4),      // Top 4
@@ -475,10 +501,10 @@ export function categoriserEtoiles(freqEtoiles: Record<number, number>) {
 
 export async function getStats(): Promise<StatsNumeros> {
   if (cachedStats) return cachedStats;
-  
+
   const tirages = await chargerHistorique();
   cachedStats = computeStatsFromTirages(tirages);
-  
+
   return cachedStats;
 }
 
@@ -490,10 +516,10 @@ export function getDernierTirage(tirages: Tirage[]): Tirage | null {
 export function getProchainTirage(): { date: Date, jour: string } {
   const now = new Date();
   const jourSemaine = getDay(now); // 0=dimanche, 1=lundi, ..., 5=vendredi, 6=samedi
-  
+
   let joursJusquAuProchain: number;
   let jour: string;
-  
+
   // Mardi = 2, Vendredi = 5
   if (jourSemaine < 2) {
     // Dimanche ou Lundi → prochain = Mardi
@@ -519,13 +545,13 @@ export function getProchainTirage(): { date: Date, jour: string } {
     joursJusquAuProchain = (7 - jourSemaine) + 2;
     jour = 'MARDI';
   }
-  
+
   const prochainTirage = addDays(now, joursJusquAuProchain);
-  
+
   // Si c'est aujourd'hui, on vérifie l'heure ? Non, restons simple.
   // Si on veut être strict sur "prochain", si on est mardi soir, le prochain est vendredi.
   // Mais pour l'UI "PROCHAIN TIRAGE", afficher la date d'aujourd'hui est correct le jour du tirage.
-  
+
   return { date: prochainTirage, jour };
 }
 
@@ -542,39 +568,39 @@ export async function genererCombinaison(config: {
   equilibrerHautBas: boolean
 }) {
   const stats = await getStats();
-  
+
   let numerosSelectionnes: number[] = [];
   let etoilesSelectionnees: number[] = [];
-  
+
   // Mélanger un tableau - SUPPRIMÉ POUR ASSURER L'ORDRE DÉCROISSANT STRICT
   // const shuffle = <T>(array: T[]) => { ... }
 
   // Sélection SANS MÉLANGE (Ordre décroissant strict)
-  
+
   const poolElevee = stats.categoriesNum.elevee;
   const poolMoyenne = stats.categoriesNum.moyenne;
   const poolBasse = stats.categoriesNum.basse;
-  
+
   numerosSelectionnes.push(...poolElevee.slice(0, config.nbElevee).map(n => n.numero));
   numerosSelectionnes.push(...poolMoyenne.slice(0, config.nbMoyenne).map(n => n.numero));
   numerosSelectionnes.push(...poolBasse.slice(0, config.nbBasse).map(n => n.numero));
-  
+
   // DORMEUR LOGIC (Numbers)
   if (config.nbDormeur > 0) {
     const sortedByAbsence = Object.entries(stats.absenceNumeros)
-       .map(([num, abs]) => ({ numero: parseInt(num), absence: abs }))
-       .sort((a, b) => b.absence - a.absence); // Descending absence
-    
+      .map(([num, abs]) => ({ numero: parseInt(num), absence: abs }))
+      .sort((a, b) => b.absence - a.absence); // Descending absence
+
     let added = 0;
     for (const item of sortedByAbsence) {
-        if (added >= config.nbDormeur) break;
-        if (!numerosSelectionnes.includes(item.numero)) {
-            numerosSelectionnes.push(item.numero);
-            added++;
-        }
+      if (added >= config.nbDormeur) break;
+      if (!numerosSelectionnes.includes(item.numero)) {
+        numerosSelectionnes.push(item.numero);
+        added++;
+      }
     }
   }
-  
+
   const poolEtoilesElevee = stats.categoriesEtoiles.elevee;
   const poolEtoilesMoyenne = stats.categoriesEtoiles.moyenne;
   const poolEtoilesBasse = stats.categoriesEtoiles.basse;
@@ -586,19 +612,19 @@ export async function genererCombinaison(config: {
   // DORMEUR LOGIC (Stars)
   if (config.nbEtoilesDormeur > 0) {
     const sortedByAbsence = Object.entries(stats.absenceEtoiles)
-       .map(([num, abs]) => ({ numero: parseInt(num), absence: abs }))
-       .sort((a, b) => b.absence - a.absence); // Descending absence
-    
+      .map(([num, abs]) => ({ numero: parseInt(num), absence: abs }))
+      .sort((a, b) => b.absence - a.absence); // Descending absence
+
     let added = 0;
     for (const item of sortedByAbsence) {
-        if (added >= config.nbEtoilesDormeur) break;
-        if (!etoilesSelectionnees.includes(item.numero)) {
-            etoilesSelectionnees.push(item.numero);
-            added++;
-        }
+      if (added >= config.nbEtoilesDormeur) break;
+      if (!etoilesSelectionnees.includes(item.numero)) {
+        etoilesSelectionnees.push(item.numero);
+        added++;
+      }
     }
   }
-  
+
   // TODO: Implémenter équilibrage si nécessaire (pour l'instant simple sélection)
 
   return {
@@ -675,14 +701,14 @@ export async function loadGridsFromDB(): Promise<PlayedGrid[]> {
       method: 'GET',
       credentials: 'include',
     });
-    
+
     console.log('[loadGridsFromDB] ÉTAPE 2: Réponse reçue, status:', response.status, 'ok:', response.ok);
-    
+
     if (!response.ok) {
       console.error('[loadGridsFromDB] ERREUR: Réponse non OK, status:', response.status);
       throw new Error('Erreur chargement grilles');
     }
-    
+
     const grids = await response.json();
     console.log('[loadGridsFromDB] ÉTAPE 3: Grilles récupérées depuis l\'API, nombre:', grids.length);
     // Convertir le format DB au format PlayedGrid
@@ -693,7 +719,7 @@ export async function loadGridsFromDB(): Promise<PlayedGrid[]> {
       etoiles: g.stars,
       drawDate: g.targetDate ? `${g.targetDate}T00:00:00.000Z` : undefined,
     }));
-    
+
     console.log('[loadGridsFromDB] ÉTAPE 4: Grilles converties, retour:', convertedGrids.length, 'grilles');
     return convertedGrids;
   } catch (e) {
@@ -809,52 +835,52 @@ export function getRankLabel(matchNum: number, matchStar: number): string {
 
 export function checkGridResult(grid: PlayedGrid, lastDraw: Tirage | null): { status: string, gain: number, matchNum: number, matchStar: number } {
   if (!lastDraw) return { status: 'En attente', gain: 0, matchNum: 0, matchStar: 0 };
-  
+
   // Check if the grid was for a future draw relative to the last known draw
   // But since we are mocking, let's just compare with the LAST draw if the dates are close,
   // or if the user wants "Realism", we should only check if the draw date matches the last draw date.
-  
+
   // For this prototype: 
   // If grid.drawDate matches lastDraw.date -> Compare
   // If grid.drawDate is after lastDraw.date -> En attente
   // If grid.drawDate is before lastDraw.date -> Find that specific draw in history? (Too complex for now, just compare with lastDraw for demo purposes if dates match roughly)
-  
+
   // Vérifier si grid.drawDate existe et est valide
   if (!grid.drawDate) {
     // Si pas de date de tirage, considérer comme en attente
     return { status: 'En attente', gain: 0, matchNum: 0, matchStar: 0 };
   }
-  
+
   const gridDrawDate = new Date(grid.drawDate);
   const lastDrawDate = new Date(lastDraw.date);
-  
+
   // Vérifier si les dates sont valides
   if (isNaN(gridDrawDate.getTime())) {
     console.warn('[checkGridResult] Date invalide pour la grille:', grid.drawDate, grid.id);
     return { status: 'En attente', gain: 0, matchNum: 0, matchStar: 0 };
   }
-  
+
   if (isNaN(lastDrawDate.getTime())) {
     console.warn('[checkGridResult] Date invalide pour le dernier tirage:', lastDraw.date);
     return { status: 'En attente', gain: 0, matchNum: 0, matchStar: 0 };
   }
-  
+
   // Normalize dates to YYYY-MM-DD for comparison
   const gridDateStr = gridDrawDate.toISOString().split('T')[0];
   const lastDrawDateStr = lastDrawDate.toISOString().split('T')[0];
-  
+
   // If the grid is for a future draw compared to our data
   if (gridDrawDate > lastDrawDate && gridDateStr !== lastDrawDateStr) {
-     return { status: 'En attente', gain: 0, matchNum: 0, matchStar: 0 };
+    return { status: 'En attente', gain: 0, matchNum: 0, matchStar: 0 };
   }
 
   // Calculate matches
   const matchNum = grid.numeros.filter(n => lastDraw.numeros.includes(n)).length;
   const matchStar = grid.etoiles.filter(n => lastDraw.etoiles.includes(n)).length;
-  
+
   let status = 'Perdu';
   let gain = 0;
-  
+
   // Simple Euromillions rules (simplified)
   if (matchNum === 5 && matchStar === 2) { status = 'JACKPOT !'; gain = 17000000; }
   else if (matchNum === 5 && matchStar === 1) { status = 'Gagné (Rang 2)'; gain = 200000; }
@@ -869,6 +895,150 @@ export function checkGridResult(grid: PlayedGrid, lastDraw: Tirage | null): { st
   else if (matchNum === 1 && matchStar === 2) { status = 'Gagné (Rang 11)'; gain = 8; }
   else if (matchNum === 2 && matchStar === 1) { status = 'Gagné (Rang 12)'; gain = 6; }
   else if (matchNum === 2 && matchStar === 0) { status = 'Gagné (Rang 13)'; gain = 4; }
-  
+
   return { status, gain, matchNum, matchStar };
+}
+
+/**
+ * Retourne l'ID de rendez-vous (AppointmentID) pour une date donnée.
+ * Format: WW-D (ex: 101 pour semaine 1 mardi, 522 pour semaine 52 vendredi).
+ */
+import { getISOWeek } from 'date-fns';
+
+export function getAppointmentId(date: Date | string): number {
+  const d = typeof date === 'string' ? parseISO(date.includes('T') ? date : `${date}T00:00:00Z`) : date;
+  if (isNaN(d.getTime())) return 0;
+
+  const week = getISOWeek(d);
+  const dayOfWeek = getDay(d); // 0: Dimanche, 2: Mardi, 5: Vendredi
+  const dayId = (dayOfWeek === 2) ? 1 : (dayOfWeek === 5) ? 2 : 0;
+
+  return (week * 10) + dayId;
+}
+
+/**
+ * Calcule le profil des rendez-vous pour tous les numéros et étoiles basés sur l'historique complet.
+ */
+export async function computeAllAppointments(): Promise<{
+  numbers: Record<number, NumberAppointmentProfile>;
+  stars: Record<number, StarAppointmentProfile>;
+}> {
+  const tirages = await chargerHistorique();
+  const numberProfiles: Record<number, NumberAppointmentProfile> = {};
+  const starProfiles: Record<number, StarAppointmentProfile> = {};
+
+  // Initialiser les profils pour les 50 numéros
+  for (let n = 1; n <= 50; n++) {
+    numberProfiles[n] = {
+      numero: n,
+      appointments: {},
+      top3: [],
+      fidelityScore: 0
+    };
+    for (let w = 1; w <= 52; w++) {
+      for (let d of [1, 2] as const) {
+        const id = w * 10 + d;
+        numberProfiles[n].appointments[id] = { appointmentId: id, week: w, day: d, count: 0, frequency: 0 };
+      }
+    }
+  }
+
+  // Initialiser les profils pour les 12 étoiles
+  for (let s = 1; s <= 12; s++) {
+    starProfiles[s] = {
+      etoile: s,
+      appointments: {},
+      top3: [],
+      fidelityScore: 0
+    };
+    for (let w = 1; w <= 52; w++) {
+      for (let d of [1, 2] as const) {
+        const id = w * 10 + d;
+        starProfiles[s].appointments[id] = { appointmentId: id, week: w, day: d, count: 0, frequency: 0 };
+      }
+    }
+  }
+
+  const slotTotals: Record<number, number> = {};
+  for (let w = 1; w <= 52; w++) {
+    for (let d of [1, 2]) {
+      slotTotals[w * 10 + d] = 0;
+    }
+  }
+
+  for (const t of tirages) {
+    const aid = getAppointmentId(t.date);
+    if (aid <= 0 || aid % 10 === 0) continue;
+
+    if (slotTotals[aid] !== undefined) {
+      slotTotals[aid]++;
+    }
+
+    for (const num of t.numeros) {
+      if (numberProfiles[num] && numberProfiles[num].appointments[aid]) {
+        numberProfiles[num].appointments[aid].count++;
+      }
+    }
+    for (const star of t.etoiles) {
+      if (starProfiles[star] && starProfiles[star].appointments[aid]) {
+        starProfiles[star].appointments[aid].count++;
+      }
+    }
+  }
+
+  // Calculer fréquences et Top 3 pour numéros
+  for (let n = 1; n <= 50; n++) {
+    const p = numberProfiles[n];
+    const allSlots = Object.values(p.appointments);
+    for (const slot of allSlots) {
+      const total = slotTotals[slot.appointmentId] || 1;
+      slot.frequency = (slot.count / total) * 100;
+    }
+    p.top3 = [...allSlots].sort((a, b) => b.frequency - a.frequency).slice(0, 3);
+    const avg = allSlots.reduce((acc, s) => acc + s.frequency, 0) / 104;
+    p.fidelityScore = Math.round((p.top3[0]?.frequency || 0) / (avg || 1) * 10);
+  }
+
+  // Calculer fréquences et Top 3 pour étoiles
+  for (let s = 1; s <= 12; s++) {
+    const p = starProfiles[s];
+    const allSlots = Object.values(p.appointments);
+    for (const slot of allSlots) {
+      const total = slotTotals[slot.appointmentId] || 1;
+      slot.frequency = (slot.count / total) * 100;
+    }
+    p.top3 = [...allSlots].sort((a, b) => b.frequency - a.frequency).slice(0, 3);
+    const avg = allSlots.reduce((acc, s) => acc + s.frequency, 0) / 104;
+    p.fidelityScore = Math.round((p.top3[0]?.frequency || 0) / (avg || 1) * 10);
+  }
+
+  return { numbers: numberProfiles, stars: starProfiles };
+}
+
+/**
+ * Retourne les numéros et étoiles les plus fidèles pour un ID de rendez-vous précis.
+ */
+export function getFaithfulForRDV(
+  aid: number,
+  profiles: { numbers: Record<number, NumberAppointmentProfile>, stars: Record<number, StarAppointmentProfile> }
+) {
+  const topNumbers = Object.values(profiles.numbers)
+    .map(p => ({
+      numero: p.numero,
+      frequency: p.appointments[aid]?.frequency || 0,
+      count: p.appointments[aid]?.count || 0
+    }))
+    .sort((a, b) => b.frequency - a.frequency)
+    .slice(0, 10);
+
+  const topStars = Object.values(profiles.stars)
+    .map(p => ({
+      etoile: p.etoile,
+      frequency: p.appointments[aid]?.frequency || 0,
+      count: p.appointments[aid]?.count || 0
+    }))
+    .sort((a, b) => b.frequency - a.frequency)
+    .slice(0, 8);
+
+  return { topNumbers, topStars };
 }

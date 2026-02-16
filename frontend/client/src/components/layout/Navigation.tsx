@@ -1,14 +1,14 @@
 
 import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'wouter';
-import { Menu, X, Home, BookOpen, User, History, Grid, FileText, Shield, LogOut, Users, Settings, ChevronDown } from 'lucide-react';
+import { Menu, X, Home, BookOpen, User, History, Grid, FileText, Shield, LogOut, Users, Settings, ChevronDown, Clock, TrendingUp } from 'lucide-react';
 import { useUser } from '@/lib/UserContext';
 import { cn } from '@/lib/utils';
 import { Howl } from 'howler';
 
 const menuSound = new Howl({
-    src: ['https://assets.mixkit.co/active_storage/sfx/2572/2572-preview.mp3'], // Placeholder
-    volume: 0.2
+  src: ['https://assets.mixkit.co/active_storage/sfx/2572/2572-preview.mp3'], // Placeholder
+  volume: 0.2
 });
 
 export const Navigation = () => {
@@ -23,6 +23,7 @@ export const Navigation = () => {
       ...prev,
       settings: prev.settings || (location.startsWith("/settings") && !location.startsWith("/settings/users")),
       users: prev.users || location.startsWith("/settings/users"),
+      analyses: prev.analyses || (location === "/history" || location === "/appointments"),
     }));
   }, [location]);
 
@@ -33,16 +34,24 @@ export const Navigation = () => {
 
   const menuItems: Array<
     | { icon: any; label: string; path: string }
-    | { icon: any; label: string; groupKey: "settings" | "users"; children: Array<{ label: string; path: string }> }
+    | { icon: any; label: string; groupKey: "settings" | "users" | "analyses"; children: Array<{ label: string; path: string }> }
   > = [
-    { icon: Home, label: 'Accueil / Console', path: user?.role === 'admin' ? '/admin' : '/dashboard' },
-    { icon: BookOpen, label: 'Comment ça marche ?', path: '/presentation' },
-    { icon: User, label: 'Mon Profil', path: '/profile' },
-    { icon: Grid, label: 'Mes Grilles Jouées', path: '/my-grids' },
-    { icon: History, label: 'Historique EuroMillions', path: '/history' },
-    { icon: FileText, label: 'Règles du Jeu', path: '/rules' },
-    { icon: Shield, label: 'CGU', path: '/cgu' },
-  ];
+      { icon: Home, label: 'Accueil / Console', path: user?.role === 'admin' ? '/admin' : '/dashboard' },
+      { icon: BookOpen, label: 'Comment ça marche ?', path: '/presentation' },
+      { icon: User, label: 'Mon Profil', path: '/profile' },
+      { icon: Grid, label: 'Mes Grilles Jouées', path: '/my-grids' },
+      {
+        icon: TrendingUp,
+        label: 'Analyses et Datas EuroMillion',
+        groupKey: "analyses",
+        children: [
+          { label: 'Historique EuroMillions', path: '/history' },
+          { label: 'Rendez-vous des Numéros', path: '/appointments' },
+        ],
+      },
+      { icon: FileText, label: 'Règles du Jeu', path: '/rules' },
+      { icon: Shield, label: 'CGU', path: '/cgu' },
+    ];
 
   if (user?.role === 'admin') {
     menuItems.splice(5, 0, {
@@ -71,7 +80,7 @@ export const Navigation = () => {
 
   return (
     <>
-      <button 
+      <button
         onClick={toggleMenu}
         className="fixed top-4 left-4 z-50 p-3 bg-black/80 border-2 border-zinc-700 text-casino-gold rounded-xl hover:bg-zinc-900 transition-colors"
       >
@@ -80,7 +89,7 @@ export const Navigation = () => {
 
       {/* Overlay */}
       {isOpen && (
-        <div 
+        <div
           className="fixed inset-0 bg-black/80 backdrop-blur-sm z-40"
           onClick={() => setIsOpen(false)}
         />
@@ -173,7 +182,7 @@ export const Navigation = () => {
         </nav>
 
         <div className="p-6 border-t-2 border-zinc-800">
-          <button 
+          <button
             onClick={() => { logout(); setIsOpen(false); }}
             className="flex items-center gap-4 w-full p-4 text-red-400 hover:text-red-300 hover:bg-red-900/10 rounded-xl transition-colors font-rajdhani text-xl"
           >
