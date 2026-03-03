@@ -5,10 +5,11 @@ import { LottoBall } from '@/components/casino/LottoBall';
 import { loadGridsWithResults, deleteGridFromDB, ackWinningGrid, getRankLabel, PlayedGridWithResult } from '@/lib/lotoService';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
-import { Trash2 } from 'lucide-react';
+import { Trash2, Network } from 'lucide-react';
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { cn } from '@/lib/utils';
+import { BlockchainPopup } from '@/components/casino/BlockchainPopup';
 
 export default function MyGrids() {
   const [history, setHistory] = useState<PlayedGridWithResult[]>([]);
@@ -16,6 +17,7 @@ export default function MyGrids() {
   const [selectedGrids, setSelectedGrids] = useState<(string | number)[]>([]);
   const [highlightedGrids, setHighlightedGrids] = useState<Set<string | number>>(new Set());
   const [pulseStoppedIds, setPulseStoppedIds] = useState<Set<string | number>>(new Set());
+  const [selectedBlockchain, setSelectedBlockchain] = useState<string | null>(null);
 
   const normalizeDate = (raw?: string | null) => String(raw || '').trim().split('T')[0].split(' ')[0];
 
@@ -137,6 +139,12 @@ export default function MyGrids() {
                       <div className="flex flex-col items-start"><span>Tirage</span><span>Visé</span></div>
                     </th>
                     <th className="py-1.5 px-0 text-center">Combinaison</th>
+                    <th className="py-1.5 px-1.5 text-center text-zinc-300">
+                      <div className="flex flex-col items-center">
+                        <Network size={16} className="text-casino-gold mb-1" />
+                        <span className="text-[10px] leading-tight text-casino-gold/80">Réglages<br />console</span>
+                      </div>
+                    </th>
                     <th className="py-1.5 px-1.5 text-center">Rang</th>
                     <th className="py-1.5 px-1.5 text-center">Résultat</th>
                     <th className="py-1.5 px-1.5 text-center">Montant</th>
@@ -204,6 +212,20 @@ export default function MyGrids() {
                               ))}
                             </div>
                           </td>
+                          <td className="py-1.5 px-1.5 text-center" onClick={(e) => e.stopPropagation()}>
+                            {grid.blockchain ? (
+                              <button
+                                onClick={() => setSelectedBlockchain(grid.blockchain!)}
+                                className="group relative transition-all duration-300 hover:scale-110 active:scale-95"
+                                title="Voir les réglages console"
+                              >
+                                <div className="absolute inset-0 bg-casino-gold/20 rounded-full blur-md group-hover:bg-casino-gold/40 transition-all duration-500 animate-pulse"></div>
+                                <Network size={22} className="text-casino-gold relative z-10 drop-shadow-[0_0_8px_rgba(255,215,0,0.8)]" />
+                              </button>
+                            ) : (
+                              <span className="text-zinc-600 text-xs italic">-</span>
+                            )}
+                          </td>
                           <td className="py-1.5 px-1.5 text-center text-zinc-400 text-sm">
                             {grid.status === 'Gagné' && grid.matchNum != null && grid.matchStar != null
                               ? getRankLabel(grid.matchNum, grid.matchStar)
@@ -241,6 +263,13 @@ export default function MyGrids() {
           </div>
         </div>
       </div>
+
+      <BlockchainPopup
+        isOpen={!!selectedBlockchain}
+        onClose={() => setSelectedBlockchain(null)}
+        blockchainData={selectedBlockchain || ''}
+        onCopySettings={() => { }}
+      />
     </CasinoLayout>
   );
 }

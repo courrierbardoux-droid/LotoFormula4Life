@@ -8,8 +8,9 @@ import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { format } from 'date-fns';
 import { fr as frLocale } from 'date-fns/locale';
-import { ArrowLeft, Clock, Grid, User, Mail, Calendar, Shield, Edit2, Check, Lock, Eye, EyeOff } from 'lucide-react';
+import { ArrowLeft, Clock, Grid, User, Mail, Calendar, Shield, Edit2, Check, Lock, Eye, EyeOff, Network } from 'lucide-react';
 import { getRankLabel } from '@/lib/lotoService';
+import { BlockchainPopup } from '@/components/casino/BlockchainPopup';
 
 interface UserData {
   id: number;
@@ -43,6 +44,7 @@ interface PlayedGrid {
   winningGridId?: number;
   drawNumbers?: number[];
   drawStars?: number[];
+  blockchain?: string;
 }
 
 export default function UserDetails() {
@@ -65,6 +67,7 @@ export default function UserDetails() {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [selectedBlockchain, setSelectedBlockchain] = useState<string | null>(null);
   const editInputRef = React.useRef<HTMLDivElement>(null);
 
   // Gestionnaire de clic en dehors pour annuler l'édition
@@ -611,6 +614,12 @@ export default function UserDetails() {
                     <th className="p-3">Date</th>
                     <th className="p-3">Combinaison</th>
                     <th className="p-3">Tirage visé</th>
+                    <th className="p-3 text-center text-zinc-300">
+                      <div className="flex flex-col items-center">
+                        <Network size={16} className="text-casino-gold mb-1" />
+                        <span className="text-[10px] leading-tight text-casino-gold/80">Réglages<br />console</span>
+                      </div>
+                    </th>
                     <th className="p-3 text-center">Rang</th>
                     <th className="p-3 text-center">Résultat</th>
                     <th className="p-3 text-center">Montant</th>
@@ -659,6 +668,20 @@ export default function UserDetails() {
                         <td className="p-3 text-zinc-500 text-sm whitespace-nowrap">
                           {grid.targetDate ? format(new Date(grid.targetDate), 'dd MMM yyyy', { locale: frLocale }) : '—'}
                         </td>
+                        <td className="p-3 text-center" onClick={(e) => e.stopPropagation()}>
+                          {grid.blockchain ? (
+                            <button
+                              onClick={() => setSelectedBlockchain(grid.blockchain!)}
+                              className="group relative transition-all duration-300 hover:scale-110 active:scale-95"
+                              title="Voir les réglages console"
+                            >
+                              <div className="absolute inset-0 bg-casino-gold/20 rounded-full blur-md group-hover:bg-casino-gold/40 transition-all duration-500 animate-pulse"></div>
+                              <Network size={22} className="text-casino-gold relative z-10 drop-shadow-[0_0_8px_rgba(255,215,0,0.8)]" />
+                            </button>
+                          ) : (
+                            <span className="text-zinc-600 text-xs italic">-</span>
+                          )}
+                        </td>
                         <td className="p-3 text-center text-zinc-400 text-sm">
                           {isWon && grid.matchNum != null && grid.matchStar != null
                             ? getRankLabel(grid.matchNum, grid.matchStar)
@@ -699,6 +722,13 @@ export default function UserDetails() {
           </CasinoButton>
         </div>
       </div>
+
+      <BlockchainPopup
+        isOpen={!!selectedBlockchain}
+        onClose={() => setSelectedBlockchain(null)}
+        blockchainData={selectedBlockchain || ''}
+        onCopySettings={() => { }}
+      />
     </CasinoLayout>
   );
 }

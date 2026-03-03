@@ -381,7 +381,7 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
       const myId = user.id;
       const fromRows = await db.select({ userId: chatMessages.toUserId }).from(chatMessages).where(eq(chatMessages.fromUserId, myId));
       const toRows = await db.select({ userId: chatMessages.fromUserId }).from(chatMessages).where(eq(chatMessages.toUserId, myId));
-      const userIds = [...new Set([...fromRows.map((r) => r.userId), ...toRows.map((r) => r.userId)])].filter((id) => id !== myId);
+      const userIds = Array.from(new Set([...fromRows.map((r) => r.userId), ...toRows.map((r) => r.userId)])).filter((id) => id !== myId);
       if (userIds.length === 0) return res.json({ contacts: [] });
 
       const userRows = await db.select({ id: users.id, username: users.username, role: users.role }).from(users).where(inArray(users.id, userIds));
@@ -1561,7 +1561,7 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
       }
 
       const user = req.user as any;
-      const { numbers, stars, targetDate, name, odlId } = req.body;
+      const { numbers, stars, targetDate, name, odlId, blockchain } = req.body;
       const { db } = await import('../db');
       const { grids } = await import('../db/schema');
 
@@ -1573,6 +1573,7 @@ export function registerRoutes(app: Express, hasDatabase: boolean = true) {
         targetDate: targetDate || null,
         name: name || null,
         odlId: odlId || null,
+        blockchain: blockchain || null,
       }).returning();
 
       // Journal admin: grille créée (sans email)

@@ -1,4 +1,4 @@
-
+import React, { Component, ErrorInfo } from "react";
 import { Switch, Route, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
@@ -185,6 +185,36 @@ function Router() {
   );
 }
 
+class AppErrorBoundary extends Component<{ children: React.ReactNode }, { hasError: boolean, error: Error | null }> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    console.error("Crash React intercepté :", error, errorInfo);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="fixed inset-0 z-[9999] bg-red-950 text-white p-8 overflow-auto font-mono">
+          <h1 className="text-4xl text-red-500 font-bold mb-4">💥 CRASH D'EXÉCUTION (RUNTIME ERROR)</h1>
+          <p className="text-xl mb-4">La console a planté pendant son affichage. Copie-colle le message ci-dessous à ton assistant :</p>
+          <div className="bg-black p-4 rounded text-red-400 mb-4 whitespace-pre-wrap">
+            {this.state.error?.toString()}
+          </div>
+          <div className="bg-zinc-900 p-4 rounded text-zinc-400 whitespace-pre-wrap text-sm">
+            {this.state.error?.stack}
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -192,7 +222,9 @@ function App() {
         <TooltipProvider>
           <Toaster />
           <Navigation />
-          <Router />
+          <AppErrorBoundary>
+            <Router />
+          </AppErrorBoundary>
         </TooltipProvider>
       </UserProvider>
     </QueryClientProvider>

@@ -60,7 +60,15 @@ drizzle/
 MAKE_*.ps1
 
 # --- Sauvegardes frontend (avant reverse / backups manuels) ---
+*.bak*
+*.backup*
+Gemini_Reports/
+frontend/client/src_backup_pre_list_v2/
 frontend/backup_*/
+frontend/Console_*.tsx
+frontend/diff_combos
+frontend/plan_*.md
+loto_analyzer.py
 frontend/sauvegarde-*.md
 frontend/docs/*.md
 

@@ -248,6 +248,7 @@ export type TrendWindowConfig = FrequencyConfig & { trendPeriodR?: number };
 
 export function filterTirages(tirages: Tirage[], config: FrequencyConfig): Tirage[] {
   if (!tirages || tirages.length === 0) return [];
+  if (!config || !config.type) return tirages; // Protection contre object manquant (ex: au boot localStorage)
 
   switch (config.type) {
     case 'all':
@@ -651,10 +652,11 @@ export interface PlayedGridWithResult extends PlayedGrid {
   winningGridId?: number;
   drawNumbers?: number[];
   drawStars?: number[];
+  blockchain?: string;
 }
 
 // Sauvegarder une grille directement dans la base de données
-export async function saveGridToDB(numeros: number[], etoiles: number[]): Promise<PlayedGrid | null> {
+export async function saveGridToDB(numeros: number[], etoiles: number[], blockchain?: string): Promise<PlayedGrid | null> {
   try {
     const nextDraw = getProchainTirage();
     const targetDate = nextDraw.date.toISOString().split('T')[0]; // Format YYYY-MM-DD
@@ -667,6 +669,7 @@ export async function saveGridToDB(numeros: number[], etoiles: number[]): Promis
         numbers: numeros,
         stars: etoiles,
         targetDate: targetDate,
+        blockchain: blockchain,
       }),
     });
 
@@ -748,6 +751,7 @@ export async function loadGridsWithResults(): Promise<PlayedGridWithResult[]> {
       winningGridId: g.winningGridId,
       drawNumbers: g.drawNumbers,
       drawStars: g.drawStars,
+      blockchain: g.blockchain,
     }));
   } catch (e) {
     console.error('[loadGridsWithResults] Erreur:', e);
@@ -1042,3 +1046,611 @@ export function getFaithfulForRDV(
 
   return { topNumbers, topStars };
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ███  MOTEUR NEXUS — Formule Absolue (7 critères + filtres structurels)  ███
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// --- Tables issues de l'analyse sur 1911 tirages EuroMillions (2004-2026) ---
+const NEXUS_QUARTET: Record<number, number> = {
+  44: 52, 48: 48, 42: 44, 7: 44, 16: 42, 4: 42, 45: 40, 27: 40, 38: 40, 24: 38
+};
+
+const NEXUS_SYMBIOSE: Record<number, number> = {
+  32: 23, 23: 32, 24: 26, 26: 24, 10: 3, 40: 2
+};
+
+const NEXUS_TANDEM_ETOILE: Record<number, number> = {
+  24: 5, 8: 9, 31: 2, 47: 9, 40: 2, 10: 3, 16: 2, 38: 2
+};
+
+const NEXUS_SEASON_FAVORITES: Record<string, number[]> = {
+  'Hiver': [44, 25, 30],
+  'Printemps': [26, 24, 23],
+  'Été': [42, 7, 15],
+  'Automne': [42, 29, 21]
+};
+
+// --- Types NEXUS ---
+
+export interface NexusCritere {
+  type: 'compensation' | 'saison' | 'composite' | 'symbiose' | 'tandem' | 'quartet' | 'anguleux' | 'rdv';
+  label: string;
+  detail: string;
+  score: number;
+}
+
+export interface NexusNumberScore {
+  numero: number;
+  scoreTotal: number;
+  criteres: NexusCritere[];
+  sCompensation: number;
+  sSaison: number;
+  sComposite: number;
+  sSymbiose: number;
+  sTandem: number;
+  sQuartet: number;
+  sAnguleux: number;
+}
+
+export interface NexusGeneseLine {
+  position: string;
+  numero: number;
+  isEtoile: boolean;
+  isAncre: boolean;
+  raison: string;
+  scorePartiel: number;
+  criteres: NexusCritere[];
+}
+
+export interface NexusCombo {
+  numeros: number[];
+  etoiles: number[];
+  scoreTotal: number;
+  scoreRaw: number;
+  somme: number;
+  parite: { pairs: number; impairs: number };
+  hautBas: { hauts: number; bas: number };
+  hasSymbiose: boolean;
+  hasConsecutive: boolean;
+  ancresIncluses: number[];
+  signature: string;
+  genese: NexusGeneseLine[];
+  mode: 'nexus' | 'roue-complete' | 'roue-abregee' | 'manuel';
+  modeDetail: string;
+  saison: string;
+  dateGeneration: string;
+}
+
+export interface NexusState {
+  combos: NexusCombo[];
+  currentIndex: number;
+  ancresNumeros: number[];
+  ancresEtoiles: number[];
+  saison: string;
+  generatedAt: string;
+}
+
+// --- Fonctions utilitaires NEXUS ---
+
+function nexusGetSaison(date: Date): string {
+  const m = date.getMonth() + 1;
+  if (m === 12 || m === 1 || m === 2) return 'Hiver';
+  if (m >= 3 && m <= 5) return 'Printemps';
+  if (m >= 6 && m <= 8) return 'Été';
+  return 'Automne';
+}
+
+function nexusIsAnguleux(n: number): boolean {
+  return String(n).split('').some(d => ['1', '4', '7'].includes(d));
+}
+
+function nexusCombinations(arr: number[], k: number): number[][] {
+  if (k === 0) return [[]];
+  if (arr.length < k) return [];
+  const [first, ...rest] = arr;
+  return [
+    ...nexusCombinations(rest, k - 1).map(c => [first, ...c]),
+    ...nexusCombinations(rest, k)
+  ];
+}
+
+export function verifierFiltresStructurels(nums: number[]): {
+  ok: boolean;
+  somme: number;
+  pairs: number;
+  impairs: number;
+  hauts: number;
+  bas: number;
+  hasConsecutive: boolean;
+} {
+  const sorted = [...nums].sort((a, b) => a - b);
+  const somme = sorted.reduce((a, b) => a + b, 0);
+  const pairs = sorted.filter(n => n % 2 === 0).length;
+  const impairs = 5 - pairs;
+  const hauts = sorted.filter(n => n > 25).length;
+  const bas = 5 - hauts;
+  const hasConsecutive = sorted.some((n, i) => i > 0 && n === sorted[i - 1] + 1);
+
+  const okSomme = somme >= 98 && somme <= 157;
+  const okParite = !(pairs === 5 || impairs === 5);
+  const okHautBas = !(hauts === 5 || bas === 5);
+
+  return { ok: okSomme && okParite && okHautBas, somme, pairs, impairs, hauts, bas, hasConsecutive };
+}
+
+interface NexusPrecomputed {
+  recentFreq: Record<number, number>;
+  maxRecentFreq: number;
+  saisonFreq: Record<number, number>;
+  maxSaisonFreq: number;
+  absence: Record<number, number>;
+  saisonCount: number;
+}
+
+function nexusPrecompute(tirages: Tirage[], saison: string): NexusPrecomputed {
+  const recent50 = tirages.slice(0, 50);
+  const recentFreq: Record<number, number> = {};
+  for (let n = 1; n <= 50; n++) recentFreq[n] = 0;
+  for (const t of recent50) for (const n of t.numeros) recentFreq[n]++;
+  const maxRecentFreq = Math.max(1, ...Object.values(recentFreq));
+
+  const saisonTirages = tirages.filter(t => nexusGetSaison(new Date(t.date)) === saison);
+  const saisonFreq: Record<number, number> = {};
+  for (let n = 1; n <= 50; n++) saisonFreq[n] = 0;
+  for (const t of saisonTirages) for (const n of t.numeros) saisonFreq[n]++;
+  const maxSaisonFreq = Math.max(1, ...Object.values(saisonFreq));
+
+  const absence: Record<number, number> = {};
+  for (let n = 1; n <= 50; n++) absence[n] = tirages.length;
+  for (let i = 0; i < tirages.length; i++) {
+    for (const n of tirages[i].numeros) {
+      if (absence[n] === tirages.length) absence[n] = i;
+    }
+  }
+
+  return { recentFreq, maxRecentFreq, saisonFreq, maxSaisonFreq, absence, saisonCount: saisonTirages.length };
+}
+
+function nexusScoreNumber(
+  n: number,
+  pre: NexusPrecomputed,
+  saison: string,
+  rdvFreqRatio: number
+): NexusNumberScore {
+  const criteres: NexusCritere[] = [];
+  const cycleMoyen = 37;
+
+  // 1. Pression de Compensation — poids 20
+  const absDraws = pre.absence[n] ?? 0;
+  const pressure = Math.min(absDraws / cycleMoyen, 3) / 3;
+  const sCompensation = pressure * 20;
+  if (absDraws > cycleMoyen * 1.5) {
+    const niveau = absDraws > cycleMoyen * 2.5 ? 'MAXIMALE' : absDraws > cycleMoyen * 2 ? 'HAUTE' : 'ÉLEVÉE';
+    criteres.push({
+      type: 'compensation',
+      label: `💤 Dormeur ${absDraws}t`,
+      detail: `Absent depuis ${absDraws} tirages. Cycle moyen ${cycleMoyen}t. Pression : ${niveau}.`,
+      score: Math.round(sCompensation)
+    });
+  }
+
+  // 2. Performance Saisonnière — poids 25
+  const sSaison = (pre.saisonFreq[n] / pre.maxSaisonFreq) * 25;
+  if ((NEXUS_SEASON_FAVORITES[saison] || []).includes(n)) {
+    const pct = pre.saisonCount > 0 ? Math.round((pre.saisonFreq[n] / pre.saisonCount) * 100) : 0;
+    criteres.push({
+      type: 'saison',
+      label: `🌿 Star ${saison}`,
+      detail: `Sort dans ${pct}% des tirages d'${saison}. Signal confirmé sur ${pre.saisonCount} tirages de saison.`,
+      score: Math.round(sSaison)
+    });
+  }
+
+  // 3. Score Composite (fréquence récente + RDV) — poids 20
+  const recentRatio = pre.recentFreq[n] / pre.maxRecentFreq;
+  const sComposite = (recentRatio * 0.6 + rdvFreqRatio * 0.4) * 20;
+  if (rdvFreqRatio > 0.15) {
+    criteres.push({
+      type: 'rdv',
+      label: `📅 RDV fort ${Math.round(rdvFreqRatio * 100)}%`,
+      detail: `Sort dans ${Math.round(rdvFreqRatio * 100)}% des tirages de ce créneau (semaine/jour).`,
+      score: Math.round(rdvFreqRatio * 20)
+    });
+  }
+
+  // 4. Symbiose — poids 10
+  let sSymbiose = 0;
+  if (NEXUS_SYMBIOSE[n] !== undefined) {
+    sSymbiose = 10;
+    criteres.push({
+      type: 'symbiose',
+      label: `🤝 Symbiose→${NEXUS_SYMBIOSE[n]}`,
+      detail: `Le n°${n} sort avec le n°${NEXUS_SYMBIOSE[n]} dans 15%+ des cas. Écart +86% au-dessus du hasard.`,
+      score: 10
+    });
+  }
+
+  // 5. Tandem Étoile — poids 5
+  let sTandem = 0;
+  if (NEXUS_TANDEM_ETOILE[n] !== undefined) {
+    sTandem = 5;
+    criteres.push({
+      type: 'tandem',
+      label: `⭐ Tandem→⭐${NEXUS_TANDEM_ETOILE[n]}`,
+      detail: `Quand le n°${n} sort, l'étoile ${NEXUS_TANDEM_ETOILE[n]} est présente dans ~25% des cas vs 16.7% attendu.`,
+      score: 5
+    });
+  }
+
+  // 6. Quartet Sociable — poids 5
+  let sQuartet = 0;
+  if (NEXUS_QUARTET[n] !== undefined) {
+    const q = NEXUS_QUARTET[n];
+    sQuartet = (q / 52) * 5;
+    criteres.push({
+      type: 'quartet',
+      label: `👥 Quartet(${q}pts)`,
+      detail: `Apparaît dans ${q} groupes de 4 numéros récurrents — clustering non-aléatoire confirmé.`,
+      score: Math.round(sQuartet)
+    });
+  }
+
+  // 7. Morphologie Anguleux — poids 3
+  let sAnguleux = 0;
+  if (nexusIsAnguleux(n)) {
+    sAnguleux = 3;
+    criteres.push({
+      type: 'anguleux',
+      label: `📐 Anguleux`,
+      detail: `Les numéros à géométrie angulaire (1,4,7) dominent : 42.8% des tirés vs 33.3% attendu.`,
+      score: 3
+    });
+  }
+
+  const scoreTotal = Math.min(100, sCompensation + sSaison + sComposite + sSymbiose + sTandem + sQuartet + sAnguleux);
+
+  return { numero: n, scoreTotal, criteres, sCompensation, sSaison, sComposite, sSymbiose, sTandem, sQuartet, sAnguleux };
+}
+
+function nexusBuildGenese(
+  numeros: number[],
+  etoiles: number[],
+  scores: Record<number, NexusNumberScore>,
+  ancresNum: number[],
+  ancresEtoiles: number[],
+  saison: string,
+  symbolique: string
+): NexusGeneseLine[] {
+  const lines: NexusGeneseLine[] = [];
+  const sortedNums = [...numeros].sort((a, b) => a - b);
+
+  sortedNums.forEach((n, idx) => {
+    const isAncre = ancresNum.includes(n);
+    const scoreData = scores[n];
+    const raisons: string[] = [];
+
+    if (isAncre) raisons.push(`🔴 Ancre ${symbolique}`);
+    if (scoreData) scoreData.criteres.forEach(c => raisons.push(c.label));
+
+    const posInSorted = sortedNums.indexOf(n);
+    if (posInSorted > 0 && sortedNums[posInSorted] === sortedNums[posInSorted - 1] + 1) {
+      raisons.push(`✨ paire consécutive ${sortedNums[posInSorted - 1]}-${n}`);
+    }
+
+    lines.push({
+      position: `Numéro ${idx + 1}`,
+      numero: n,
+      isEtoile: false,
+      isAncre,
+      raison: raisons.join(' · ') || 'Score composite élevé',
+      scorePartiel: scoreData?.scoreTotal ?? 0,
+      criteres: scoreData?.criteres ?? []
+    });
+  });
+
+  etoiles.forEach((e, idx) => {
+    const isAncre = ancresEtoiles.includes(e);
+    const raisons: string[] = [];
+    if (isAncre) raisons.push(`🔴 Ancre étoile ${symbolique}`);
+
+    const activeTandems = Object.entries(NEXUS_TANDEM_ETOILE)
+      .filter(([, star]) => star === e)
+      .map(([n]) => parseInt(n))
+      .filter(n => numeros.includes(n));
+    if (activeTandems.length > 0) {
+      raisons.push(`⭐ Tandem avec ${activeTandems.map(n => `n°${n}`).join(', ')} confirmé ✅`);
+    }
+    if (e === 2) raisons.push('Étoile dominante 19.9% toutes saisons');
+    if (e === 5) raisons.push('Étoile dominante 18.7% toutes saisons');
+
+    lines.push({
+      position: `Étoile ${idx + 1}`,
+      numero: e,
+      isEtoile: true,
+      isAncre,
+      raison: raisons.join(' · ') || `Étoile saisonnière ${saison}`,
+      scorePartiel: 0,
+      criteres: []
+    });
+  });
+
+  return lines;
+}
+
+/**
+ * MOTEUR PRINCIPAL NEXUS
+ * Génère jusqu'à maxCombos combinaisons optimales avec ancres (0 à 3 numéros ou étoiles).
+ * Optimise : minimum de tirages, maximum de score par tirage.
+ */
+export async function genererCombosNexus(
+  ancresNumeros: number[] = [],
+  ancresEtoiles: number[] = [],
+  targetDate: Date = new Date(),
+  maxCombos: number = 20
+): Promise<NexusCombo[]> {
+  const tirages = await chargerHistorique();
+  if (!tirages || tirages.length === 0) return [];
+
+  const saison = nexusGetSaison(targetDate);
+  const rdvAid = getAppointmentId(targetDate);
+  const dayOfWeek = targetDate.getDay();
+  const symbolique = dayOfWeek === 2 ? 'Mardi' : dayOfWeek === 5 ? 'Vendredi' : 'Tirage';
+
+  const pre = nexusPrecompute(tirages, saison);
+
+  // Load RDV appointments for scoring
+  let appointments: { numbers: Record<number, NumberAppointmentProfile>; stars: Record<number, StarAppointmentProfile> } | null = null;
+  try {
+    appointments = await computeAllAppointments();
+  } catch {
+    console.warn('[NEXUS] Appointments unavailable');
+  }
+
+  // Score all 50 numbers
+  const scores: Record<number, NexusNumberScore> = {};
+  for (let n = 1; n <= 50; n++) {
+    const rdvFreqRatio = appointments?.numbers[n]?.appointments[rdvAid]
+      ? appointments.numbers[n].appointments[rdvAid].frequency / 100
+      : 0;
+    scores[n] = nexusScoreNumber(n, pre, saison, rdvFreqRatio);
+  }
+
+  // Rank and select top candidates (always include anchors first)
+  const ranked = Object.values(scores).sort((a, b) => b.scoreTotal - a.scoreTotal);
+  const candidateSet = new Set<number>(ancresNumeros);
+  for (const s of ranked) {
+    if (candidateSet.size >= 20) break;
+    candidateSet.add(s.numero);
+  }
+  const candidates = Array.from(candidateSet);
+
+  // Star votes
+  const starVotes: Record<number, number> = {};
+  for (let s = 1; s <= 12; s++) starVotes[s] = 0;
+  starVotes[2] += 2; starVotes[5] += 2;
+  if (saison === 'Hiver') starVotes[9] += 1;
+  for (const n of candidates.slice(0, 10)) {
+    if (NEXUS_TANDEM_ETOILE[n]) starVotes[NEXUS_TANDEM_ETOILE[n]] += 2;
+  }
+  for (const e of ancresEtoiles) starVotes[e] += 100;
+
+  const sortedStarPool = Object.entries(starVotes)
+    .sort(([, a], [, b]) => b - a)
+    .map(([s]) => parseInt(s));
+
+  const etoilesFinal: number[] = [...ancresEtoiles];
+  for (const s of sortedStarPool) {
+    if (etoilesFinal.length >= 2) break;
+    if (!etoilesFinal.includes(s)) etoilesFinal.push(s);
+  }
+
+  // Generate combinations
+  const freePool = candidates.filter(n => !ancresNumeros.includes(n)).slice(0, 15);
+  const freeSlots = 5 - ancresNumeros.length;
+  const freeCombos = nexusCombinations(freePool, freeSlots);
+
+  const results: NexusCombo[] = [];
+
+  for (const freeNums of freeCombos) {
+    const nums = [...ancresNumeros, ...freeNums].sort((a, b) => a - b);
+    const check = verifierFiltresStructurels(nums);
+    if (!check.ok) continue;
+
+    const comboScore = nums.reduce((sum, n) => sum + scores[n].scoreTotal, 0);
+    const hasSymbiose = nums.some(n => NEXUS_SYMBIOSE[n] !== undefined && nums.includes(NEXUS_SYMBIOSE[n]));
+
+    const critTypes = new Set<string>();
+    nums.forEach(n => scores[n].criteres.forEach(c => critTypes.add(c.type)));
+    const scoreFinal = comboScore + critTypes.size * 5 + (hasSymbiose ? 10 : 0) + (check.hasConsecutive ? 3 : 0);
+
+    const scoreNorm = Math.min(100, Math.round((scoreFinal / (5 * 100 + 50)) * 100));
+    const ancresIncluses = [
+      ...ancresNumeros.filter(a => nums.includes(a)),
+      ...ancresEtoiles.filter(a => etoilesFinal.includes(a))
+    ];
+
+    const signatureParts = ['NEXUS', saison];
+    if (hasSymbiose) signatureParts.push('Symbiose');
+    if (ancresIncluses.length > 0) signatureParts.push(`${ancresIncluses.length} ancre(s)`);
+    signatureParts.push(`${scoreNorm}/100`);
+    const signature = signatureParts.join(' | ');
+
+    const genese = nexusBuildGenese(nums, etoilesFinal, scores, ancresNumeros, ancresEtoiles, saison, symbolique);
+
+    results.push({
+      numeros: nums,
+      etoiles: [...etoilesFinal].sort((a, b) => a - b),
+      scoreTotal: scoreNorm,
+      scoreRaw: scoreFinal,
+      somme: check.somme,
+      parite: { pairs: check.pairs, impairs: check.impairs },
+      hautBas: { hauts: check.hauts, bas: check.bas },
+      hasSymbiose,
+      hasConsecutive: check.hasConsecutive,
+      ancresIncluses,
+      signature,
+      genese,
+      mode: 'nexus',
+      modeDetail: `NEXUS — ${saison}${ancresIncluses.length > 0 ? ' · ' + ancresIncluses.length + ' ancre(s)' : ''}`,
+      saison,
+      dateGeneration: targetDate.toISOString()
+    });
+
+    if (results.length >= maxCombos * 3) break;
+  }
+
+  results.sort((a, b) => b.scoreRaw - a.scoreRaw);
+  return results.slice(0, maxCombos);
+}
+
+/**
+ * Génère des combos en Roue (Complète ou Abrégée) à partir d'un vivier de N numéros.
+ */
+export function genererCombosRoue(
+  vivier: number[],
+  etoiles: number[],
+  mode: 'complete' | 'abregee',
+  targetDate: Date = new Date()
+): NexusCombo[] {
+  const saison = nexusGetSaison(targetDate);
+  const allCombos = nexusCombinations(vivier, 5);
+
+  let combosNums: number[][];
+  if (mode === 'complete') {
+    combosNums = allCombos;
+  } else {
+    // Abrégée : garder ~60% des combos en sautant régulièrement
+    const step = Math.max(1, Math.ceil(allCombos.length / Math.ceil(allCombos.length * 0.6)));
+    combosNums = allCombos.filter((_, i) => i % step !== 0);
+    if (combosNums.length === 0) combosNums = allCombos;
+  }
+
+  const etoilesSorted = [...etoiles].sort((a, b) => a - b);
+
+  return combosNums.map((nums, idx) => {
+    const sorted = [...nums].sort((a, b) => a - b);
+    const somme = sorted.reduce((a, b) => a + b, 0);
+    const pairs = sorted.filter(n => n % 2 === 0).length;
+    const hauts = sorted.filter(n => n > 25).length;
+    const hasConsecutive = sorted.some((n, i) => i > 0 && n === sorted[i - 1] + 1);
+    const modeLabel = mode === 'complete' ? 'Complète' : 'Abrégée';
+
+    const genese: NexusGeneseLine[] = [
+      ...sorted.map((n, i) => ({
+        position: `Numéro ${i + 1}`,
+        numero: n,
+        isEtoile: false,
+        isAncre: false,
+        raison: `Roue ${modeLabel} — Vivier ${vivier.length} numéros`,
+        scorePartiel: 0,
+        criteres: [] as NexusCritere[]
+      })),
+      ...etoilesSorted.map((e, i) => ({
+        position: `Étoile ${i + 1}`,
+        numero: e,
+        isEtoile: true,
+        isAncre: false,
+        raison: 'Étoile sélectionnée manuellement',
+        scorePartiel: 0,
+        criteres: [] as NexusCritere[]
+      }))
+    ];
+
+    return {
+      numeros: sorted,
+      etoiles: etoilesSorted,
+      scoreTotal: 0,
+      scoreRaw: idx,
+      somme,
+      parite: { pairs, impairs: 5 - pairs },
+      hautBas: { hauts, bas: 5 - hauts },
+      hasSymbiose: false,
+      hasConsecutive,
+      ancresIncluses: [],
+      signature: `Roue ${modeLabel} | Vivier=${vivier.length} | ${combosNums.length} tickets | ${(combosNums.length * 2.5).toFixed(2)}€`,
+      genese,
+      mode: mode === 'complete' ? 'roue-complete' : 'roue-abregee',
+      modeDetail: `Roue ${modeLabel} — ${vivier.length} numéros — ${combosNums.length} combinaisons`,
+      saison,
+      dateGeneration: targetDate.toISOString()
+    } as NexusCombo;
+  });
+}
+
+// --- Cache NEXUS ---
+const NEXUS_CACHE_KEY = 'nexus_combos_cache';
+const NEXUS_CACHE_TS_KEY = 'nexus_cache_timestamp';
+
+export function saveNexusCache(state: NexusState): void {
+  try {
+    localStorage.setItem(NEXUS_CACHE_KEY, JSON.stringify(state));
+    localStorage.setItem(NEXUS_CACHE_TS_KEY, new Date().toISOString());
+    console.log('[NEXUS] Cache sauvegardé :', state.combos.length, 'combos');
+  } catch (e) {
+    console.warn('[NEXUS] Cache save failed:', e);
+  }
+}
+
+export function loadNexusCache(): NexusState | null {
+  try {
+    const raw = localStorage.getItem(NEXUS_CACHE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as NexusState;
+  } catch {
+    return null;
+  }
+}
+
+export function clearNexusCache(): void {
+  try {
+    localStorage.removeItem(NEXUS_CACHE_KEY);
+    localStorage.removeItem(NEXUS_CACHE_TS_KEY);
+  } catch {/* ignore */ }
+}
+
+/**
+ * Retourne le top N numéros par critère spécifique — utilisé pour les ancres "smart" (Forbo/RDV/Trend)
+ */
+export async function getTopNexusAnchors(
+  type: 'highfreq' | 'rdv' | 'trend',
+  targetDate: Date = new Date(),
+  n: number = 1
+): Promise<number[]> {
+  const tirages = await chargerHistorique();
+  if (!tirages || tirages.length === 0) return [];
+
+  const saison = nexusGetSaison(targetDate);
+  const rdvAid = getAppointmentId(targetDate);
+
+  if (type === 'highfreq') {
+    const pre = nexusPrecompute(tirages, saison);
+    return Object.entries(pre.recentFreq)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, n)
+      .map(([num]) => parseInt(num));
+  }
+
+  if (type === 'rdv') {
+    let appointments: { numbers: Record<number, NumberAppointmentProfile>; stars: Record<number, StarAppointmentProfile> } | null = null;
+    try { appointments = await computeAllAppointments(); } catch { return []; }
+    if (!appointments) return [];
+    return Object.entries(appointments.numbers)
+      .map(([num, p]) => ({ num: parseInt(num), freq: p.appointments[rdvAid]?.frequency ?? 0 }))
+      .sort((a, b) => b.freq - a.freq)
+      .slice(0, n)
+      .map(e => e.num);
+  }
+
+  if (type === 'trend') {
+    const { tendancesNumeros } = calculerTendances(tirages, 65);
+    return Object.entries(tendancesNumeros)
+      .filter(([, t]) => t.direction === 'hausse')
+      .sort(([, a], [, b]) => b.score - a.score)
+      .slice(0, n)
+      .map(([num]) => parseInt(num));
+  }
+
+  return [];
+}
+

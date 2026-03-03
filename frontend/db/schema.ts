@@ -17,6 +17,15 @@ export const users = pgTable('users', {
 });
 
 // ============================================
+// TABLE SESSION - Sessions utilisateurs (express-session)
+// ============================================
+export const session = pgTable('session', {
+  sid: varchar('sid').primaryKey(),
+  sess: json('sess').notNull(),
+  expire: timestamp('expire', { precision: 6 }).notNull(),
+});
+
+// ============================================
 // TABLE DRAWS - Historique des tirages EuroMillions
 // ============================================
 export const draws = pgTable('draws', {
@@ -39,6 +48,7 @@ export const grids = pgTable('grids', {
   playedAt: timestamp('played_at').notNull(),      // Date de jeu
   targetDate: date('target_date'),                 // Date du tirage visé
   name: varchar('name', { length: 100 }),          // Nom optionnel
+  blockchain: text('blockchain'),                  // Empreinte encodée pour reproduire ce combo
   createdAt: timestamp('created_at').defaultNow(),
 });
 
@@ -287,5 +297,10 @@ export type TemplateVariable = typeof templateVariables.$inferSelect;
 export type NewTemplateVariable = typeof templateVariables.$inferInsert;
 
 export type ChatMessageRow = typeof chatMessages.$inferSelect;
-export type NewChatMessageRow = typeof chatMessages.$inferInsert;export type ChatRead = typeof chatReads.$inferSelect;
+export type NewChatMessageRow = typeof chatMessages.$inferInsert;
+
+export type ChatRead = typeof chatReads.$inferSelect;
 export type NewChatRead = typeof chatReads.$inferInsert;
+
+export type Session = typeof session.$inferSelect;
+export type NewSession = typeof session.$inferInsert;

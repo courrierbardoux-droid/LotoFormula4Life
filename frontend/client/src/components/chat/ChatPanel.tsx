@@ -383,330 +383,390 @@ export function ChatPanel({ onClose, isOpen, currentUserId, currentUsername, cur
   };
 
   return (
-    <div className="flex flex-col h-full bg-zinc-950 min-h-0" onClick={closeContextMenu}>
-
-      {/* HEADER INTEGRE */}
-      <div className="flex items-center p-4 border-b border-zinc-800 shrink-0">
-        <button
-          type="button"
-          onClick={onClose}
-          className="w-10 h-10 rounded-full border-2 border-red-600 bg-red-950/50 text-red-500 hover:bg-red-900/50 hover:text-red-400 flex items-center justify-center flex-shrink-0"
-          title="Fermer"
-        >
-          <span className="text-2xl font-bold leading-none">×</span>
-        </button>
-
-        {/* Titre CHAT */}
-        <h2 className="flex-1 text-center font-orbitron text-lg text-casino-gold tracking-widest pl-2">CHAT</h2>
-
-        {/* Zone Droite (Dropdown Admin ou Bouton User) */}
-        <div className="flex-shrink-0 ml-4 relative">
-          {currentUserRole === 'admin' ? (
-            // MODE ADMIN : Menu déroulant style "Tarifs"
-            <div className="relative">
-              <div
-                className="flex flex-col items-center group cursor-pointer"
-                onClick={(e) => { e.stopPropagation(); setIsUserListOpen(!isUserListOpen); }}
-                title="Démarrer une discussion"
-              >
-                <div className="flex items-center gap-2 text-casino-gold font-orbitron font-bold text-sm md:text-base leading-none shadow-gold-glow whitespace-nowrap">
-                  <span>DISCUTER AVEC...</span>
-                  <ChevronDown size={16} className={cn("transition-transform", isUserListOpen && "rotate-180")} />
-                </div>
-              </div>
-              {isUserListOpen && (
-                <div
-                  className="absolute top-full right-0 mt-2 w-64 bg-zinc-950 border border-zinc-600 rounded-lg shadow-[0_20px_60px_rgba(0,0,0,0.9)] z-[9999] max-h-[60vh] overflow-y-auto custom-scrollbar ring-1 ring-white/10"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <div className="p-2 border-b border-zinc-800 bg-zinc-900/95 sticky top-0 backdrop-blur-md z-10">
-                    <div className="text-xs font-bold text-center text-zinc-300 font-rajdhani tracking-widest">UTILISATEURS ({allUsers.length})</div>
-                  </div>
-                  <div className="flex flex-col">
-                    {allUsers.map(u => (
-                      <button
-                        key={u.id}
-                        onClick={() => handleAdminSelectUser(u)}
-                        className={cn(
-                          "flex items-center justify-between px-3 py-2 hover:bg-zinc-800/80 active:bg-zinc-700 transition-all border-b border-zinc-800/50 last:border-0 text-left text-sm",
-                          u.id === currentUserId ? "opacity-50 cursor-default" : "cursor-pointer"
-                        )}
-                        disabled={u.id === currentUserId}
-                      >
-                        <span className={cn(
-                          "font-rajdhani font-medium truncate",
-                          u.role === 'admin' ? "text-red-400" : "text-zinc-300"
-                        )}>
-                          {u.username}
-                        </span>
-                        {u.role === 'admin' && <span className="text-[10px] text-red-500 border border-red-900 px-1 rounded bg-red-950/30">ADMIN</span>}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            // MODE USER : Bouton "Contacter Admin"
-            <button
-              onClick={handleContactAdmin}
-              className="flex items-center px-3 py-1.5 rounded border border-casino-gold/40 text-casino-gold bg-black/40 hover:bg-casino-gold/10 hover:border-casino-gold transition-all font-orbitron text-xs font-bold tracking-wider shadow-gold-glow whitespace-nowrap"
-              title="Parler à l'administrateur"
-            >
-              CONTACTER L'ADMIN
-            </button>
-          )}
-        </div>
-      </div>
-
-      <div className="flex flex-1 min-h-0">
-        {/* Liste des connectés */}
-        <div className="w-52 min-w-[11rem] border-r border-zinc-800 flex flex-col overflow-hidden relative">
-          <div className="p-2 text-zinc-500 text-base uppercase tracking-wider font-bold">
-            {currentUserRole === 'admin' ? 'Contacts' : 'Support'}
-          </div>
-          <div className="flex-1 overflow-y-auto">
-            {!connected && <div className="p-2 text-zinc-500 text-lg">Connexion…</div>}
-
-            {connected && others.length === 0 && (
-              <div className="p-2 text-zinc-500 font-rajdhani italic text-sm text-center mt-4 opacity-60">
-                {currentUserRole === 'admin' ? 'Aucune discussion récente.' : 'Cliquez sur "CONTACTER L\'ADMIN" pour commencer.'}
-              </div>
-            )}
-
-            {others.map((u) => (
-              <button
-                key={u.userId}
-                type="button"
-                onClick={() => setSelectedUserId(u.userId)}
-                onContextMenu={(e) => handleContextMenu(e, u.userId)}
-                className={cn(
-                  'w-full text-left px-3 py-2 text-lg rounded-r transition-colors flex items-center justify-between gap-1 group relative',
-                  selectedUserId === u.userId
-                    ? 'bg-casino-gold/20 text-casino-gold border-l-2 border-casino-gold'
-                    : 'text-zinc-300 hover:bg-zinc-800'
-                )}
-              >
-                <span className="flex items-center gap-1.5 min-w-0">
-                  <span
-                    className={cn(
-                      'w-2.5 h-2.5 rounded-full flex-shrink-0',
-                      u.isOnline ? 'bg-green-500' : 'bg-red-500'
-                    )}
-                    title={u.isOnline ? 'En ligne' : 'Hors ligne'}
-                  />
-                  <span className="truncate">{u.username}</span>
-                </span>
-                {(unreadCountByUser[u.userId] ?? 0) > 0 && (
-                  <span className="text-red-500 font-mono tabular-nums text-base flex-shrink-0">
-                    {unreadCountByUser[u.userId]}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Conversation */}
-        <div className="flex-1 flex flex-col min-w-0">
-          {!selectedUserId ? (
-            <div className="flex-1 flex items-center justify-center text-zinc-500 text-lg p-4 font-rajdhani">
-              Sélectionnez un contact à gauche.
-            </div>
-          ) : (
-            <>
-              <div className="p-2 border-b border-zinc-800 text-zinc-400 text-lg font-bold flex justify-between items-center">
-                <span>Conversation avec {selectedUsername}</span>
-              </div>
-
-              {/* Messages */}
-              <div
-                className="flex-1 overflow-y-auto p-3 space-y-2"
-                onDrop={onDrop}
-                onDragOver={onDragOver}
-              >
-                {messages.map((msg) => {
-                  const isMe = msg.from === currentUserId;
-                  return (
-                    <div
-                      key={`${msg.at}-${msg.from}-${msg.text.slice(0, 20)}`}
-                      className={cn(
-                        'flex',
-                        isMe ? 'justify-end' : 'justify-start'
-                      )}
-                    >
-                      <div
-                        className={cn(
-                          'max-w-[85%] rounded-lg px-3 py-2 text-base shadow-sm',
-                          isMe
-                            ? 'bg-blue-900/60 text-blue-100 border border-blue-700/50'
-                            : 'bg-zinc-800 text-zinc-200 border border-zinc-700'
-                        )}
-                      >
-                        {!isMe && (
-                          <div className="text-xs uppercase font-bold text-zinc-500 mb-0.5">
-                            {msg.from === selectedUserId ? selectedUsername : 'Autre'}
-                          </div>
-                        )}
-                        <div className="whitespace-pre-wrap break-words text-lg font-sans">{msg.text}</div>
-                        {msg.attachment && (
-                          <div className="mt-2 flex flex-col gap-1 border-t border-white/10 pt-1">
-                            <span className="text-sm text-zinc-400 flex items-center gap-1">📎 {msg.attachment.name}</span>
-                            <DownloadAttachmentButton attachment={msg.attachment} />
-                          </div>
-                        )}
-                        <div className={cn(
-                          "text-[10px] mt-1 opacity-70 select-none font-rajdhani",
-                          isMe ? "text-blue-200 text-right" : "text-zinc-500 text-left"
-                        )}>
-                          {(() => {
-                            const d = new Date(msg.at);
-                            const now = new Date();
-                            const isToday = d.toDateString() === now.toDateString();
-                            return isToday
-                              ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                              : d.toLocaleDateString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
-                          })()}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-
-                {/* Typing indicator */}
-                {typingUsername && (
-                  <div className="flex justify-start">
-                    <div className="bg-zinc-800 rounded-lg px-3 py-2 border border-zinc-700 flex items-center gap-1">
-                      <span className="flex gap-1">
-                        <span className="w-2 h-2 rounded-full bg-zinc-400 animate-bounce" style={{ animationDelay: '0ms' }} />
-                        <span className="w-2 h-2 rounded-full bg-zinc-400 animate-bounce" style={{ animationDelay: '150ms' }} />
-                        <span className="w-2 h-2 rounded-full bg-zinc-400 animate-bounce" style={{ animationDelay: '300ms' }} />
-                      </span>
-                      <span className="text-sm text-zinc-500 ml-1 italic">{typingUsername} écrit…</span>
-                    </div>
-                  </div>
-                )}
-
-                <div ref={messagesEndRef} />
-              </div>
-
-              {/* Pièces jointes en attente */}
-              {pendingFiles.length > 0 && (
-                <div className="px-3 py-2 flex items-center gap-2 text-sm text-zinc-400 bg-zinc-900/50 border-t border-zinc-800">
-                  📎 {pendingFiles.map((f) => f.name).join(', ')}
-                  <button
-                    type="button"
-                    onClick={() => setPendingFiles([])}
-                    className="text-red-400 hover:text-red-300 ml-2"
-                  >
-                    (Retirer)
-                  </button>
-                </div>
-              )}
-
-              {/* Zone saisie */}
-              <div className="relative p-2 border-t border-zinc-800 space-y-2 bg-zinc-950">
-                <div className="flex gap-2">
-                  <textarea
-                    value={draft}
-                    onChange={(e) => handleDraftChange(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        handleSend();
-                      }
-                    }}
-                    placeholder="Votre message..."
-                    rows={1}
-                    className="flex-1 min-w-0 rounded-lg bg-zinc-900 border border-zinc-700 px-3 py-2 text-base text-white placeholder-zinc-600 resize-none focus:outline-none focus:border-casino-gold/50 focus:ring-1 focus:ring-casino-gold/20 transition-all custom-scrollbar"
-                    style={{ minHeight: '44px', maxHeight: '120px' }}
-                  />
-                  <div className="flex flex-col gap-1 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                      className="w-10 h-10 rounded-lg border border-zinc-700 text-zinc-400 hover:border-casino-gold hover:text-casino-gold hover:bg-zinc-900 flex items-center justify-center transition-colors"
-                      title="Ajouter un fichier"
-                    >
-                      📎
-                    </button>
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      className="hidden"
-                      onChange={onFileInputChange}
-                    />
-                  </div>
-                  <div className="flex flex-col gap-1 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => setShowEmoji((s) => !s)}
-                      className="w-10 h-10 rounded-lg border border-zinc-700 text-zinc-400 hover:border-casino-gold hover:text-casino-gold hover:bg-zinc-900 flex items-center justify-center transition-colors text-xl"
-                      title="Emojis"
-                    >
-                      😀
-                    </button>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleSend}
-                    className="w-12 h-auto rounded-lg bg-casino-gold/90 text-black font-bold hover:bg-casino-gold transition-colors flex items-center justify-center shadow-gold-glow"
-                    title="Envoyer"
-                  >
-                    ➤
-                  </button>
-                </div>
-
-                {showEmoji && (
-                  <>
-                    <div className="fixed inset-0 z-30" onClick={() => setShowEmoji(false)} />
-                    <div className="absolute bottom-full right-2 mb-2 z-40 shadow-2xl relative group">
-                      <button
-                        className="absolute -top-3 -left-3 z-50 bg-red-600 text-white rounded-full w-6 h-6 flex items-center justify-center shadow-md hover:bg-red-500 transition-colors border border-white/20"
-                        onClick={() => setShowEmoji(false)}
-                        title="Fermer"
-                      >
-                        <X size={14} strokeWidth={3} />
-                      </button>
-                      <EmojiPicker onEmojiClick={handleEmojiClick} theme={Theme.DARK} width={300} height={350} />
-                    </div>
-                  </>
-                )}
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* MENU CONTEXTUEL (PORTAL OU ABSOLUTE) */}
-      {contextMenu && (
+    <>
+      {/* Overlay de fond pour fermer */}
+      {isOpen && (
         <div
-          className="fixed z-[10000] min-w-[160px] bg-zinc-900 border border-zinc-600 rounded-lg shadow-2xl py-1 animate-in fade-in zoom-in-95 duration-100"
-          style={{ top: contextMenu.y, left: contextMenu.x }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <button
-            className="w-full text-left px-4 py-2 hover:bg-zinc-800 text-zinc-200 flex items-center gap-2"
-            onClick={() => executeContextAction('open')}
-          >
-            <Eye size={16} /> <span>Ouvrir</span>
-          </button>
-          <button
-            className="w-full text-left px-4 py-2 hover:bg-zinc-800 text-zinc-200 flex items-center gap-2"
-            onClick={() => executeContextAction('close')}
-          >
-            <EyeOff size={16} /> <span>Fermer</span>
-          </button>
-          <div className="h-px bg-zinc-700 my-1" />
-          <button
-            className="w-full text-left px-4 py-2 hover:bg-red-900/30 text-red-400 flex items-center gap-2"
-            onClick={() => executeContextAction('remove')}
-          >
-            <Trash2 size={16} /> <span>Enlever</span>
-          </button>
-        </div>
+          onClick={onClose}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0,0,0,0.5)',
+            zIndex: 40,
+            backdropFilter: 'blur(4px)',
+          }}
+        />
       )}
 
-    </div>
+      <div
+        className="flex flex-col h-[745px] min-h-0 overflow-hidden"
+        style={{
+          position: 'absolute',
+          bottom: 0,
+          right: 0,
+          background: 'rgba(10, 10, 30, 0.98)',
+          backdropFilter: 'blur(20px)',
+          borderLeft: '2px solid rgba(180, 83, 9, 0.6)',
+          borderTopLeftRadius: '8px',
+          width: '560px',
+          zIndex: 50,
+          transition: 'transform 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+          transform: isOpen ? 'translateX(0)' : 'translateX(130%)',
+          boxShadow: isOpen ? '-10px 0 40px rgba(0,0,0,0.8)' : 'none',
+        }}
+        onClick={closeContextMenu}
+      >
+        {/* HEADER NEXUS-STYLE */}
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          padding: '12px 20px',
+          borderBottom: '1px solid rgba(255,255,255,0.08)',
+          background: 'linear-gradient(90deg, rgba(180, 83, 9, 0.2), transparent)',
+          flexShrink: 0,
+          gap: 15
+        }}>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              background: 'rgba(255,255,255,0.1)',
+              border: 'none',
+              borderRadius: '50%',
+              width: 46,
+              height: 46,
+              color: '#fff',
+              cursor: 'pointer',
+              fontSize: 26,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}
+            title="Fermer"
+          >
+            <span className="leading-none">×</span>
+          </button>
+
+          {/* Titre CHAT Orbitron */}
+          <h2 style={{
+            fontSize: 26,
+            fontWeight: 900,
+            color: '#d97706',
+            letterSpacing: 1.8,
+            fontFamily: 'Orbitron, sans-serif'
+          }}>
+            CHAT
+          </h2>
+
+          {/* Zone Droite (Dropdown Admin ou Bouton User) */}
+          <div className="flex-1 flex justify-end items-center">
+            {currentUserRole === 'admin' ? (
+              // MODE ADMIN : Menu déroulant style "Tarifs"
+              <div className="relative">
+                <div
+                  className="flex flex-col items-center group cursor-pointer"
+                  onClick={(e) => { e.stopPropagation(); setIsUserListOpen(!isUserListOpen); }}
+                  title="Démarrer une discussion"
+                >
+                  <div className="flex items-center gap-2 text-casino-gold font-orbitron font-bold text-sm md:text-base leading-none shadow-gold-glow whitespace-nowrap">
+                    <span>DISCUTER AVEC...</span>
+                    <ChevronDown size={16} className={cn("transition-transform", isUserListOpen && "rotate-180")} />
+                  </div>
+                </div>
+                {isUserListOpen && (
+                  <div
+                    className="absolute top-full right-0 mt-2 w-64 bg-zinc-950 border border-zinc-600 rounded-lg shadow-[0_20px_60px_rgba(0,0,0,0.9)] z-[9999] max-h-[60vh] overflow-y-auto custom-scrollbar ring-1 ring-white/10"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="p-2 border-b border-zinc-800 bg-zinc-900/95 sticky top-0 backdrop-blur-md z-10">
+                      <div className="text-xs font-bold text-center text-zinc-300 font-rajdhani tracking-widest">UTILISATEURS ({allUsers.length})</div>
+                    </div>
+                    <div className="flex flex-col">
+                      {allUsers.map(u => (
+                        <button
+                          key={u.id}
+                          onClick={() => handleAdminSelectUser(u)}
+                          className={cn(
+                            "flex items-center justify-between px-3 py-2 hover:bg-zinc-800/80 active:bg-zinc-700 transition-all border-b border-zinc-800/50 last:border-0 text-left text-sm",
+                            u.id === currentUserId ? "opacity-50 cursor-default" : "cursor-pointer"
+                          )}
+                          disabled={u.id === currentUserId}
+                        >
+                          <span className={cn(
+                            "font-rajdhani font-medium truncate",
+                            u.role === 'admin' ? "text-red-400" : "text-zinc-300"
+                          )}>
+                            {u.username}
+                          </span>
+                          {u.role === 'admin' && <span className="text-[10px] text-red-500 border border-red-900 px-1 rounded bg-red-950/30">ADMIN</span>}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              // MODE USER : Bouton "Contacter Admin"
+              <button
+                onClick={handleContactAdmin}
+                className="flex items-center px-3 py-1.5 rounded border border-casino-gold/40 text-casino-gold bg-black/40 hover:bg-casino-gold/10 hover:border-casino-gold transition-all font-orbitron text-xs font-bold tracking-wider shadow-gold-glow whitespace-nowrap"
+                title="Parler à l'administrateur"
+              >
+                CONTACTER L'ADMIN
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="flex flex-1 min-h-0">
+          {/* Liste des connectés */}
+          <div className="w-52 min-w-[11rem] border-r border-zinc-800 flex flex-col overflow-hidden relative">
+            <div className="p-2 text-zinc-500 text-base uppercase tracking-wider font-bold">
+              {currentUserRole === 'admin' ? 'Contacts' : 'Support'}
+            </div>
+            <div className="flex-1 overflow-y-auto custom-scrollbar">
+              {!connected && <div className="p-2 text-zinc-500 text-lg">Connexion…</div>}
+
+              {connected && others.length === 0 && (
+                <div className="p-2 text-zinc-500 font-rajdhani italic text-sm text-center mt-4 opacity-60">
+                  {currentUserRole === 'admin' ? 'Aucune discussion récente.' : 'Cliquez sur "CONTACTER L\'ADMIN" pour commencer.'}
+                </div>
+              )}
+
+              {others.map((u) => (
+                <button
+                  key={u.userId}
+                  type="button"
+                  onClick={() => setSelectedUserId(u.userId)}
+                  onContextMenu={(e) => handleContextMenu(e, u.userId)}
+                  className={cn(
+                    'w-full text-left px-4 py-3 text-lg rounded-r transition-all flex items-center justify-between gap-1 group relative',
+                    selectedUserId === u.userId
+                      ? 'bg-amber-900/40 text-amber-200 border-l-4 border-amber-600 shadow-[inset_0_0_20px_rgba(180,83,9,0.1)]'
+                      : 'text-zinc-400 hover:bg-white/5 hover:text-zinc-200'
+                  )}
+                >
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    <span
+                      className={cn(
+                        'w-2.5 h-2.5 rounded-full flex-shrink-0',
+                        u.isOnline ? 'bg-green-500' : 'bg-red-500'
+                      )}
+                      title={u.isOnline ? 'En ligne' : 'Hors ligne'}
+                    />
+                    <span className="truncate">{u.username}</span>
+                  </span>
+                  {(unreadCountByUser[u.userId] ?? 0) > 0 && (
+                    <span className="text-red-500 font-mono tabular-nums text-base flex-shrink-0">
+                      {unreadCountByUser[u.userId]}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Conversation */}
+          <div className="flex-1 flex flex-col min-w-0">
+            {!selectedUserId ? (
+              <div className="flex-1 flex items-center justify-center text-zinc-500 text-lg p-4 font-rajdhani">
+                Sélectionnez un contact à gauche.
+              </div>
+            ) : (
+              <>
+                <div className="p-2 border-b border-zinc-800 text-zinc-400 text-lg font-bold flex justify-between items-center">
+                  <span>Conversation avec {selectedUsername}</span>
+                </div>
+
+                {/* Messages */}
+                <div
+                  className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar"
+                  onDrop={onDrop}
+                  onDragOver={onDragOver}
+                >
+                  {messages.map((msg) => {
+                    const isMe = msg.from === currentUserId;
+                    return (
+                      <div
+                        key={`${msg.at}-${msg.from}-${msg.text.slice(0, 20)}`}
+                        className={cn(
+                          'flex',
+                          isMe ? 'justify-end' : 'justify-start'
+                        )}
+                      >
+                        <div
+                          className={cn(
+                            'max-w-[85%] rounded-xl px-4 py-3 text-base shadow-lg transition-all',
+                            isMe
+                              ? 'bg-amber-900/40 text-amber-100 border border-amber-500/30'
+                              : 'bg-white/5 text-zinc-100 border border-white/10'
+                          )}
+                        >
+                          {!isMe && (
+                            <div className="text-xs uppercase font-bold text-zinc-500 mb-0.5">
+                              {msg.from === selectedUserId ? selectedUsername : 'Autre'}
+                            </div>
+                          )}
+                          <div className="whitespace-pre-wrap break-words text-lg font-sans">{msg.text}</div>
+                          {msg.attachment && (
+                            <div className="mt-2 flex flex-col gap-1 border-t border-white/10 pt-1">
+                              <span className="text-sm text-zinc-400 flex items-center gap-1">📎 {msg.attachment.name}</span>
+                              <DownloadAttachmentButton attachment={msg.attachment} />
+                            </div>
+                          )}
+                          <div className={cn(
+                            "text-[10px] mt-1 opacity-70 select-none font-rajdhani",
+                            isMe ? "text-blue-200 text-right" : "text-zinc-500 text-left"
+                          )}>
+                            {(() => {
+                              const d = new Date(msg.at);
+                              const now = new Date();
+                              const isToday = d.toDateString() === now.toDateString();
+                              return isToday
+                                ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                                : d.toLocaleDateString([], { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+                            })()}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  {/* Typing indicator */}
+                  {typingUsername && (
+                    <div className="flex justify-start">
+                      <div className="bg-zinc-800 rounded-lg px-3 py-2 border border-zinc-700 flex items-center gap-1">
+                        <span className="flex gap-1">
+                          <span className="w-2 h-2 rounded-full bg-zinc-400 animate-bounce" style={{ animationDelay: '0ms' }} />
+                          <span className="w-2 h-2 rounded-full bg-zinc-400 animate-bounce" style={{ animationDelay: '150ms' }} />
+                          <span className="w-2 h-2 rounded-full bg-zinc-400 animate-bounce" style={{ animationDelay: '300ms' }} />
+                        </span>
+                        <span className="text-sm text-zinc-500 ml-1 italic">{typingUsername} écrit…</span>
+                      </div>
+                    </div>
+                  )}
+
+                  <div ref={messagesEndRef} />
+                </div>
+
+                {/* Pièces jointes en attente */}
+                {pendingFiles.length > 0 && (
+                  <div className="px-3 py-2 flex items-center gap-2 text-sm text-zinc-400 bg-zinc-900/50 border-t border-zinc-800">
+                    📎 {pendingFiles.map((f) => f.name).join(', ')}
+                    <button
+                      type="button"
+                      onClick={() => setPendingFiles([])}
+                      className="text-red-400 hover:text-red-300 ml-2"
+                    >
+                      (Retirer)
+                    </button>
+                  </div>
+                )}
+
+                {/* Zone saisie */}
+                <div className="relative p-2 border-t border-zinc-800 space-y-2 bg-zinc-950">
+                  <div className="flex gap-2">
+                    <textarea
+                      value={draft}
+                      onChange={(e) => handleDraftChange(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          handleSend();
+                        }
+                      }}
+                      placeholder="Votre message..."
+                      rows={1}
+                      className="flex-1 min-w-0 rounded-lg bg-zinc-900 border border-zinc-700 px-3 py-2 text-base text-white placeholder-zinc-600 resize-none focus:outline-none focus:border-casino-gold/50 focus:ring-1 focus:ring-casino-gold/20 transition-all custom-scrollbar"
+                      style={{ minHeight: '44px', maxHeight: '120px' }}
+                    />
+                    <div className="flex flex-col gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        className="w-10 h-10 rounded-lg border border-zinc-700 text-zinc-400 hover:border-casino-gold hover:text-casino-gold hover:bg-zinc-900 flex items-center justify-center transition-colors"
+                        title="Ajouter un fichier"
+                      >
+                        📎
+                      </button>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        className="hidden"
+                        onChange={onFileInputChange}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setShowEmoji((s) => !s)}
+                        className="w-10 h-10 rounded-lg border border-zinc-700 text-zinc-400 hover:border-casino-gold hover:text-casino-gold hover:bg-zinc-900 flex items-center justify-center transition-colors text-xl"
+                        title="Emojis"
+                      >
+                        😀
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleSend}
+                      className="w-12 h-auto rounded-lg bg-casino-gold/90 text-black font-bold hover:bg-casino-gold transition-colors flex items-center justify-center shadow-gold-glow"
+                      title="Envoyer"
+                    >
+                      ➤
+                    </button>
+                  </div>
+
+                  {showEmoji && (
+                    <>
+                      <div className="fixed inset-0 z-30" onClick={() => setShowEmoji(false)} />
+                      <div className="absolute bottom-full right-2 mb-2 z-40 shadow-2xl relative group">
+                        <button
+                          className="absolute -top-3 -left-3 z-50 bg-red-600 text-white rounded-full w-6 h-6 flex items-center justify-center shadow-md hover:bg-red-500 transition-colors border border-white/20"
+                          onClick={() => setShowEmoji(false)}
+                          title="Fermer"
+                        >
+                          <X size={14} strokeWidth={3} />
+                        </button>
+                        <EmojiPicker onEmojiClick={handleEmojiClick} theme={Theme.DARK} width={300} height={350} />
+                      </div>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* MENU CONTEXTUEL (PORTAL OU ABSOLUTE) */}
+        {contextMenu && (
+          <div
+            className="fixed z-[10000] min-w-[160px] bg-zinc-900 border border-zinc-600 rounded-lg shadow-2xl py-1 animate-in fade-in zoom-in-95 duration-100"
+            style={{ top: contextMenu.y, left: contextMenu.x }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              className="w-full text-left px-4 py-2 hover:bg-zinc-800 text-zinc-200 flex items-center gap-2"
+              onClick={() => executeContextAction('open')}
+            >
+              <Eye size={16} /> <span>Ouvrir</span>
+            </button>
+            <button
+              className="w-full text-left px-4 py-2 hover:bg-zinc-800 text-zinc-200 flex items-center gap-2"
+              onClick={() => executeContextAction('close')}
+            >
+              <EyeOff size={16} /> <span>Fermer</span>
+            </button>
+            <div className="h-px bg-zinc-700 my-1" />
+            <button
+              className="w-full text-left px-4 py-2 hover:bg-red-900/30 text-red-400 flex items-center gap-2"
+              onClick={() => executeContextAction('remove')}
+            >
+              <Trash2 size={16} /> <span>Enlever</span>
+            </button>
+          </div>
+        )}
+
+      </div >
+    </>
   );
 }

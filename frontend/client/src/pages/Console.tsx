@@ -10,14 +10,20 @@ import { Counter } from "@/components/casino/Counter";
 import { LEDIndicator } from "@/components/casino/LEDIndicator";
 import { ProchainTirageSimple } from "@/components/casino/ProchainTirageSimple";
 import { LCDDisplay } from "@/components/casino/LCDDisplay";
-import { DebugPanel } from "@/components/casino/DebugPanel";
+// DebugPanel supprimé
 import { GratitudePopup } from "@/components/GratitudePopup";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { useChatSocket } from "@/lib/chatSocket";
+import { SmartRackPanel } from "@/components/console/SmartRackPanel";
+import { NexusDetailPanel } from "@/components/console/NexusDetailPanel";
+import { CombosListPanel } from "@/components/console/CombosListPanel";
+import { TooltipContextMenu, TooltipData } from "@/components/console/TooltipContextMenu";
+import type { ComboEntry } from "@/components/console/CombosListPanel";
+import type { EmailScheduleState } from "@/components/console/SmartRackPanel";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { fr as frLocale } from "date-fns/locale";
-import { Lock, Unlock, ChevronDown, RotateCcw, ArrowUp, ArrowDown, Minus, RefreshCcw, Settings, Sliders, Calendar, Trash2, Wrench, MessageSquare, Sparkles } from "lucide-react";
+import { Lock, Unlock, ChevronDown, RotateCcw, ArrowUp, ArrowDown, Minus, RefreshCcw, Settings, Sliders, Calendar, Trash2, Wrench, MessageSquare, Sparkles, Search } from "lucide-react";
 import { useUser } from "@/lib/UserContext";
 import {
   getStats,
@@ -35,8 +41,15 @@ import {
   TrendWindowConfig,
   verifierMiseAJourNecessaire,
   computeAllAppointments,
-  getAppointmentId
+  getAppointmentId,
+  genererCombosNexus,
+  genererCombosRoue,
+  saveNexusCache,
+  loadNexusCache,
+  clearNexusCache,
+  verifierFiltresStructurels
 } from "@/lib/lotoService";
+import type { NexusState, NexusCombo } from "@/lib/lotoService";
 import {
   getPrixGrille,
   isCombinaisonValide,
@@ -104,7 +117,10 @@ const BallGrid = ({
   resolveCategory,
   highlightRDV,
   rdvLevel,
-  rdvFaithfuls
+  rdvFaithfuls,
+  nexusActive = false,
+  nexusAncreNums = [],
+  nexusAncreStars = []
 }: {
   stats: DisplayStat[],
   countLimit: number,
@@ -119,7 +135,10 @@ const BallGrid = ({
   resolveCategory?: (num: number, type: 'number' | 'star') => 'high' | 'dormeur' | null,
   highlightRDV?: boolean,
   rdvLevel?: number,
-  rdvFaithfuls?: { topNumbers: any[], topStars: any[] } | null
+  rdvFaithfuls?: { topNumbers: any[], topStars: any[] } | null,
+  nexusActive?: boolean,
+  nexusAncreNums?: number[],
+  nexusAncreStars?: number[]
 }) => {
   // The user explicitly asked for the number of balls presented to be IDENTICAL to the countLimit (cursor value).
   const visibleStats = stats.slice(0, countLimit);
@@ -177,12 +196,23 @@ const BallGrid = ({
             : rdvFaithfuls.topStars.slice(0, Math.min(rdvLevel, 8)).some((f: any) => (f.etoile || f.number) === stat.number)
         ));
 
+        const isNexusAncre = nexusActive && (
+          type === 'number'
+            ? nexusAncreNums.includes(stat.number)
+            : nexusAncreStars.includes(stat.number)
+        );
+
         return (
           <div
             key={`${type}-${stat.number}`}
-            className="flex flex-col items-center gap-1 cursor-pointer group w-14"
+            className="flex flex-col items-center gap-1 cursor-pointer group w-14 relative"
             onClick={() => onToggle(stat.number, type, category)}
           >
+            {isNexusAncre && (
+              <div className="absolute top-4 right-0 bg-purple-600 rounded-full w-4 h-4 flex items-center justify-center border border-purple-400 shadow-[0_0_8px_rgba(168,85,247,0.8)] z-10 text-[10px]" title="Ancre sélectionnée">
+                ⚓
+              </div>
+            )}
             <span className={cn(
               "text-sm font-mono transition-colors",
               status === 'ghost' ? "text-green-400 font-bold" : "text-zinc-400 group-hover:text-white"
@@ -279,6 +309,11 @@ export default function Console() {
   const [, setLocation] = useLocation();
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [showPrice, setShowPrice] = useState(false); // Fix for crash
+
+  // --- SOUND HELPER ---
+  const playSound = (type: keyof typeof sounds) => {
+    if (soundEnabled && sounds[type]) sounds[type].play();
+  };
 
   // AUTO update status + wins (message à la connexion)
   const [autoUpdateStatus, setAutoUpdateStatus] = useState<null | { success: boolean; drawDate?: string | null; message?: string | null; finishedAt?: string | null }>(null);
@@ -420,7 +455,20 @@ export default function Console() {
   }, [isPriceGridOpen]);
 
   const [presetHasData, setPresetHasData] = useState<Record<string, boolean>>({});
-  const [contextMenu, setContextMenu] = useState<{ visible: boolean, x: number, y: number } | null>(null);
+  const [presetContextMenu, setPresetContextMenu] = useState<{ visible: boolean, x: number, y: number } | null>(null);
+
+  // F6: Tooltip universel
+  const [tooltipData, setTooltipData] = useState<{ x: number, y: number, data: TooltipData } | null>(null);
+
+  const showTooltip = (e: React.MouseEvent, data: TooltipData) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setTooltipData({
+      x: e.clientX,
+      y: e.clientY,
+      data
+    });
+  };
 
   // Manual Mode Selection State
   const [selectedNumbers, setSelectedNumbers] = useState<number[]>([]);
@@ -544,7 +592,8 @@ export default function Console() {
   // Results
   const [generatedNumbers, setGeneratedNumbers] = useState<number[]>([]);
   const [generatedStars, setGeneratedStars] = useState<number[]>([]);
-  const [autoDraws, setAutoDraws] = useState<{ nums: number[], stars: number[], date: Date, revealed?: boolean }[]>([]);
+  const [generatedBlockchain, setGeneratedBlockchain] = useState<string | undefined>(undefined);
+  const [autoDraws, setAutoDraws] = useState<{ nums: number[], stars: number[], date: Date, revealed?: boolean, blockchain?: string }[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [showSuccessMessage, setShowSuccessMessage] = useState(false);
   // Track revealed state for the top draw in the stack. 
@@ -552,14 +601,146 @@ export default function Console() {
   // We only need to track the TOP one because older ones are assumed revealed or don't matter as much.
   // Or we can track a set of revealed IDs? Let's keep it simple: "Last generated is blurred until click".
   const [isLatestRevealed, setIsLatestRevealed] = useState(true);
+  const [isBotBlinking, setIsBotBlinking] = useState(false);
+
+  // ─── ÉTATS LISTE DES COMBOS (Volet ascendant) ──────────────────
+  const [combosList, setCombosList] = useState<ComboEntry[]>([]);
+  const [combosListOpen, setCombosListOpen] = useState(false);
+  const combosListTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // --- PERSISTENCE: Save/Load Console State ---
+  const LS_CONSOLE_STATE_KEY = `loto_console_state_u${user?.id ?? 'unknown'}`;
+
+  // Initial load
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(LS_CONSOLE_STATE_KEY);
+      if (saved) {
+        const state = JSON.parse(saved);
+        if (state.selectedTariff) setSelectedTariff(state.selectedTariff);
+        if (state.weightHigh !== undefined) setWeightHigh(state.weightHigh);
+        if (state.hazardLevel !== undefined) setHazardLevel(state.hazardLevel);
+        if (state.chaosLevel !== undefined) setChaosLevel(state.chaosLevel);
+        if (state.manifestationBalance !== undefined) setManifestationBalance(state.manifestationBalance);
+        if (state.manifestationBias !== undefined) setManifestationBias(state.manifestationBias);
+        if (state.influenceFreq !== undefined) setInfluenceFreq(state.influenceFreq);
+        if (state.influenceSurrepr !== undefined) setInfluenceSurrepr(state.influenceSurrepr);
+        if (state.influenceTrend !== undefined) setInfluenceTrend(state.influenceTrend);
+        if (state.rdvLevel !== undefined) setRdvLevel(state.rdvLevel);
+        if (state.selectedNumbers) setSelectedNumbers(state.selectedNumbers);
+        if (state.selectedStars) setSelectedStars(state.selectedStars);
+        if (state.combosList) setCombosList(state.combosList);
+
+        if (state.weightStarHigh !== undefined) setWeightStarHigh(state.weightStarHigh);
+        if (state.weightStarMid !== undefined) setWeightStarMid(state.weightStarMid);
+        if (state.weightStarLow !== undefined) setWeightStarLow(state.weightStarLow);
+        if (state.weightStarDormeur !== undefined) setWeightStarDormeur(state.weightStarDormeur);
+      }
+    } catch (e) {
+      console.error("[Console] Erreur chargement persistence:", e);
+    }
+  }, [user?.id]);
+
+  // Auto-save logic
+  useEffect(() => {
+    const state = {
+      selectedTariff,
+      weightHigh,
+      hazardLevel,
+      chaosLevel,
+      manifestationBalance,
+      manifestationBias,
+      influenceFreq,
+      influenceSurrepr,
+      influenceTrend,
+      rdvLevel,
+      selectedNumbers,
+      selectedStars,
+      combosList,
+      weightStarHigh,
+      weightStarMid,
+      weightStarLow,
+      weightStarDormeur
+    };
+    localStorage.setItem(LS_CONSOLE_STATE_KEY, JSON.stringify(state));
+  }, [
+    selectedTariff, weightHigh, hazardLevel, chaosLevel,
+    manifestationBalance, manifestationBias, influenceFreq,
+    selectedNumbers, selectedStars, combosList,
+    weightStarHigh, weightStarMid, weightStarLow, weightStarDormeur,
+    LS_CONSOLE_STATE_KEY
+  ]);
+
+  // BLOCKCHAIN RESTORE LISTENER
+  useEffect(() => {
+    const handleRestore = (e: any) => {
+      const config = e.detail;
+      if (!config) return;
+
+      if (window.confirm("Êtes-vous certain de vouloir copier ces réglages vers la console ?")) {
+        // Appliquer les réglages (structure plate générée par handleGenerate)
+
+        // 1. Tarif (si non présent, on essaie de le déduire)
+        if (config.tariff) {
+          setSelectedTariff(config.tariff);
+        } else if (config.nums && config.stars) {
+          const n = config.nums.length;
+          const s = config.stars.length;
+          const price = GRILLE_TARIFAIRE[n]?.[s];
+          if (price !== undefined) {
+            setSelectedTariff({ nums: n, stars: s, price });
+          }
+        }
+
+        // 2. Vivier & Calcul
+        if (config.hazardLevel !== undefined) setHazardLevel(config.hazardLevel);
+        if (config.chaosLevel !== undefined) setChaosLevel(config.chaosLevel);
+
+        // 3. Manifestation
+        if (config.manifestationBalance !== undefined) setManifestationBalance(config.manifestationBalance);
+        if (config.manifestationBias !== undefined) setManifestationBias(config.manifestationBias);
+
+        // 4. Influences
+        if (config.influenceFreq !== undefined) setInfluenceFreq(config.influenceFreq);
+        if (config.influenceSurrepr !== undefined) setInfluenceSurrepr(config.influenceSurrepr);
+        if (config.influenceTrend !== undefined) setInfluenceTrend(config.influenceTrend);
+
+        // 5. Poids (Potards)
+        if (config.weightHigh !== undefined) setWeightHigh(config.weightHigh);
+        if (config.weightStarHigh !== undefined) setWeightStarHigh(config.weightStarHigh);
+        if (config.weightStarMid !== undefined) setWeightStarMid(config.weightStarMid);
+        if (config.weightStarLow !== undefined) setWeightStarLow(config.weightStarLow);
+        if (config.weightStarDormeur !== undefined) setWeightStarDormeur(config.weightStarDormeur);
+
+        // 6. Fenêtres (PoolWindows)
+        if (config.poolWindows) setPoolWindows(config.poolWindows);
+
+        // 7. R.D.V
+        if (config.rdvLevel !== undefined) setRdvLevel(config.rdvLevel);
+
+        // Feedback visuel
+        setIsBotBlinking(true);
+        playSound('jackpot');
+
+        // Maintenir/Ouvrir le volet liste (selon consigne: reste ouvert)
+        setCombosListOpen(true);
+
+        setTimeout(() => setIsBotBlinking(false), 2000);
+
+        toast.success("Réglages blockchain restaurés sur la console !");
+      }
+    };
+
+    window.addEventListener('loto_blockchain_restore', handleRestore);
+    return () => window.removeEventListener('loto_blockchain_restore', handleRestore);
+  }, []);
 
   // Send Button State
   const [sendCount, setSendCount] = useState(0);
   const [isSending, setIsSending] = useState(false);
   const [sendingMessage, setSendingMessage] = useState("");
-  const [isDebugOpen, setIsDebugOpen] = useState(false);
+  // isDebugOpen supprimé (DebugPanel retiré)
   const [isChatOpen, setIsChatOpen] = useState(false);
-  const [chatPanelSlideIn, setChatPanelSlideIn] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   // Popup Gratitude State (VIP/Abonné uniquement)
@@ -577,6 +758,226 @@ export default function Console() {
   // Popup de consultation après envoi (invités uniquement)
   const [showConsultationPopup, setShowConsultationPopup] = useState(false);
 
+  // ─── ÉTATS NEXUS ──────────────────────────────────────────────
+  const [nexusState, setNexusState] = useState<NexusState | null>(null);
+  const [nexusActive, setNexusActive] = useState(false); // 1ère pression active
+  const [nexusAncresNum, setNexusAncresNum] = useState<number[]>([]); // 0-3 numéros ancres
+  const [nexusAncresEtoile, setNexusAncresEtoile] = useState<number[]>([]); // 0-2 étoiles ancres
+  const [nexusGenerating, setNexusGenerating] = useState(false);
+  const [nexusDetailOpen, setNexusDetailOpen] = useState(false);
+  const [nexusDetailCombo, setNexusDetailCombo] = useState<NexusCombo | null>(null);
+  const [nexusLcdMsg, setNexusLcdMsg] = useState<string | null>(null); // message sous bouton
+  const [nexusTimer, setNexusTimer] = useState<number>(0); // Nouveau: décompte 20s en secondes
+  const nexusCountdownRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const nexusTimerIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const nexusLastActionRef = useRef<number>(0);
+
+
+
+  // Auto-ouverture 3s quand un nouveau combo arrive
+  useEffect(() => {
+    if (combosList.length === 0) return;
+    setCombosListOpen(true);
+    if (combosListTimerRef.current) clearTimeout(combosListTimerRef.current);
+    combosListTimerRef.current = setTimeout(() => setCombosListOpen(false), 3000);
+    return () => { if (combosListTimerRef.current) clearTimeout(combosListTimerRef.current); };
+  }, [combosList.length]);
+
+  // Fermeture sur touche Escape
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setCombosListOpen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  // VIVIER Knob pulsation (quand LA ROUE a été appuyée 1x)
+  const [rouePulseVivier, setRouePulseVivier] = useState(false); // Knob VIVIER pulse quand roue actif
+  // État Roue
+  const [roueCombos, setRoueCombos] = useState<NexusCombo[]>([]);
+  const [roueModeComplete, setRoueModeComplete] = useState<'complete' | 'abregee'>('abregee');
+  const [roueCombosCount, setRoueCombosCount] = useState(0);
+  const [roueCost, setRoueCost] = useState(0);
+
+  // Email schedule state (persisté)
+  const [emailScheduleState, setEmailScheduleState] = useState<EmailScheduleState>({
+    email: '',
+    mardi: { day: 'Mardi', on: false, lignes: [] },
+    vendredi: { day: 'Vendredi', on: false, lignes: [] },
+  });
+
+  // ─── COUNTDOWN NEXUS (20s d'inactivité) ────────────────────
+  const nexusResetCountdown = () => {
+    nexusLastActionRef.current = Date.now();
+    setNexusTimer(20); // Reset à 20s
+    if (nexusCountdownRef.current) clearTimeout(nexusCountdownRef.current);
+    if (nexusTimerIntervalRef.current) clearInterval(nexusTimerIntervalRef.current);
+
+    // Timer visuel seconde par seconde
+    nexusTimerIntervalRef.current = setInterval(() => {
+      setNexusTimer(prev => {
+        if (prev <= 1) {
+          if (nexusTimerIntervalRef.current) clearInterval(nexusTimerIntervalRef.current);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    nexusCountdownRef.current = setTimeout(() => {
+      setNexusActive(false);
+      setNexusAncresNum([]);
+      setNexusAncresEtoile([]);
+      setNexusLcdMsg(null);
+      setNexusTimer(0);
+      if (nexusTimerIntervalRef.current) clearInterval(nexusTimerIntervalRef.current);
+    }, 20000);
+  };
+
+  // ─── HANDLER : clic sur bouton NEXUS ────────────────────────
+  const handleNexusClick = async () => {
+    if (!selectedTariff) {
+      playSound('error');
+      // Optionnel: toast("Veuillez sélectionner un tarif de grille d'abord");
+      return;
+    }
+
+    if (!nexusActive) {
+      // 1ère pression
+      setNexusActive(true);
+      setNexusAncresNum([]);
+      setNexusAncresEtoile([]);
+      setNexusLcdMsg('Choisir une ancre ou appuyer à nouveau');
+      nexusResetCountdown();
+      playSound('bling');
+    } else if (nexusAncresNum.length === 0 && nexusAncresEtoile.length === 0) {
+      // 2ème pression sans ancres → génération directe
+      handleNexusGenerate([], []);
+    } else {
+      // 2ème pression avec ancres → génération avec ancres
+      handleNexusGenerate(nexusAncresNum, nexusAncresEtoile);
+    }
+  };
+
+  const handleNexusGenerate = async (ancresNum: number[], ancresEtoiles: number[]) => {
+    setNexusGenerating(true);
+    setNexusLcdMsg('NEXUS COMPUTING...');
+    if (nexusCountdownRef.current) clearTimeout(nexusCountdownRef.current);
+    try {
+      // Modifié : On ne génère qu'une seule combinaison (au lieu de 20) par clic
+      const combos = await genererCombosNexus(ancresNum, ancresEtoiles, new Date(), 1);
+      const state: NexusState = {
+        combos,
+        currentIndex: 0,
+        ancresNumeros: ancresNum,
+        ancresEtoiles,
+        saison: combos[0]?.saison ?? '',
+        generatedAt: new Date().toISOString(),
+      };
+      setNexusState(state);
+      saveNexusCache(state);
+      setNexusActive(false);
+      setNexusAncresNum([]);
+      setNexusAncresEtoile([]);
+      setNexusLcdMsg(null);
+      // Alimenter le volet liste
+      setCombosList(prev => {
+        const start = prev.length;
+        const entries: ComboEntry[] = combos.map((c, i) => ({ combo: c, index: start + i }));
+        return [...prev, ...entries];
+      });
+      setCombosListOpen(true);
+      if (combos[0]) {
+        setGeneratedNumbers(combos[0].numeros);
+        setGeneratedStars(combos[0].etoiles);
+      }
+      playSound('bling');
+    } catch (e) {
+      console.error('[NEXUS] Génération échouée:', e);
+      setNexusLcdMsg('Erreur NEXUS — réessayez');
+    } finally {
+      setNexusGenerating(false);
+    }
+  };
+
+  // ─── HANDLER : sélection ancre via toggle grille ─────────────
+  const toggleNexusAncre = (num: number, type: 'number' | 'star') => {
+    if (!nexusActive) return; // Ne rien faire si NEXUS n'est pas actif
+    nexusResetCountdown(); // Reset countdown à chaque action
+    if (type === 'number') {
+      setNexusAncresNum(prev => {
+        if (prev.includes(num)) return prev.filter(n => n !== num);
+        if (prev.length >= 3) return prev; // Max 3 ancres numéros
+        return [...prev, num];
+      });
+    } else {
+      setNexusAncresEtoile(prev => {
+        if (prev.includes(num)) return prev.filter(n => n !== num);
+        if (prev.length >= 2) return prev; // Max 2 ancres étoiles
+        return [...prev, num];
+      });
+    }
+  };
+
+  // ─── HANDLER : clic sur bouton LA ROUE ──────────────────────
+  const handleRoueClick = () => {
+    if (!selectedTariff) {
+      playSound('error');
+      return;
+    }
+
+    const vivierBalls = KO_GRADUATIONS[koGrad].balls;
+    const etoilesSorted = [...selectedStars].sort((a, b) => a - b);
+    const starsFinal = etoilesSorted.length >= 2 ? etoilesSorted.slice(0, 2) : [2, 5];
+
+    if (!rouePulseVivier) {
+      // 1ère pression la roue
+      setRouePulseVivier(true);
+      setNexusLcdMsg(`Roue: Vivier=${vivierBalls}. Valider ? Rappuyer.`);
+      playSound('click');
+      return;
+    }
+
+    // 2ème pression → génération
+    // Calculer le vivier depuis fullHistory (top N numéros par fréquence récente)
+    const recentTirages = fullHistory.slice(0, 50);
+    const freqMap: Record<number, number> = {};
+    for (let n = 1; n <= 50; n++) freqMap[n] = 0;
+    for (const t of recentTirages) for (const n of t.numeros) freqMap[n]++;
+    const vivier = Object.entries(freqMap)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, vivierBalls)
+      .map(([n]) => parseInt(n));
+    const combos = genererCombosRoue(vivier, starsFinal, roueModeComplete, new Date());
+    setRoueCombos(combos);
+    setRoueCombosCount(combos.length);
+    setRoueCost(combos.length * (selectedTariff?.price ?? 2.50));
+    setRouePulseVivier(false);
+    setNexusLcdMsg(null);
+    // Alimenter le volet liste
+    setCombosList(prev => {
+      const start = prev.length;
+      const entries: ComboEntry[] = combos.map((c, i) => ({ combo: c, index: start + i }));
+      return [...prev, ...entries];
+    });
+    setCombosListOpen(true);
+    if (combos[0]) {
+      setGeneratedNumbers(combos[0].numeros);
+      setGeneratedStars(combos[0].etoiles);
+    }
+    playSound('bling');
+  };
+
+  // Charger le cache NEXUS au boot (si disponible)
+  useEffect(() => {
+    const cached = loadNexusCache();
+    if (cached && cached.combos.length > 0) {
+      setNexusState(cached);
+    }
+    return () => {
+      if (nexusCountdownRef.current) clearTimeout(nexusCountdownRef.current);
+    };
+  }, []);
+
   // (Gagnants) : supprimé — aucune notification/redirect "gagnant"
 
   // Volet chat : à l'ouverture, marquer toutes les conversations comme lues
@@ -588,23 +989,7 @@ export default function Console() {
     }
   }, [isChatOpen]);
 
-  // Volet chat : animation d'ouverture (glissement depuis la droite)
-  useEffect(() => {
-    if (isChatOpen) {
-      setChatPanelSlideIn(false);
-      const t = requestAnimationFrame(() => {
-        requestAnimationFrame(() => setChatPanelSlideIn(true));
-      });
-      return () => cancelAnimationFrame(t);
-    } else {
-      setChatPanelSlideIn(false);
-    }
-  }, [isChatOpen]);
-
-  const handleCloseChat = () => {
-    setChatPanelSlideIn(false);
-    window.setTimeout(() => setIsChatOpen(false), 350);
-  };
+  const handleCloseChat = () => setIsChatOpen(false);
 
   // --- LEGACY “Cycle de calcul des fréquences” ---
   // Ce réglage global (loto_freqConfig_v1) est désormais déprécié au profit des fenêtres par pôle (poolWindows.*).
@@ -662,8 +1047,18 @@ export default function Console() {
         const data = await res.json();
         if (cancelled) return;
 
-        const serverPoolWindows = data?.poolWindows ?? null;
-        if (serverPoolWindows) {
+        const serverPoolWindowsRaw = data?.poolWindows ?? null;
+        if (serverPoolWindowsRaw) {
+          // IMPORTANT: Fusion avec le default pour s'assurer qu'aucun nouveau champ n'est manquant
+          const serverPoolWindows: PoolWindowsConfig = {
+            ...defaultPoolWindows,
+            ...serverPoolWindowsRaw,
+            trend: {
+              ...defaultPoolWindows.trend,
+              ...(serverPoolWindowsRaw.trend || {})
+            }
+          };
+
           const key = getPoolWindowsStorageKey(user.id);
           localStorage.setItem(key, JSON.stringify(serverPoolWindows));
           localStorage.setItem(LS_POOL_WINDOWS_KEY, JSON.stringify(serverPoolWindows)); // compat
@@ -1518,6 +1913,49 @@ export default function Console() {
     } else {
       setMode('auto'); // invite or unknown
     }
+
+    // LISTENER FOR BLOCKCHAIN DATA RESTORE
+    const handleBlockchainRestore = (e: CustomEvent) => {
+      const state = e.detail;
+      if (!state) return;
+
+      console.log('Restoring console from blockchain event', state);
+
+      if (state.weightHigh !== undefined) setWeightHigh(state.weightHigh);
+      if (state.weightStarHigh !== undefined) setWeightStarHigh(state.weightStarHigh);
+      if (state.weightStarMid !== undefined) setWeightStarMid(state.weightStarMid);
+      if (state.weightStarLow !== undefined) setWeightStarLow(state.weightStarLow);
+      if (state.weightStarDormeur !== undefined) setWeightStarDormeur(state.weightStarDormeur);
+
+      if (state.influenceFreq !== undefined) setInfluenceFreq(Math.max(0, Math.min(10, state.influenceFreq)));
+      if (state.influenceSurrepr !== undefined) setInfluenceSurrepr(Math.max(0, Math.min(10, state.influenceSurrepr)));
+      if (state.influenceTrend !== undefined) setInfluenceTrend(Math.max(0, Math.min(10, state.influenceTrend)));
+      if (state.hazardLevel !== undefined) setHazardLevel(Math.max(0, Math.min(10, state.hazardLevel)));
+      if (state.rdvLevel !== undefined) setRdvLevel(Math.max(0, Math.min(10, state.rdvLevel)));
+      if (state.chaosLevel !== undefined) setChaosLevel(Math.max(0, Math.min(10, state.chaosLevel)));
+
+      if (state.manifestationBalance !== undefined) setManifestationBalance(Math.max(-5, Math.min(5, state.manifestationBalance)));
+      if (state.manifestationBias !== undefined) setManifestationBias(state.manifestationBias);
+
+      if (state.isSimplifiedMode !== undefined) setIsSimplifiedMode(state.isSimplifiedMode);
+
+      if (state.sortPriority1 != null || state.sortPriority2 != null || state.sortPriority3 != null) {
+        const [p1, p2, p3] = normalizeSortPriorities(state.sortPriority1, state.sortPriority2, state.sortPriority3);
+        setSortPriority1(p1);
+        setSortPriority2(p2);
+        setSortPriority3(p3);
+      }
+
+      setIsBotBlinking(true);
+      setTimeout(() => setIsBotBlinking(false), 2000); // Clignote 2s
+      toast.success("Réglages console importés depuis la blockchain !");
+    };
+
+    window.addEventListener('loto_blockchain_restore' as any, handleBlockchainRestore);
+
+    return () => {
+      window.removeEventListener('loto_blockchain_restore' as any, handleBlockchainRestore);
+    };
   }, [user]);
 
   useEffect(() => {
@@ -1869,10 +2307,6 @@ export default function Console() {
     };
   }, [showConsultationPopup, popup2Html]);
 
-  // --- SOUND HELPER ---
-  const playSound = (type: keyof typeof sounds) => {
-    if (soundEnabled) sounds[type].play();
-  };
 
   // --- DATA LOADING ---
   useEffect(() => {
@@ -1952,7 +2386,7 @@ export default function Console() {
       const newStatsHigh = computeStatsFromTirages(filteredHigh);
       const newStatsSurrepr = computeStatsFromTirages(filteredSurrepr);
       const newStatsTrend = computeStatsFromTirages(filteredTrend, {
-        trendPeriodRecente: (poolWindows.trend as TrendWindowConfig).trendPeriodR ?? 65,
+        trendPeriodRecente: (poolWindows.trend as TrendWindowConfig)?.trendPeriodR ?? 65,
       });
       const newStatsDormeur = computeStatsFromTirages(filteredDormeur);
 
@@ -2508,6 +2942,18 @@ export default function Console() {
 
   // --- MANUAL SELECTION LOGIC ---
   const toggleSelection = (num: number, type: 'number' | 'star', category?: 'high' | 'dormeur') => {
+    // Si le mode de sélection d'ancre Nexus est actif, les clics ajoutent/retirent des ancres
+    if (nexusActive) {
+      if (type === 'number') {
+        setNexusAncresNum(prev => prev.includes(num) ? prev.filter(n => n !== num) : [...prev, num].sort((a, b) => a - b));
+      } else {
+        setNexusAncresEtoile(prev => prev.includes(num) ? prev.filter(n => n !== num) : [...prev, num].sort((a, b) => a - b));
+      }
+      nexusResetCountdown(); // NEW: Reset 20s countdown on any anchor selection
+      playSound('click');
+      return;
+    }
+
     // Mark as user modified
     userModifiedRef.current = true;
 
@@ -2647,7 +3093,7 @@ export default function Console() {
       try {
         const parsed = JSON.parse(savedPresets);
         const status: Record<string, boolean> = {};
-        for (let i = 0; i <= 5; i++) {
+        for (let i = 0; i <= 7; i++) {
           status[i.toString()] = !!parsed[i.toString()];
         }
         setPresetHasData(status);
@@ -2778,7 +3224,7 @@ export default function Console() {
 
   const handlePresetContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
-    setContextMenu({
+    setPresetContextMenu({
       visible: true,
       x: e.clientX,
       y: e.clientY
@@ -2795,7 +3241,7 @@ export default function Console() {
       setPresetHasData(prev => ({ ...prev, [selectedPreset]: false }));
       playSound('click');
     }
-    setContextMenu(null);
+    setPresetContextMenu(null);
   };
 
   // Save a specific preset from the dropdown
@@ -3151,34 +3597,38 @@ export default function Console() {
           const onlyF = wF > 0 && wS === 0 && wT === 0;
           const onlyS = wF === 0 && wS > 0 && wT === 0;
           const onlyT = wF === 0 && wS === 0 && wT > 0;
-          if (onlyF) return F_score;
-          if (onlyS) return S_score;
-          if (onlyT) return T_score;
+          let baseScore = 0;
+          if (onlyF) {
+            baseScore = F_score;
+          } else if (onlyS) {
+            baseScore = S_score;
+          } else if (onlyT) {
+            baseScore = T_score;
+          } else {
+            // Plusieurs > 0 : baseScore = base (critère priorité 1) + influence graduée 2 + 3
+            const contributions: Record<'frequency' | 'surrepr' | 'trend', number> = {
+              frequency: wF * F_score,
+              surrepr: wS * S_score,
+              trend: wT * T_score,
+            };
+            const priorities = [sortPriority1, sortPriority2, sortPriority3];
+            const coefs = [coefP1, coefP2, coefP3];
+            for (let i = 0; i < 3; i++) baseScore += coefs[i] * contributions[priorities[i]];
+          }
 
-          // Plusieurs > 0 : score = base (critère priorité 1) + influence graduée 2 + 3 (chaîne priorité 1 → 2 → 3), sans cap
-          const contributions: Record<'frequency' | 'surrepr' | 'trend', number> = {
-            frequency: wF * F_score,
-            surrepr: wS * S_score,
-            trend: wT * T_score,
-          };
-          const priorities = [sortPriority1, sortPriority2, sortPriority3];
-          const coefs = [coefP1, coefP2, coefP3];
-          let score = 0;
-          for (let i = 0; i < 3; i++) score += coefs[i] * contributions[priorities[i]];
-
-          // RDV Influence (Bonus proportionnel à la fidélité au RDV visé)
-          let rdvBonus = 0;
-          if (wR > 0 && appointmentProfiles) {
+          // RDV Influence (Mode Pondération : multiplicateur si highlightRDV est FALSE)
+          if (wR > 0 && appointmentProfiles && !highlightRDV) {
             const nextDrawAID = getAppointmentId(getProchainTirage().date);
             const profiles = isStar ? appointmentProfiles.stars : appointmentProfiles.numbers;
             const p = profiles[stat.number];
             if (p && p.appointments[nextDrawAID]) {
               // On utilise la fréquence au RDV comme base du bonus (normalisé 0..1)
-              rdvBonus = (p.appointments[nextDrawAID].frequency / 100) * wR;
+              const bonus = (p.appointments[nextDrawAID].frequency / 100) * wR;
+              return baseScore * (1 + bonus);
             }
           }
 
-          return score + rdvBonus;
+          return baseScore;
         };
 
         // Construire les viviers effectifs par score (puis tiebreak via Priorités de tri)
@@ -3372,6 +3822,12 @@ export default function Console() {
         autoDraws.forEach(d => {
           if (d?.nums?.length && d?.stars?.length) forbiddenKeys.add(comboKey(d.nums, d.stars));
         });
+        // NEW: include session combosList in forbidden keys for global session uniqueness
+        combosList.forEach(entry => {
+          if (entry.combo?.numeros && entry.combo?.etoiles) {
+            forbiddenKeys.add(comboKey(entry.combo.numeros, entry.combo.etoiles));
+          }
+        });
 
         const maxUniqAttempts = 180;
         let foundUnique = false;
@@ -3563,6 +4019,32 @@ export default function Console() {
             }
           }
 
+          // --- R.D.V. INJECTION (post-processing) ---
+          // Algo Engineer: Inject the top R.D.V. number if highlightRDV is TRUE
+          if (effectiveMode === 'auto' && highlightRDV && rdvFaithfuls && rdvFaithfuls.topNumbers.length > 0) {
+            // On cherche le numéro avec le plus petit score dans le résultat actuel
+            const scored = calculatedNums.map(n => ({ n, score: selectionScoreNums[n] ?? 0 }));
+            scored.sort((a, b) => a.score - b.score);
+            const lowestNum = scored[0].n;
+
+            // On cherche le top numéro de rdvFaithfuls qui n'est PAS déjà dans le résultat
+            let rdvToInject = -1;
+            for (const f of rdvFaithfuls.topNumbers) {
+              const num = (f.numero || f.number);
+              if (!calculatedNums.includes(num)) {
+                rdvToInject = num;
+                break;
+              }
+            }
+
+            if (rdvToInject !== -1) {
+              // Remplacement du maillon faible
+              calculatedNums = calculatedNums.map(n => n === lowestNum ? rdvToInject : n).sort((a, b) => a - b);
+              delete calcNumSources[lowestNum];
+              calcNumSources[rdvToInject] = 'high'; // Injecté comme source 'high' par défaut
+            }
+          }
+
           const key = comboKey(calculatedNums, calculatedStars);
           if (!forbiddenKeys.has(key)) {
             forbiddenKeys.add(key);
@@ -3594,6 +4076,26 @@ export default function Console() {
         return;
       }
 
+      // Générer l'empreinte blockchain de cette combinaison
+      const blockchainData = {
+        nums: calculatedNums,
+        stars: calculatedStars,
+        hazardLevel,
+        chaosLevel,
+        manifestationBalance,
+        manifestationBias,
+        influenceFreq,
+        influenceSurrepr,
+        influenceTrend,
+        poolWindows,
+        weightHigh,
+        weightStarHigh,
+        weightStarMid,
+        weightStarLow,
+        weightStarDormeur,
+      };
+      const currentBlockchain = btoa(JSON.stringify(blockchainData));
+
       if (effectiveMode !== 'manual') {
         setSelectedNumbers(calculatedNums);
         setSelectedStars(calculatedStars);
@@ -3603,17 +4105,74 @@ export default function Console() {
 
         // STACK MODE for Auto: Add to history of current session
         // VIP/Admin/Abonné: visible immédiatement, Invite: toujours masqué
-        const newDraw = { nums: calculatedNums, stars: calculatedStars, date: new Date(), revealed: isAdminOrVip || isAbonne };
+        const newDraw = { nums: calculatedNums, stars: calculatedStars, date: new Date(), revealed: isAdminOrVip || isAbonne, blockchain: currentBlockchain };
         setAutoDraws(prev => [newDraw, ...prev]);
+
+        // Ajouter aussi Forbo à la combosList globale pour unifier l'historique de session
+        // MOCK d'un NexusCombo pour Forbo Auto
+        const mockAutoCombo: NexusCombo = {
+          numeros: calculatedNums,
+          etoiles: calculatedStars,
+          scoreTotal: 0,
+          scoreRaw: 0,
+          somme: calculatedNums.reduce((a, b) => a + b, 0),
+          parite: { pairs: calculatedNums.filter(n => n % 2 === 0).length, impairs: calculatedNums.filter(n => n % 2 !== 0).length },
+          hautBas: { hauts: calculatedNums.filter(n => n > 25).length, bas: calculatedNums.filter(n => n <= 25).length },
+          hasSymbiose: false,
+          hasConsecutive: false,
+          ancresIncluses: [],
+          signature: `FORBO-AUTO-${Date.now()}`,
+          genese: [],
+          mode: 'manuel',
+          modeDetail: 'Forbo Auto',
+          saison: '',
+          dateGeneration: new Date().toISOString(),
+          blockchain: currentBlockchain as string
+        } as NexusCombo;
+
+        setCombosList(prev => [
+          ...prev,
+          { combo: mockAutoCombo, index: prev.length }
+        ]);
+        setCombosListOpen(true);
+
       } else {
         // Manual Mode: Also stack results for visual consistency, but revealed immediately?
         // User said "empile aussi les uns par dessus les autres les tirage du mode manuel"
-        const newDraw = { nums: calculatedNums, stars: calculatedStars, date: new Date(), revealed: true };
+        const newDraw = { nums: calculatedNums, stars: calculatedStars, date: new Date(), revealed: true, blockchain: currentBlockchain };
         setAutoDraws(prev => [newDraw, ...prev]);
+
+        // MOCK d'un NexusCombo pour Forbo Manuel
+        const mockManualCombo: NexusCombo = {
+          numeros: calculatedNums,
+          etoiles: calculatedStars,
+          scoreTotal: 0,
+          scoreRaw: 0,
+          somme: calculatedNums.reduce((a, b) => a + b, 0),
+          parite: { pairs: calculatedNums.filter(n => n % 2 === 0).length, impairs: calculatedNums.filter(n => n % 2 !== 0).length },
+          hautBas: { hauts: calculatedNums.filter(n => n > 25).length, bas: calculatedNums.filter(n => n <= 25).length },
+          hasSymbiose: false,
+          hasConsecutive: false,
+          ancresIncluses: [],
+          signature: `FORBO-MANUAL-${Date.now()}`,
+          genese: [],
+          mode: 'manuel',
+          modeDetail: 'Forbo Manuel',
+          saison: '',
+          dateGeneration: new Date().toISOString(),
+          blockchain: currentBlockchain as string
+        } as NexusCombo;
+
+        setCombosList(prev => [
+          ...prev,
+          { combo: mockManualCombo, index: prev.length }
+        ]);
+        setCombosListOpen(true);
       }
 
       setGeneratedNumbers(calculatedNums);
       setGeneratedStars(calculatedStars);
+      setGeneratedBlockchain(currentBlockchain);
 
       // NOTE: La sauvegarde des grilles est maintenant gérée par handleSend
       // pour permettre l'envoi groupé de plusieurs grilles à la fois
@@ -3641,6 +4200,7 @@ export default function Console() {
     setStarSources({});
     setGeneratedNumbers([]);
     setGeneratedStars([]);
+    setGeneratedBlockchain(undefined);
 
     // 2. Reset Weights (Potards) - Numéros
     setWeightHigh(0);
@@ -3685,6 +4245,7 @@ export default function Console() {
     setMaxWeightLimit(10);
 
     playSound('click');
+    localStorage.removeItem(LS_CONSOLE_STATE_KEY);
     toast.success("Réinitialisation complète effectuée");
   };
 
@@ -3694,8 +4255,8 @@ export default function Console() {
     // #endregion
 
     // Vérifier s'il y a des grilles à envoyer
-    if (autoDraws.length === 0 && generatedNumbers.length === 0) {
-      alert("Veuillez d'abord lancer une recherche.");
+    if (combosList.length === 0) {
+      alert("Veuillez d'abord lancer une recherche (La liste de tirages est vide).");
       playSound('error');
       return;
     }
@@ -3737,9 +4298,12 @@ export default function Console() {
       const targetDateStr = nextDraw.date.toISOString().split('T')[0]; // Format YYYY-MM-DD
 
       // Préparer les grilles à envoyer avec targetDate
-      const drawsToSend = autoDraws.length > 0
-        ? autoDraws.map(d => ({ nums: d.nums, stars: d.stars, targetDate: targetDateStr }))
-        : [{ nums: generatedNumbers, stars: generatedStars, targetDate: targetDateStr }];
+      const drawsToSend = combosList.map(entry => ({
+        nums: entry.combo.numeros,
+        stars: entry.combo.etoiles,
+        targetDate: targetDateStr,
+        blockchain: (entry.combo as any).blockchain
+      }));
 
       // Appeler l'API pour envoyer l'email
       const response = await fetch('/api/draws/request', {
@@ -3761,7 +4325,7 @@ export default function Console() {
         if (isAbonne && !isInvite) {
           for (const draw of drawsToSend) {
             if (draw.nums.length > 0 && draw.stars.length > 0) {
-              await saveGridToDB(draw.nums, draw.stars);
+              await saveGridToDB(draw.nums, draw.stars, draw.blockchain);
             }
           }
         }
@@ -3783,10 +4347,13 @@ export default function Console() {
           });
         }
 
-        // Vider les autoDraws après l'envoi
+        // Vider l'historique global de session après l'envoi
+        setCombosList([]);
+        setCombosListOpen(false);
         setAutoDraws([]);
         setGeneratedNumbers([]);
         setGeneratedStars([]);
+        setGeneratedBlockchain(undefined);
         setSendCount(prev => prev + drawsToSend.length);
       } else {
         throw new Error(data.error || 'Erreur envoi');
@@ -3828,9 +4395,12 @@ export default function Console() {
     const targetDateStr = nextDraw.date.toISOString().split('T')[0]; // Format YYYY-MM-DD
 
     // Préparer les grilles à sauvegarder et envoyer avec targetDate
-    const drawsToSave = autoDraws.length > 0
-      ? autoDraws.map(d => ({ nums: d.nums, stars: d.stars, targetDate: targetDateStr }))
-      : [{ nums: generatedNumbers, stars: generatedStars, targetDate: targetDateStr }];
+    const drawsToSave = combosList.map(entry => ({
+      nums: entry.combo.numeros,
+      stars: entry.combo.etoiles,
+      targetDate: targetDateStr,
+      blockchain: (entry.combo as any).blockchain
+    }));
 
     // IMPORTANT: si le toggle EMAIL est OFF, on ne doit envoyer AUCUN email.
     // On ne touche donc pas à /api/draws/send-direct : on sauvegarde seulement les grilles, puis popup2.
@@ -3840,7 +4410,7 @@ export default function Console() {
         let savedCount = 0;
         for (const draw of drawsToSave) {
           if ((draw.nums?.length || 0) > 0 && (draw.stars?.length || 0) > 0) {
-            const saved = await saveGridToDB(draw.nums, draw.stars);
+            const saved = await saveGridToDB(draw.nums, draw.stars, draw.blockchain);
             if (saved) savedCount++;
           }
         }
@@ -3849,9 +4419,12 @@ export default function Console() {
         toast.success(`${savedCount} grille(s) sauvegardée(s). Aucun email n'a été envoyé.`);
 
         // Vider les grilles et rester sur la console
+        setCombosList([]);
+        setCombosListOpen(false);
         setAutoDraws([]);
         setGeneratedNumbers([]);
         setGeneratedStars([]);
+        setGeneratedBlockchain(undefined);
         setSendCount(prev => prev + savedCount);
 
         // Afficher le popup de consultation
@@ -3887,9 +4460,12 @@ export default function Console() {
       toast.success(`${drawsToSave.length} grille(s) envoyée(s) ! L'email avec vos numéros vous a été envoyé.`);
 
       // Vider les grilles et rester sur la console
+      setCombosList([]);
+      setCombosListOpen(false);
       setAutoDraws([]);
       setGeneratedNumbers([]);
       setGeneratedStars([]);
+      setGeneratedBlockchain(undefined);
       setSendCount(prev => prev + drawsToSave.length);
 
       // Afficher le popup de consultation
@@ -3933,18 +4509,14 @@ export default function Console() {
 
     let grillesToSend = 0;
 
-    // Sauvegarder TOUTES les grilles de autoDraws dans la DB
-    if (autoDraws.length > 0) {
-      for (const draw of autoDraws) {
-        if (draw.nums.length > 0 && draw.stars.length > 0) {
-          await saveGridToDB(draw.nums, draw.stars);
+    // Sauvegarder TOUTES les grilles de combosList dans la DB
+    if (combosList.length > 0) {
+      for (const entry of combosList) {
+        if (entry.combo.numeros.length > 0 && entry.combo.etoiles.length > 0) {
+          await saveGridToDB(entry.combo.numeros, entry.combo.etoiles, (entry.combo as any).blockchain);
           grillesToSend++;
         }
       }
-    } else if (generatedNumbers.length > 0 && generatedStars.length > 0) {
-      // Fallback: sauvegarder la grille actuelle si pas d'autoDraws
-      await saveGridToDB(generatedNumbers, generatedStars);
-      grillesToSend = 1;
     }
 
     // Increment count par le nombre de grilles envoyées
@@ -3983,10 +4555,13 @@ export default function Console() {
 
     playSound('bling');
 
-    // Vider les autoDraws après l'envoi
+    // Vider les listes après l'envoi groupé
+    setCombosList([]);
+    setCombosListOpen(false);
     setAutoDraws([]);
     setGeneratedNumbers([]);
     setGeneratedStars([]);
+    setGeneratedBlockchain(undefined);
 
     toast.success(`${grillesToSend} grille(s) envoyée(s) à "Mes Grilles Jouées" !`);
 
@@ -4124,6 +4699,7 @@ export default function Console() {
                         setAutoDraws([]);
                         setGeneratedNumbers([]);
                         setGeneratedStars([]);
+                        setGeneratedBlockchain(undefined);
                         setSelectedNumbers([]);
                         setSelectedStars([]);
                         setNumberSources({});
@@ -4157,10 +4733,10 @@ export default function Console() {
                     className={cn(
                       // Même gabarit que ENVOYER (ligne du haut)
                       "rounded-none text-sm px-4 py-[10px] w-[140px] flex items-center justify-center",
-                      // Couleurs : rouge si pas de tarif, vert si OK (pas de shadow)
+                      // Grisé sans tarif, blanc éclatant avec tarif
                       !selectedTariff
-                        ? "bg-gradient-to-b from-red-600 to-red-900 text-white border-red-500 cursor-not-allowed"
-                        : "bg-gradient-to-b from-green-600 to-green-900 border-green-500 text-white hover:from-green-500 hover:to-green-800",
+                        ? "bg-gradient-to-b from-[#5d4037] to-[#3e2723] text-stone-400 border-[#4e342e] cursor-not-allowed opacity-70"
+                        : "bg-white border-white text-black hover:bg-gray-100 shadow-[0_0_14px_rgba(255,255,255,0.75)] hover:shadow-[0_0_20px_rgba(255,255,255,0.9)]",
                       isGenerating ? "opacity-60 cursor-not-allowed" : ""
                     )}
                     onClick={() => {
@@ -4173,11 +4749,13 @@ export default function Console() {
                     }}
                     disabled={!selectedTariff || isGenerating}
                   >
-                    {isGenerating ? "..." : (
-                      (weightHigh > 0 || manifestationBalance !== 0 || chaosLevel > 0)
-                        ? <span className="text-red-500 font-bold text-center leading-tight text-[10px]">RECHERCHE<br />PONDÉRÉE</span>
-                        : "RECHERCHER"
-                    )}
+                    {isGenerating ? "..." : (selectedTariff ? <span className="flex items-center gap-1.5 leading-none">
+                      <svg width="24" height="24" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: 0 }}>
+                        <polygon points="10,1 19,10 10,19 1,10" fill="#0a0a18" stroke="#FFD700" strokeWidth="1.8" />
+                        <text x="6.2" y="14.5" fontFamily="Arial Black,sans-serif" fontSize="10" fontWeight="900" fill="#FFD700">F</text>
+                      </svg>
+                      <span>FORBO</span>
+                    </span> : "")}
                   </CasinoButton>
                 </div>
 
@@ -4336,8 +4914,13 @@ export default function Console() {
                 )}>
                   <CasinoButton
                     size="lg"
-                    variant={!selectedTariff ? "danger" : "primary"}
-                    className="text-base px-6 py-4 rounded-none border-r border-black/20 w-[170px] flex items-center justify-center"
+                    variant="primary"
+                    className={cn(
+                      "text-base px-6 py-4 rounded-none border-r border-black/20 w-[170px] flex items-center justify-center",
+                      !selectedTariff
+                        ? "bg-gradient-to-b from-[#5d4037] to-[#3e2723] text-stone-400 border-[#4e342e] cursor-not-allowed opacity-70"
+                        : "bg-white border-white text-black hover:bg-gray-100 shadow-[0_0_14px_rgba(255,255,255,0.75)] hover:shadow-[0_0_20px_rgba(255,255,255,0.9)]"
+                    )}
                     onClick={() => {
                       if (!selectedTariff) {
                         playSound('error');
@@ -4347,11 +4930,14 @@ export default function Console() {
                     }}
                     disabled={isGenerating}
                   >
-                    {isGenerating ? "..." : (
-                      (weightHigh > 0 || manifestationBalance !== 0 || chaosLevel > 0)
-                        ? <span className="text-red-500 font-bold text-center leading-tight text-sm">RECHERCHE<br />PONDÉRÉE</span>
-                        : "RECHERCHER"
-                    )}
+                    {isGenerating ? "..." : (selectedTariff ? <span className="flex items-center gap-1.5">
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <polygon points="12,2 22,12 12,22 2,12" fill="#1a1a2e" stroke="#FFD700" strokeWidth="1.5" />
+                        <polygon points="12,4 20,12 12,20 4,12" fill="none" stroke="#FFD70055" strokeWidth="0.5" />
+                        <text x="8.5" y="16" fontFamily="Arial Black" fontSize="11" fontWeight="900" fill="#FFD700">F</text>
+                      </svg>
+                      <span className="text-white font-bold">FORBO</span>
+                    </span> : "")}
                   </CasinoButton>
                   <CasinoButton
                     size="lg"
@@ -4388,12 +4974,14 @@ export default function Console() {
         <div className="flex flex-col gap-[10px] justify-center">
           <CasinoButton
             size="md"
-            variant={!selectedTariff ? "danger" : "primary"}
+            variant="primary"
             className={cn(
               "text-sm px-4 py-[7px] w-[131px] flex items-center justify-center rounded-lg",
-              currentPrice === 0
-                ? "animate-pulse shadow-[0_0_12px_rgba(255,0,0,0.5)]"
-                : "shadow-[0_0_12px_rgba(255,215,0,0.2)]"
+              !selectedTariff
+                ? "bg-gradient-to-b from-[#5d4037] to-[#3e2723] text-stone-400 border-[#4e342e] cursor-not-allowed opacity-70"
+                : currentPrice === 0
+                  ? "bg-white border-white text-black animate-pulse shadow-[0_0_14px_rgba(255,255,255,0.75)]"
+                  : "bg-white border-white text-black hover:bg-gray-100 shadow-[0_0_14px_rgba(255,255,255,0.75)] hover:shadow-[0_0_20px_rgba(255,255,255,0.9)]"
             )}
             onClick={() => {
               if (!selectedTariff) {
@@ -4404,11 +4992,14 @@ export default function Console() {
             }}
             disabled={isGenerating}
           >
-            {isGenerating ? "..." : (
-              (weightHigh > 0 || manifestationBalance !== 0 || chaosLevel > 0)
-                ? <span className="text-red-500 font-bold text-center leading-tight text-[10px]">RECHERCHE<br />PONDÉRÉE</span>
-                : "RECHERCHER"
-            )}
+            {isGenerating ? "..." : (selectedTariff ? <span className="flex items-center gap-1.5">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <polygon points="12,2 22,12 12,22 2,12" fill="#1a1a2e" stroke="#FFD700" strokeWidth="1.5" />
+                <polygon points="12,4 20,12 12,20 4,12" fill="none" stroke="#FFD70055" strokeWidth="0.5" />
+                <text x="8.5" y="16" fontFamily="Arial Black" fontSize="11" fontWeight="900" fill="#FFD700">F</text>
+              </svg>
+              <span className="text-white font-bold">FORBO</span>
+            </span> : "")}
           </CasinoButton>
           {mode === 'manual' && (
             <CasinoButton
@@ -4476,1357 +5067,1162 @@ export default function Console() {
 
   return (
     <CasinoLayout>
-      {/* Plus de pop-up gagnant: redirection vers "Mes grilles jouées" */}
+      <div className={cn(
+        "transition-colors duration-500",
+        isBotBlinking && "shadow-[inset_0_0_150px_rgba(34,197,94,0.4)] bg-green-900/10 pointer-events-none"
+      )}>
+        {/* Plus de pop-up gagnant: redirection vers "Mes grilles jouées" */}
 
-      {/* Popup Gratitude (VIP/Abonné uniquement) - Depuis la DB */}
-      {showGratitudePopup && popup1Html ? (
-        <div dangerouslySetInnerHTML={{ __html: popup1Html }} />
-      ) : showGratitudePopup ? (
-        <GratitudePopup
-          isOpen={showGratitudePopup}
-          onOpenConsole={handleClosePopup}
-          onDontShowAgain={handleDontShowAgain}
-          dontShowAgainChecked={dontShowPopupAgain}
-          mode="welcome"
-        />
-      ) : null}
+        {/* Popup Gratitude (VIP/Abonné uniquement) - Depuis la DB */}
+        {showGratitudePopup && popup1Html ? (
+          <div dangerouslySetInnerHTML={{ __html: popup1Html }} />
+        ) : showGratitudePopup ? (
+          <GratitudePopup
+            isOpen={showGratitudePopup}
+            onOpenConsole={handleClosePopup}
+            onDontShowAgain={handleDontShowAgain}
+            dontShowAgainChecked={dontShowPopupAgain}
+            mode="welcome"
+          />
+        ) : null}
 
-      {/* Popup Gratitude Invité pour envoi direct - Depuis la DB */}
-      {showInviteSendPopup && popup1Html ? (
-        <div dangerouslySetInnerHTML={{ __html: popup1Html }} />
-      ) : showInviteSendPopup ? (
-        <GratitudePopup
-          isOpen={showInviteSendPopup}
-          mode="invite-send"
-          onValidate={handleInviteGratitudeValidate}
-          checkboxRequired={true}
-          accepted={inviteGratitudeAccepted}
-          onAcceptedChange={setInviteGratitudeAccepted}
-        />
-      ) : null}
+        {/* Popup Gratitude Invité pour envoi direct - Depuis la DB */}
+        {showInviteSendPopup && popup1Html ? (
+          <div dangerouslySetInnerHTML={{ __html: popup1Html }} />
+        ) : showInviteSendPopup ? (
+          <GratitudePopup
+            isOpen={showInviteSendPopup}
+            mode="invite-send"
+            onValidate={handleInviteGratitudeValidate}
+            checkboxRequired={true}
+            accepted={inviteGratitudeAccepted}
+            onAcceptedChange={setInviteGratitudeAccepted}
+          />
+        ) : null}
 
-      {/* Popup de consultation après envoi (invités uniquement) - Depuis la DB */}
-      {showConsultationPopup && popup2Html ? (
-        <div dangerouslySetInnerHTML={{ __html: popup2Html }} />
-      ) : showConsultationPopup ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          {/* Overlay grisé */}
-          <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
+        {/* Popup de consultation après envoi (invités uniquement) - Depuis la DB */}
+        {showConsultationPopup && popup2Html ? (
+          <div dangerouslySetInnerHTML={{ __html: popup2Html }} />
+        ) : showConsultationPopup ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center">
+            {/* Overlay grisé */}
+            <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />
 
-          {/* Popup */}
-          <div className="relative bg-gradient-to-b from-[#1a1a1a] to-[#0a0a0a] border-2 border-casino-gold rounded-xl p-9 max-w-lg mx-4 shadow-2xl shadow-casino-gold/20" style={{ transform: 'scale(1.5)', transformOrigin: 'center' }}>
-            {/* Décoration coin */}
-            <div className="absolute top-0 left-0 w-12 h-12 border-t-2 border-l-2 border-casino-gold rounded-tl-xl" />
-            <div className="absolute top-0 right-0 w-12 h-12 border-t-2 border-r-2 border-casino-gold rounded-tr-xl" />
-            <div className="absolute bottom-0 left-0 w-12 h-12 border-b-2 border-l-2 border-casino-gold rounded-bl-xl" />
-            <div className="absolute bottom-0 right-0 w-12 h-12 border-b-2 border-r-2 border-casino-gold rounded-br-xl" />
+            {/* Popup */}
+            <div className="relative bg-gradient-to-b from-[#1a1a1a] to-[#0a0a0a] border-2 border-casino-gold rounded-xl p-9 max-w-lg mx-4 shadow-2xl shadow-casino-gold/20" style={{ transform: 'scale(1.5)', transformOrigin: 'center' }}>
+              {/* Décoration coin */}
+              <div className="absolute top-0 left-0 w-12 h-12 border-t-2 border-l-2 border-casino-gold rounded-tl-xl" />
+              <div className="absolute top-0 right-0 w-12 h-12 border-t-2 border-r-2 border-casino-gold rounded-tr-xl" />
+              <div className="absolute bottom-0 left-0 w-12 h-12 border-b-2 border-l-2 border-casino-gold rounded-bl-xl" />
+              <div className="absolute bottom-0 right-0 w-12 h-12 border-b-2 border-r-2 border-casino-gold rounded-br-xl" />
 
-            {/* Titre */}
-            <h2 className="text-center font-orbitron text-2xl text-casino-gold mb-6 tracking-widest">
-              💬 CONSULTATION
-            </h2>
+              {/* Titre */}
+              <h2 className="text-center font-orbitron text-2xl text-casino-gold mb-6 tracking-widest">
+                💬 CONSULTATION
+              </h2>
 
-            {/* Message */}
-            <div className="bg-black/50 border border-zinc-700 rounded-lg p-6 mb-6">
-              <p className="text-zinc-300 text-lg leading-relaxed text-center">
-                Voulez-vous consulter vos numéros ?
-              </p>
-            </div>
-
-            {/* Boutons */}
-            <div className="flex gap-4">
-              {/* Bouton Non */}
-              <button
-                onClick={handleConsultationNo}
-                className={cn(
-                  "flex-1 py-4 px-6 rounded-lg font-orbitron font-bold text-lg tracking-wider transition-all duration-200",
-                  "bg-gradient-to-r from-zinc-700 to-zinc-600 text-white",
-                  "border-2 border-zinc-500 shadow-lg shadow-zinc-500/30",
-                  "hover:from-zinc-600 hover:to-zinc-500 hover:shadow-zinc-500/50",
-                  "active:scale-95"
-                )}
-              >
-                NON
-              </button>
-
-              {/* Bouton Oui */}
-              <button
-                onClick={handleConsultationYes}
-                className={cn(
-                  "flex-1 py-4 px-6 rounded-lg font-orbitron font-bold text-lg tracking-wider transition-all duration-200",
-                  "bg-gradient-to-r from-green-600 to-green-500 text-white",
-                  "border-2 border-green-400 shadow-lg shadow-green-500/30",
-                  "hover:from-green-500 hover:to-green-400 hover:shadow-green-500/50",
-                  "active:scale-95 animate-pulse hover:animate-none"
-                )}
-              >
-                OUI
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {/* Wrapper for perfect centering (relative pour positionner le volet chat) */}
-      <div className="w-full flex justify-center relative">
-        <div
-          className="p-2 space-y-2"
-          style={{
-            width: `${referenceWidth}px`,
-            transform: `scale(${zoomScale})`,
-            transformOrigin: 'top center'
-          }}
-          onClick={() => { setIsPresetDropdownOpen(false); setIsWeightDropdownOpen(false); setContextMenu(null); setIsPriceGridOpen(false); }}
-        >
-
-          {/* TITLE MOVED TO TOP */}
-          <div className="text-center mt-[20px] mb-[35px]">
-            <h2 className="text-4xl md:text-6xl font-orbitron font-bold tracking-[0.2em] uppercase text-shadow-glow rainbow-text-animated">
-              CONSOLE EUROMILLION TEST
-            </h2>
-          </div>
-
-          {/* Context Menu */}
-          {contextMenu && (
-            <div
-              className="fixed z-[100] bg-zinc-900 border border-zinc-700 rounded shadow-2xl p-2 min-w-[150px] space-y-1"
-              style={{ top: contextMenu.y, left: contextMenu.x }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <button
-                onClick={clearPreset}
-                className="w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-zinc-800 rounded font-rajdhani"
-              >
-                Effacer sa mémoire
-              </button>
-              <button
-                onClick={() => setContextMenu(null)}
-                className="w-full text-left px-4 py-2 text-sm text-zinc-400 hover:bg-zinc-800 rounded font-rajdhani"
-              >
-                Ne rien faire
-              </button>
-            </div>
-          )}
-
-
-          {/* TOP BAR: CONTROL CENTER */}
-          <div className="bg-zinc-900 border-b-4 border-casino-gold rounded-t-xl p-2 shadow-2xl relative z-50 mx-auto" style={{ width: `${totalColumnsWidth}px` }}>
-            {/* Background Tech Pattern */}
-            <div className="absolute inset-0 opacity-5 bg-[linear-gradient(45deg,transparent_25%,#fff_25%,#fff_50%,transparent_50%,transparent_75%,#fff_75%,#fff_100%)] bg-[length:20px_20px] rounded-t-xl" />
-
-            {/* Header Grid Layout for Centering */}
-            <div className="relative z-10 grid grid-cols-3 gap-4 items-center">
-
-              {/* LEFT: TITLE */}
-              <div className="flex flex-row items-center gap-8 justify-start">
-                <div className="flex flex-col justify-center items-start">
-                  <div className="flex items-center gap-2">
-                    <h1 className="text-xl md:text-2xl font-orbitron font-black text-white tracking-widest truncate">
-                      {user?.username}
-                    </h1>
-                    <span className="text-casino-gold font-orbitron text-sm border border-casino-gold/30 px-1 rounded bg-casino-gold/10">
-                      {user?.role.toUpperCase()}
-                    </span>
-                  </div>
-
-                  {/* Alerte AUTO update (si échec) */}
-                  {autoUpdateStatus && autoUpdateStatus.success === false && (
-                    <div className="mt-1 text-sm font-rajdhani text-red-300 bg-red-950/40 border border-red-700/50 rounded px-2 py-1 max-w-[720px]">
-                      <span className="font-bold uppercase tracking-wider">ALERTE MAJ AUTO :</span>{" "}
-                      {autoUpdateStatus.drawDate ? <span className="font-mono">{String(autoUpdateStatus.drawDate)}</span> : null}{" "}
-                      {autoUpdateStatus.message ? <span className="text-zinc-200">{String(autoUpdateStatus.message).slice(0, 220)}</span> : null}
-                    </div>
-                  )}
-
-                  {/* Message gagnants à la connexion (sans popup) */}
-                  {unseenWins.length > 0 && (
-                    <div className="mt-1 text-sm font-rajdhani text-emerald-200 bg-emerald-950/30 border border-emerald-700/50 rounded px-2 py-1 max-w-[720px] flex items-center gap-3">
-                      <span className="font-bold uppercase tracking-wider">GAGNÉ :</span>
-                      <span className="text-zinc-200">
-                        {unseenWins.length} grille{unseenWins.length > 1 ? 's' : ''} gagnante{unseenWins.length > 1 ? 's' : ''} non vue{unseenWins.length > 1 ? 's' : ''}.
-                      </span>
-                      <button
-                        className={cn(
-                          "ml-auto px-3 py-1 rounded-md font-orbitron text-xs tracking-widest border",
-                          winsAcking ? "opacity-50 cursor-not-allowed border-zinc-700 text-zinc-400" : "border-casino-gold/60 text-casino-gold hover:bg-black/40"
-                        )}
-                        onClick={ackAllWins}
-                        disabled={winsAcking}
-                        title="Marquer comme vu"
-                      >
-                        OK
-                      </button>
-                    </div>
-                  )}
-
-                  {dernierTirage && (
-                    <div
-                      className={cn(
-                        "flex items-center gap-2 text-lg font-rajdhani mt-0.5 animate-in fade-in slide-in-from-left-2 duration-500",
-                        updateNeeded ? "text-red-400 animate-pulse cursor-pointer hover:text-red-300 transition-colors" : "text-zinc-400"
-                      )}
-                      onClick={updateNeeded ? () => window.location.href = '/history' : undefined}
-                      title={updateNeeded ? "Cliquez pour mettre à jour l'historique" : undefined}
-                    >
-                      <span className="uppercase tracking-wider">DERNIER ({dernierTirage.date && !isNaN(new Date(dernierTirage.date).getTime()) ? format(new Date(dernierTirage.date), 'dd/MM') : dernierTirage.date || '??/??'}):</span>
-                      <span className={cn(
-                        "font-mono font-bold tracking-widest",
-                        updateNeeded ? "text-red-300" : "text-white"
-                      )}>
-                        {dernierTirage.numeros.join(' ')}
-                      </span>
-                      <span className={cn(
-                        "font-mono font-bold tracking-widest flex items-center gap-1",
-                        updateNeeded ? "text-red-400" : "text-yellow-500"
-                      )}>
-                        <span>★</span>{dernierTirage.etoiles.join(' ')}
-                      </span>
-                    </div>
-                  )}
-                </div>
-
-                {/* PRICE GRID DROPDOWN - MOVED HERE (LEFT SIDE) */}
-                <div className="relative" ref={priceGridRef}>
-                  <div
-                    className="flex flex-col items-center group cursor-pointer"
-                    onClick={(e) => { e.stopPropagation(); setIsPriceGridOpen(!isPriceGridOpen); }}
-                    title="Voir la grille des prix"
-                  >
-                    <div className="flex items-center gap-3 text-casino-gold font-orbitron font-bold text-xl leading-none shadow-gold-glow">
-                      <span>TARIFS</span>
-                      <ChevronDown size={18} className={cn("transition-transform", isPriceGridOpen && "rotate-180")} />
-                    </div>
-                  </div>
-
-                  {isPriceGridOpen && (
-                    <div
-                      className="absolute top-full left-0 mt-4 w-[420px] bg-zinc-950 border border-zinc-600 rounded-lg shadow-[0_20px_60px_rgba(0,0,0,0.9)] z-[9999] max-h-[80vh] overflow-y-auto custom-scrollbar pointer-events-auto ring-1 ring-white/10"
-                      onClick={(e) => e.stopPropagation()}
-                      onMouseDown={(e) => e.stopPropagation()}
-                    >
-                      <div className="p-3 border-b border-zinc-800 bg-zinc-900/95 sticky top-0 backdrop-blur-md z-10">
-                        <div className="text-sm font-bold text-center text-zinc-300 font-rajdhani tracking-widest">COMBINAISONS MULTIPLES</div>
-                      </div>
-                      <div className="p-1 bg-black/90">
-                        {Object.entries(GRILLE_TARIFAIRE).flatMap(([nums, starPrices]) =>
-                          Object.entries(starPrices).map(([stars, price]) => ({
-                            nums: parseInt(nums),
-                            stars: parseInt(stars),
-                            price: price as number
-                          }))
-                        ).sort((a, b) => a.price - b.price).map((item, idx) => (
-                          <div key={idx}
-                            className="flex justify-between items-center px-4 py-3 hover:bg-zinc-800/80 active:bg-zinc-700 rounded transition-all border-b border-zinc-800/50 last:border-0 cursor-pointer group"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              const { nums, stars } = item;
-
-                              setMaxWeightLimit(nums);
-                              setMaxStarWeightLimit(stars);
-
-                              // UPDATE SELECTED TARIFF STATE
-                              setSelectedTariff({ nums, stars, price: item.price });
-
-                              // RESET ALL WEIGHT KNOBS TO 0 when tariff changes
-                              // IMPORTANT: Do NOT reset DORMEURS here (it's a Statistique control).
-                              setWeightHigh(0);
-                              setWeightStarHigh(0); setWeightStarMid(0); setWeightStarLow(0); setWeightStarDormeur(0);
-
-                              setIsPriceGridOpen(false);
-                              playSound('click');
-                              toast.success(`Limite définie : ${nums} Boules + ${stars} Étoiles`);
-                            }}
-                          >
-                            <div className="flex items-center gap-3 text-lg font-rajdhani text-zinc-300">
-                              <span className="font-bold text-white">{item.nums}</span> numéros
-                              <span className="text-zinc-600">+</span>
-                              <span className="font-bold text-yellow-500">{item.stars}</span> ★
-                            </div>
-                            <div className="text-casino-gold font-bold font-mono text-xl">
-                              {item.price.toFixed(2)} €
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
+              {/* Message */}
+              <div className="bg-black/50 border border-zinc-700 rounded-lg p-6 mb-6">
+                <p className="text-zinc-300 text-lg leading-relaxed text-center">
+                  Voulez-vous consulter vos numéros ?
+                </p>
               </div>
 
-              {/* CENTER: SOUND + (ADMIN: CLÉ) + CHAT */}
-              <div className="flex items-center justify-center gap-[20px] h-full pt-[24px]">
-
-                {/* SOUND TOGGLE */}
+              {/* Boutons */}
+              <div className="flex gap-4">
+                {/* Bouton Non */}
                 <button
-                  onClick={() => setSoundEnabled(!soundEnabled)}
+                  onClick={handleConsultationNo}
                   className={cn(
-                    "w-10 h-10 rounded-full border-2 flex items-center justify-center transition-colors text-lg flex-shrink-0",
-                    soundEnabled ? "bg-green-900/50 border-green-500 text-green-500" : "bg-red-900/50 border-red-500 text-red-500"
+                    "flex-1 py-4 px-6 rounded-lg font-orbitron font-bold text-lg tracking-wider transition-all duration-200",
+                    "bg-gradient-to-r from-zinc-700 to-zinc-600 text-white",
+                    "border-2 border-zinc-500 shadow-lg shadow-zinc-500/30",
+                    "hover:from-zinc-600 hover:to-zinc-500 hover:shadow-zinc-500/50",
+                    "active:scale-95"
                   )}
-                  title={soundEnabled ? "Son activé" : "Son désactivé"}
                 >
-                  {soundEnabled ? "♪" : "×"}
+                  NON
                 </button>
 
-                {/* ADMIN: CLÉ (Panneau de contrôle) - même format que le bouton Chat */}
-                {user?.role === 'admin' && (
-                  <button
-                    onClick={() => setIsDebugOpen(true)}
-                    className="w-11 h-11 rounded-full border-2 border-[#d4af37] bg-[linear-gradient(180deg,#2a2a2a_0%,#1a1a1a_100%)] text-[#d4af37] hover:bg-[linear-gradient(180deg,#3a3a3a_0%,#2a2a2a_100%)] hover:border-[#ffd700] hover:shadow-[0_0_10px_rgba(212,175,55,0.5)] transition-all duration-300 flex items-center justify-center flex-shrink-0"
-                    title="Panneau de contrôle"
-                  >
-                    <Wrench size={20} />
-                  </button>
-                )}
-
-                {/* CHAT - bulle de parole, style bleu + nombre connectés + badge non lus */}
-                <div className="flex flex-col items-center gap-0.5">
-                  {!isChatOpen && (chatSocket.totalUnread ?? 0) > 0 && (
-                    <span className="text-[11px] text-red-500 font-mono tabular-nums font-bold leading-none">
-                      {chatSocket.totalUnread}
-                    </span>
+                {/* Bouton Oui */}
+                <button
+                  onClick={handleConsultationYes}
+                  className={cn(
+                    "flex-1 py-4 px-6 rounded-lg font-orbitron font-bold text-lg tracking-wider transition-all duration-200",
+                    "bg-gradient-to-r from-green-600 to-green-500 text-white",
+                    "border-2 border-green-400 shadow-lg shadow-green-500/30",
+                    "hover:from-green-500 hover:to-green-400 hover:shadow-green-500/50",
+                    "active:scale-95 animate-pulse hover:animate-none"
                   )}
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => setIsChatOpen(true)}
-                      className="w-9 h-9 rounded-full border-2 border-blue-500 bg-[linear-gradient(180deg,#1e3a5f_0%,#0f172a_100%)] text-blue-400 hover:bg-[linear-gradient(180deg,#2563eb_0%,#1e40af_100%)] hover:border-blue-400 hover:text-white hover:shadow-[0_0_12px_rgba(59,130,246,0.6)] transition-all duration-300 flex items-center justify-center flex-shrink-0"
-                      title="Chat"
-                    >
-                      <MessageSquare size={18} strokeWidth={2.5} />
-                    </button>
-                    <span className="text-[15px] text-zinc-500 font-mono tabular-nums leading-none">
-                      {chatSocket.connected ? chatSocket.othersConnectedCount : '—'}
-                    </span>
-                  </div>
-                </div>
-
-              </div>
-
-              {/* RIGHT: CONTROL, DATE & PRESET */}
-              <div className="flex items-center gap-3 justify-end">
-
-                {/* TRASH MOVED TO BOTTOM */}
-
-                <div className="flex flex-col items-end">
-
-                  <div className="flex flex-col items-end mr-2">
-                    <label className="text-[10px] text-zinc-500 uppercase mb-0.5 tracking-wider font-bold">PROCHAIN TIRAGE</label>
-                    <div className="text-casino-gold font-orbitron font-bold text-lg leading-none text-right shadow-gold-glow flex items-center gap-2">
-                      <span className="uppercase">
-                        {prochainTirage ? `${prochainTirage.jour} ${format(prochainTirage.date, 'd MMMM yyyy', { locale: frLocale })}`.toUpperCase() : '-- --'}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* CUSTOM RÉGLAGE SELECTOR - White style - Same height as Pondération */}
-                <div className="flex flex-col items-center pt-[24px]">
-                  <div className="relative flex items-center bg-black border border-white/70 rounded h-[38px] w-[190px] shadow-[0_0_10px_rgba(255,255,255,0.1)]">
-                    {/* Réglage Name Display */}
-                    <div
-                      className={cn(
-                        "flex-1 px-3 text-2xl font-rajdhani cursor-pointer select-none truncate h-full flex items-center transition-colors",
-                        presetHasData[selectedPreset] ? "text-white font-bold" : "text-zinc-400"
-                      )}
-                      onClick={(e) => { e.stopPropagation(); setIsPresetDropdownOpen(!isPresetDropdownOpen); }}
-                      title="Cliquer pour ouvrir le menu"
-                    >
-                      Réglage {selectedPreset}
-                    </div>
-
-                    {/* Arrow Trigger */}
-                    <button
-                      className="h-full px-2 border-l border-white/30 hover:bg-white/10 text-zinc-400 hover:text-white transition-colors flex items-center justify-center"
-                      onClick={(e) => { e.stopPropagation(); setIsPresetDropdownOpen(!isPresetDropdownOpen); }}
-                    >
-                      <ChevronDown size={18} />
-                    </button>
-
-                    {/* Dropdown Menu */}
-                    {isPresetDropdownOpen && (
-                      <div className="absolute top-full left-0 right-0 mt-1 bg-black border border-white/50 rounded shadow-[0_0_20px_rgba(255,255,255,0.2)] z-[100] max-h-[300px] overflow-y-auto custom-scrollbar">
-                        {[0, 1, 2, 3, 4, 5].map(num => {
-                          const presetId = num.toString();
-                          const isSaved = !!presetHasData[presetId];
-                          const isPreset0 = presetId === "0";
-
-                          return (
-                            <div
-                              key={num}
-                              className={cn(
-                                "px-4 py-2 text-xl font-rajdhani cursor-pointer hover:bg-white/10 transition-colors flex justify-between items-center",
-                                selectedPreset === presetId && "bg-white/20 text-white",
-                                isPreset0 && "text-zinc-500 italic"
-                              )}
-                              onClick={() => handleLoadPreset(presetId)}
-                            >
-                              <span className={isPreset0 ? "text-zinc-500 italic" : (isSaved ? "text-white font-bold" : "text-zinc-400")}>
-                                Réglage {num} {isPreset0 && "(Aucun préréglage)"}
-                              </span>
-
-                              <div className="flex items-center gap-2">
-                                {isPreset0 ? (
-                                  <span className="text-xs text-zinc-500 italic">Ne fait rien</span>
-                                ) : isSaved ? (
-                                  <>
-                                    {/* Delete button - Red square */}
-                                    <button
-                                      onClick={(e) => handleDeletePreset(presetId, e)}
-                                      className="w-5 h-5 bg-red-600 hover:bg-red-500 rounded flex items-center justify-center transition-colors"
-                                      title="Effacer ce réglage"
-                                    >
-                                      <span className="text-white text-xs font-bold">✕</span>
-                                    </button>
-                                    {/* Saved indicator - White */}
-                                    <span className="text-sm text-white font-bold">
-                                      Enregistré
-                                    </span>
-                                  </>
-                                ) : (
-                                  /* Save button */
-                                  <button
-                                    onClick={(e) => handleSavePreset(presetId, e)}
-                                    className="text-sm text-zinc-400 hover:text-white transition-colors"
-                                  >
-                                    Enregistrer
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </div>
+                >
+                  OUI
+                </button>
               </div>
             </div>
           </div>
+        ) : null}
 
-          {/* MAIN COCKPIT GRID */}
-          <div className="flex flex-row relative items-stretch mx-auto" style={{ width: `${totalColumnsWidth}px`, gap: `${columnGap}px` }}>
+        {/* Wrapper d'origine pour ancrage à gauche (ramène les 5% du volet Nexus dans l'écran) */}
+        <div className="w-full flex relative pb-8">
+          <div
+            className="p-2 space-y-2"
+            style={{
+              width: `${referenceWidth}px`,
+              transform: `scale(${zoomScale})`,
+              transformOrigin: 'top center',
+              position: 'relative',
+            }}
+            onClick={() => {
+              setIsPresetDropdownOpen(false);
+              setIsWeightDropdownOpen(false);
+              setPresetContextMenu(null);
+              setIsPriceGridOpen(false);
+              setCombosListOpen(false); // fermer au clic dans le vide de la console
+            }}
+          >
 
-            {/* LEFT: NUMBERS CONFIG - RESSERRÉ ET CORRIGÉ */}
-            <div className={cn("flex-none flex flex-col gap-2", mode === 'auto' && "justify-end")} style={{ width: `${leftColumnWidth}px` }}>
-              {mode === 'manual' && (
-                <SectionPanel
-                  title={
-                    isSimplifiedMode ? (
-                      <span className="flex flex-nowrap items-center justify-start w-full gap-2">
-                        <button
-                          className={cn(
-                            "px-3 py-1 text-sm font-bold rounded transition-colors whitespace-nowrap",
-                            "w-[140px] flex items-center justify-center shrink-0",
-                            simplifiedSortOrder === 'numeric'
-                              ? "bg-white text-black hover:bg-zinc-200"
-                              : "bg-white/20 text-white/80 hover:bg-white/30"
-                          )}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSimplifiedSortOrder('numeric');
-                            playSound('click');
-                          }}
-                          aria-pressed={simplifiedSortOrder === 'numeric'}
-                        >
-                          Boules de 1 à 50
-                        </button>
-                        <div className="flex flex-nowrap items-center gap-2 min-w-0">
-                          <button
-                            className={cn(
-                              "px-3 py-1 text-sm font-bold rounded transition-colors",
-                              simplifiedSortOrder === 'frequency'
-                                ? "bg-green-600 text-white hover:bg-green-500"
-                                : "bg-green-600/25 text-white/80 hover:bg-green-600/35"
-                            )}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSimplifiedSortOrder('frequency');
-                              playSound('click');
-                            }}
-                            aria-pressed={simplifiedSortOrder === 'frequency'}
-                          >
-                            Fréquence
-                          </button>
-                          <button
-                            className={cn(
-                              "px-3 py-1 text-sm font-bold rounded transition-colors",
-                              simplifiedSortOrder === 'surrepr'
-                                ? "bg-violet-600 text-white hover:bg-violet-500"
-                                : "bg-violet-600/25 text-white/80 hover:bg-violet-600/35"
-                            )}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSimplifiedSortOrder('surrepr');
-                              playSound('click');
-                            }}
-                            aria-pressed={simplifiedSortOrder === 'surrepr'}
-                          >
-                            Surreprés.
-                          </button>
-                          <button
-                            className={cn(
-                              "px-3 py-1 text-sm font-bold rounded transition-colors",
-                              simplifiedSortOrder === 'trend'
-                                ? "bg-red-600 text-white hover:bg-red-500"
-                                : "bg-red-600/25 text-white/80 hover:bg-red-600/35"
-                            )}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSimplifiedSortOrder('trend');
-                              playSound('click');
-                            }}
-                            aria-pressed={simplifiedSortOrder === 'trend'}
-                          >
-                            Tendance
-                          </button>
-                          <button
-                            className={cn(
-                              "px-3 py-1 text-sm font-bold rounded transition-colors",
-                              simplifiedSortOrder === 'dormeur'
-                                ? "bg-blue-600 text-white hover:bg-blue-500"
-                                : "bg-blue-600/25 text-white/80 hover:bg-blue-600/35"
-                            )}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSimplifiedSortOrder('dormeur');
-                              playSound('click');
-                            }}
-                            aria-pressed={simplifiedSortOrder === 'dormeur'}
-                          >
-                            Dormeur
-                          </button>
-                          <LCDDisplay
-                            value={lcdText}
-                            size="btn"
-                            variant="inline"
-                            color="green"
-                            className="ml-0 shrink-0 w-[150px]"
-                          />
-                        </div>
-                      </span>
-                    ) : "CONFIGURATION BOULES (1-50)"
-                  }
-                  disabled={!canUseManual}
-                  className="flex flex-col p-[10px]"
-                  ledActive={true}
+            {/* TITLE MOVED TO TOP */}
+            <div className="text-center mt-[40px]">
+              <h2 className="text-4xl md:text-6xl font-orbitron font-bold tracking-[0.2em] uppercase text-shadow-glow rainbow-text-animated">
+                CONSOLE EUROMILLIONS
+              </h2>
+              {/* CENTER: NEXT DRAW COUNTDOWN (F6 Tooltip) */}
+              <div
+                className="mt-[20px] flex justify-center cursor-help items-center"
+                title="Clic droit pour plus d'infos sur le cycle"
+                onContextMenu={(e) => showTooltip(e, {
+                  title: 'COMPTE À REBOURS',
+                  description: 'Temps restant avant la clôture du prochain tirage Loto.',
+                  reasoning: 'Tous les calculs magnétiques (Cycles, Symbioses) sont projetés avec précision pour cet horizon temporel.',
+                  color: '#facc15' // casino-gold
+                })}
+              >
+                <div className="text-casino-gold font-orbitron font-black text-[2.5rem] leading-none text-shadow-glow flex items-center gap-4">
+                  <span><ProchainTirageSimple /></span>
+                </div>
+              </div>
+
+              {/* Preset Context Menu */}
+              {presetContextMenu && (
+                <div
+                  className="fixed z-[100] bg-zinc-900 border border-zinc-700 rounded shadow-2xl p-2 min-w-[150px] space-y-1"
+                  style={{ top: presetContextMenu.y, left: presetContextMenu.x }}
+                  onClick={(e) => e.stopPropagation()}
                 >
-                  <div className="flex-1 flex flex-col justify-start">
-                    {/* Row 1: High Freq (classic) or Balls 1-13 (simplified) */}
-                    <div className="bg-black/30 p-1.5 rounded border border-zinc-800 flex items-center transition-all duration-300 mb-[6px]">
-                      {mode === 'manual' && (
-                        <div className={cn("flex-1 flex justify-start", !isSimplifiedMode && "ml-2")}>
-                          <BallGrid
-                            stats={isSimplifiedMode ? getSimplifiedBallStats(simplifiedSortOrder).slice(0, 13) : highFreqStats}
-                            countLimit={isSimplifiedMode ? 13 : 10}
-                            selectedNumbers={selectedNumbers}
-                            selectedStars={selectedStars}
-                            numberSources={numberSources}
-                            starSources={starSources}
-                            category={isSimplifiedMode ? undefined : "high"}
-                            onToggle={toggleSelection}
-                            className={isSimplifiedMode ? "py-0 justify-between w-full" : "py-0 justify-start gap-[4px]"}
-                            resolveCategory={isSimplifiedMode ? undefined : resolveCategory}
-                            highlightRDV={highlightRDV}
-                            rdvLevel={rdvLevel}
-                            rdvFaithfuls={rdvFaithfuls}
-                          />
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Row 2: Mid Freq (classic) or Balls 14-26 (simplified) */}
-                    <div className="bg-black/30 p-1.5 rounded border border-zinc-800 flex items-center transition-all duration-300 mb-[6px]">
-                      {mode === 'manual' && (
-                        <div className={cn("flex-1 flex justify-start", !isSimplifiedMode && "ml-2")}>
-                          <BallGrid
-                            stats={isSimplifiedMode ? getSimplifiedBallStats(simplifiedSortOrder).slice(13, 26) : midFreqStats}
-                            countLimit={isSimplifiedMode ? 13 : 10}
-                            selectedNumbers={selectedNumbers}
-                            selectedStars={selectedStars}
-                            numberSources={numberSources}
-                            starSources={starSources}
-                            category={undefined}
-                            onToggle={toggleSelection}
-                            className={isSimplifiedMode ? "py-0 justify-between w-full" : "py-0 justify-start gap-[4px]"}
-                            resolveCategory={undefined}
-                            highlightRDV={highlightRDV}
-                            rdvLevel={rdvLevel}
-                            rdvFaithfuls={rdvFaithfuls}
-                          />
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Row 3: Low Freq (classic) or Balls 27-39 (simplified) */}
-                    <div className="bg-black/30 p-1.5 rounded border border-zinc-800 flex items-center transition-all duration-300 mb-[6px]">
-                      {mode === 'manual' && (
-                        <div className={cn("flex-1 flex justify-start", !isSimplifiedMode && "ml-2")}>
-                          <BallGrid
-                            stats={isSimplifiedMode ? getSimplifiedBallStats(simplifiedSortOrder).slice(26, 39) : lowFreqStats}
-                            countLimit={isSimplifiedMode ? 13 : 10}
-                            selectedNumbers={selectedNumbers}
-                            selectedStars={selectedStars}
-                            numberSources={numberSources}
-                            starSources={starSources}
-                            category={undefined}
-                            onToggle={toggleSelection}
-                            className={isSimplifiedMode ? "py-0 justify-between w-full" : "py-0 justify-start gap-[4px]"}
-                            resolveCategory={undefined}
-                            highlightRDV={highlightRDV}
-                            rdvLevel={rdvLevel}
-                            rdvFaithfuls={rdvFaithfuls}
-                          />
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Row 4: Dormeur (classic) or Balls 40-50 (simplified) */}
-                    <div className="bg-black/30 p-1.5 rounded border border-zinc-800 flex items-center transition-all duration-300 mb-[6px]">
-                      {mode === 'manual' && (
-                        <div className={cn("flex-1 flex justify-start", !isSimplifiedMode && "ml-2")}>
-                          <BallGrid
-                            stats={isSimplifiedMode
-                              ? [
-                                ...getSimplifiedBallStats(simplifiedSortOrder).slice(39, 50),
-                                // Add 2 invisible placeholders to maintain spacing like 13 balls
-                                { number: -1, frequency: 0, trendScore: 0, trendDirection: 'stable' as const },
-                                { number: -2, frequency: 0, trendScore: 0, trendDirection: 'stable' as const }
-                              ]
-                              : dormeurStats
-                            }
-                            countLimit={isSimplifiedMode ? 13 : 10}
-                            selectedNumbers={selectedNumbers}
-                            selectedStars={selectedStars}
-                            numberSources={numberSources}
-                            starSources={starSources}
-                            category={isSimplifiedMode ? undefined : "dormeur"}
-                            onToggle={toggleSelection}
-                            className={isSimplifiedMode ? "py-0 justify-between w-full" : "py-0 justify-start gap-[4px]"}
-                            resolveCategory={isSimplifiedMode ? undefined : resolveCategory}
-                            highlightRDV={highlightRDV}
-                            rdvLevel={rdvLevel}
-                            rdvFaithfuls={rdvFaithfuls}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </SectionPanel>
+                  <button
+                    onClick={clearPreset}
+                    className="w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-zinc-800 rounded font-rajdhani"
+                  >
+                    Effacer sa mémoire
+                  </button>
+                  <button
+                    onClick={() => setPresetContextMenu(null)}
+                    className="w-full text-left px-4 py-2 text-sm text-zinc-400 hover:bg-zinc-800 rounded font-rajdhani"
+                  >
+                    Ne rien faire
+                  </button>
+                </div>
               )}
 
-              <SectionPanel
-                title={
-                  <div className="w-full grid grid-cols-2 items-center">
-                    {/* Left: PRIORITÉS DE TRI (Centered in Left Column) */}
-                    <div className="text-center">
-                      <span className="text-zinc-300 font-bold text-[10px] sm:text-xs tracking-widest uppercase drop-shadow-md whitespace-nowrap">
-                        PRIORITÉS DE TRI
-                      </span>
-                    </div>
-
-                    {/* Right: RÉALISER LES TIRAGES (Centered in Right Column) */}
-                    <div className="text-center px-1">
-                      <span className="font-orbitron text-casino-gold text-lg tracking-widest uppercase truncate whitespace-nowrap block">
-                        RÉALISER LES TIRAGES
-                      </span>
-                    </div>
-                  </div>
-                }
-                disabled={!isWeightsEnabled}
-                headerAction={
-                  <div className="flex items-center gap-2">
-                    <div className="scale-[0.85] origin-right whitespace-nowrap">
-                      <ProchainTirageSimple />
-                    </div>
-                    {/* Unique LED on the right, as requested (since overriding headerAction removes default) */}
-                    <LEDIndicator active={true} color="green" />
-                  </div>
-                }
-                className="h-[200px] flex flex-col"
-              >
-                {isSimplifiedMode ? (
-                  /* Mode simplifié : Priorité de tri déplacée dans la colonne Statistique */
-                  <div className="flex-1 min-h-0 flex items-center justify-center py-1">
-                    <ActionsControls variant="rack" />
-                  </div>
-                ) : (
-                  <div className="flex-1 min-h-0 flex items-center justify-center">
-                    <ActionsControls variant="rack" />
-                  </div>
-                )}
-              </SectionPanel>
-            </div>
-
-            {/* CENTER: DASHBOARD / OPTIONS */}
-            <div className="w-[280px] flex flex-col gap-2 flex-shrink-0">
-              {/* OPTIONS PANEL - hauteur fixe pour stabilité */}
-              <div className="bg-[#111] border-2 border-zinc-800 rounded-xl p-2 flex flex-col items-center justify-start gap-2 shadow-inner relative overflow-hidden min-h-[465px] flex-shrink-0">
-                <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-zinc-800/20 via-black to-black pointer-events-none" />
+              {/* F6: Tooltip Context Menu Universel */}
+              {tooltipData && (
+                <TooltipContextMenu
+                  x={tooltipData.x}
+                  y={tooltipData.y}
+                  data={tooltipData.data}
+                  onClose={() => setTooltipData(null)}
+                />
+              )}
 
 
-                {/* HAZARD CONTROL */}
-                <div className="w-full relative z-10 flex flex-col items-center flex-1 justify-end -mt-[10px] pb-0 gap-0">
-                  <div className="flex flex-col w-full mb-1 items-center justify-center relative h-[60px]">
-                    {/* Top Line */}
-                    <div className="w-full h-px bg-zinc-800 absolute top-2" />
+              {/* TOP BAR: CONTROL CENTER */}
+              <div className="bg-zinc-900 border-b-4 border-casino-gold rounded-t-xl p-2 shadow-2xl relative z-[60] mx-auto mt-[20px]" style={{ width: `${totalColumnsWidth}px` }}>
+                {/* Background Tech Pattern */}
+                <div className="absolute inset-0 opacity-5 bg-[linear-gradient(45deg,transparent_25%,#fff_25%,#fff_50%,transparent_50%,transparent_75%,#fff_75%,#fff_100%)] bg-[length:20px_20px] rounded-t-xl" />
 
-                    {/* Title + LED Container */}
-                    <div className="flex items-center justify-center w-full z-10 px-4 bg-[#111]">
-                      <div className="text-center font-rajdhani font-bold tracking-widest text-[28px] text-amber-500 text-shadow-glow mx-auto">
-                        STATISTIQUE
+                {/* Header Grid Layout for Centering */}
+                <div className="relative z-10 grid grid-cols-3 gap-4 items-center">
+
+                  {/* LEFT: TITLE */}
+                  <div className="flex flex-row items-center gap-8 justify-start">
+                    <div className="flex flex-col justify-center items-start">
+                      <div className="flex items-center gap-2">
+                        <h1 className="text-xl md:text-2xl font-orbitron font-black text-white tracking-widest truncate">
+                          {user?.username}
+                        </h1>
+                        <span className="text-casino-gold font-orbitron text-sm border border-casino-gold/30 px-1 rounded bg-casino-gold/10">
+                          {user?.role.toUpperCase()}
+                        </span>
                       </div>
-                      <div className="absolute right-4 top-1/2 -translate-y-1/2">
-                        <LEDIndicator active={hazardLevel > 0} color="purple" />
-                      </div>
-                    </div>
 
-                    {/* Bottom Line */}
-                    <div className="w-full h-px bg-zinc-800 absolute bottom-2" />
-                  </div>
+                      {/* Alerte AUTO update (si échec) */}
+                      {autoUpdateStatus && autoUpdateStatus.success === false && (
+                        <div className="mt-1 text-sm font-rajdhani text-red-300 bg-red-950/40 border border-red-700/50 rounded px-2 py-1 max-w-[720px]">
+                          <span className="font-bold uppercase tracking-wider">ALERTE MAJ AUTO :</span>{" "}
+                          {autoUpdateStatus.drawDate ? <span className="font-mono">{String(autoUpdateStatus.drawDate)}</span> : null}{" "}
+                          {autoUpdateStatus.message ? <span className="text-zinc-200">{String(autoUpdateStatus.message).slice(0, 220)}</span> : null}
+                        </div>
+                      )}
 
-                  {/* CONTAINER 1: WEIGHT KNOBS (Top) */}
-                  <div className="flex-1 w-full flex items-center justify-center p-0 bg-black/20">
-                    <div className="flex items-start justify-center gap-1 w-full px-1 -translate-y-2.5">
-                      {/* Knob FRÉQUENCE (Left) */}
-                      <div className="flex flex-col items-center gap-2 w-[90px]">
-                        <div className="h-5 flex items-center justify-center w-full text-center relative mb-0">
-                          <span className="text-white font-rajdhani font-bold text-base uppercase tracking-wider">FRÉQUENCE</span>
-                        </div>
-                        <div className="h-[80px] flex items-center justify-center">
-                          <RotaryKnob
-                            label=""
-                            value={influenceFreq}
-                            onChange={(v) => { setInfluenceFreq(v); playSound('knob'); }}
-                            max={10}
-                            size="ml"
-                            knobColor="border-green-700 shadow-[0_0_10px_rgba(22,163,74,0.3)] bg-zinc-900"
-                            indicatorColor="bg-green-600"
-                            labelClassName="hidden"
-                            valueClassName="text-green-500"
-                          />
-                        </div>
-                      </div>
-                      {/* Knob SURREPRÉS (Middle) */}
-                      <div className="flex flex-col items-center gap-2 w-[90px]">
-                        <div className="h-5 flex items-center justify-center w-full text-center relative mb-0">
-                          <span className="text-white font-rajdhani font-bold text-base uppercase tracking-wider">SURREPRÉS</span>
-                        </div>
-                        <div className="h-[80px] flex items-center justify-center">
-                          <RotaryKnob
-                            label=""
-                            value={influenceSurrepr}
-                            onChange={(v) => { setInfluenceSurrepr(v); playSound('knob'); }}
-                            max={10}
-                            size="ml"
-                            knobColor="border-violet-700 shadow-[0_0_10px_rgba(124,58,237,0.3)] bg-zinc-900"
-                            indicatorColor="bg-violet-600"
-                            labelClassName="hidden"
-                            valueClassName="text-violet-500"
-                          />
-                        </div>
-                      </div>
-                      {/* Knob TENDANCE (Right) */}
-                      <div className="flex flex-col items-center gap-2 w-[90px]">
-                        <div className="h-5 flex items-center justify-center w-full text-center relative mb-0">
-                          <span className="text-white font-rajdhani font-bold text-base uppercase tracking-wider">TENDANCE</span>
-                        </div>
-                        <div className="h-[80px] flex items-center justify-center">
-                          <RotaryKnob
-                            label=""
-                            value={influenceTrend}
-                            onChange={(v) => { setInfluenceTrend(v); playSound('knob'); }}
-                            max={10}
-                            size="ml"
-                            knobColor="border-red-700 shadow-[0_0_10px_rgba(220,38,38,0.3)] bg-zinc-900"
-                            indicatorColor="bg-red-600"
-                            labelClassName="hidden"
-                            valueClassName="text-red-500"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* CONTAINER 2: CONTROL KNOBS (Middle) */}
-                  <div className="flex-1 w-full flex items-center justify-center p-0 mt-0 bg-black/20">
-                    <div className="flex items-start justify-center gap-1 w-full px-1 -translate-y-2.5">
-                      {/* MANIFESTATION Knob (Left) */}
-                      <div className="flex flex-col items-center gap-2 w-[90px]">
+                      {/* Message gagnants à la connexion (sans popup) */}
+                      {unseenWins.length > 0 && (
                         <div
-                          className={cn("h-6 flex items-center justify-center w-full text-center relative cursor-pointer select-none rounded decoration-2 underline-offset-4 mb-0", manifestationBalance === 0 ? "hover:underline active:scale-95 transition-all" : "")}
-                          onClick={() => { if (manifestationBalance === 0) { setManifestationBias(!manifestationBias); playSound('click'); } }}
-                          title={manifestationBalance === 0 ? "Cliquer pour alterner la priorité (High vs Dormeur)" : undefined}
+                          className="mt-1 text-sm font-rajdhani text-emerald-200 bg-emerald-950/30 border border-emerald-700/50 rounded px-2 py-1 max-w-[720px] flex items-center gap-3 cursor-help"
+                          onContextMenu={(e) => showTooltip(e, {
+                            title: 'GAINS EN ATTENTE',
+                            description: 'Indique le nombre de grilles gagnantes détectées depuis votre dernière connexion.',
+                            reasoning: 'Le vérificateur croise l\'historique blockchain du Loto avec vos sélections enregistrées.',
+                            color: '#10b981' // emerald-500
+                          })}
                         >
-                          <span className={cn("font-rajdhani font-bold text-base uppercase tracking-wider transition-colors duration-300", manifestationBalance < 0 ? "text-white" : manifestationBalance > 0 ? "text-blue-500" : manifestationBias ? "text-blue-500" : "text-white")}>
-                            {manifestationBalance < 0 ? "MANIFEST." : manifestationBalance > 0 ? "COMPENS." : "MAN./COMP."}
+                          <span className="font-bold uppercase tracking-wider">GAGNÉ :</span>
+                          <span className="text-zinc-200">
+                            {unseenWins.length} grille{unseenWins.length > 1 ? 's' : ''} gagnante{unseenWins.length > 1 ? 's' : ''} non vue{unseenWins.length > 1 ? 's' : ''}.
+                          </span>
+                          <button
+                            className={cn(
+                              "ml-auto px-3 py-1 rounded-md font-orbitron text-xs tracking-widest border",
+                              winsAcking ? "opacity-50 cursor-not-allowed border-zinc-700 text-zinc-400" : "border-casino-gold/60 text-casino-gold hover:bg-black/40"
+                            )}
+                            onClick={ackAllWins}
+                            disabled={winsAcking}
+                            title="Marquer comme vu"
+                          >
+                            OK
+                          </button>
+                        </div>
+                      )}
+
+                      {dernierTirage && (
+                        <div
+                          className={cn(
+                            "flex items-center gap-2 text-lg font-rajdhani mt-0.5 animate-in fade-in slide-in-from-left-2 duration-500 cursor-help",
+                            updateNeeded ? "text-red-400 animate-pulse hover:text-red-300 transition-colors" : "text-zinc-400"
+                          )}
+                          onClick={updateNeeded ? () => window.location.href = '/history' : undefined}
+                          onContextMenu={(e) => showTooltip(e, {
+                            title: 'DERNIER TIRAGE',
+                            description: 'Les résultats officiels du Loto les plus récents en mémoire.',
+                            reasoning: 'Base de calcul pour les retards (Dormeurs) et les sauts de tendance immédiats.',
+                            color: updateNeeded ? '#ef4444' : '#a1a1aa'
+                          })}
+                          title={updateNeeded ? "Cliquez pour mettre à jour l'historique" : "Clic droit pour Infos"}
+                        >
+                          <span className="uppercase tracking-wider">DERNIER ({dernierTirage.date && !isNaN(new Date(dernierTirage.date).getTime()) ? format(new Date(dernierTirage.date), 'dd/MM') : dernierTirage.date || '??/??'}):</span>
+                          <span className={cn(
+                            "font-mono font-bold tracking-widest",
+                            updateNeeded ? "text-red-300" : "text-white"
+                          )}>
+                            {dernierTirage.numeros.join(' ')}
+                          </span>
+                          <span className={cn(
+                            "font-mono font-bold tracking-widest flex items-center gap-1",
+                            updateNeeded ? "text-red-400" : "text-yellow-500"
+                          )}>
+                            <span>★</span>{dernierTirage.etoiles.join(' ')}
                           </span>
                         </div>
-                        <div className="h-[80px] flex items-center justify-center">
-                          <RotaryKnob
-                            label=""
-                            value={manifestationBalance + 5}
-                            onChange={(v) => { const bal = v - 5; setManifestationBalance(bal); playSound('knob'); }}
-                            max={10}
-                            size="ml"
-                            knobColor={cn("transition-colors duration-300", (manifestationBalance < 0 || (manifestationBalance === 0 && !manifestationBias)) ? "border-white shadow-[0_0_10px_rgba(255,255,255,0.3)] bg-zinc-900" : "border-blue-600 shadow-[0_0_10px_rgba(37,99,235,0.4)] bg-zinc-900")}
-                            indicatorColor={cn("transition-colors duration-300", (manifestationBalance < 0 || (manifestationBalance === 0 && !manifestationBias)) ? "bg-white" : "bg-blue-500")}
-                            labelClassName="hidden"
-                            valueClassName={cn("transition-colors duration-300", (manifestationBalance < 0 || (manifestationBalance === 0 && !manifestationBias)) ? "text-white" : "text-blue-500")}
-                            displayTransformer={(v) => Math.abs(v - 5)}
-                          />
-                        </div>
-                        <div className="h-3 mt-2.5 text-[11px] text-zinc-500 font-mono">
-                          {manifestationBalance < 0 ? "High" : manifestationBalance > 0 ? "Dormeur" : (manifestationBias ? "Bias: Dormeur" : "Bias: High")}
-                        </div>
-                      </div>
-                      {/* CHAOS Knob (Middle) */}
-                      <div className="flex flex-col items-center gap-2 w-[90px]">
-                        <div className="h-6 flex items-center justify-center w-full text-center relative mb-0">
-                          <span className="text-zinc-400 font-rajdhani font-bold text-base uppercase tracking-wider">CHAOS</span>
-                        </div>
-                        <div className="h-[80px] flex items-center justify-center">
-                          <RotaryKnob
-                            label=""
-                            value={chaosLevel}
-                            onChange={(v) => { setChaosLevel(v); playSound('knob'); }}
-                            max={10}
-                            size="ml"
-                            knobColor="border-zinc-500 shadow-[0_0_10px_rgba(0,0,0,0.3)] bg-zinc-300"
-                            indicatorColor="bg-black"
-                            labelClassName="hidden"
-                            valueClassName="text-black"
-                          />
-                        </div>
-                        <div className="h-3 mt-2.5 text-[11px] text-zinc-600 font-mono">Entropie</div>
-                      </div>
-                      {/* VIVIER Knob (Right) */}
-                      <div className="flex flex-col items-center gap-2 w-[90px]">
-                        <div className="h-6 flex items-center justify-center w-full text-center relative mb-0">
-                          <span className="text-amber-500 font-rajdhani font-bold text-base uppercase tracking-wider">VIVIER</span>
-                        </div>
-                        <div className="h-[80px] flex items-center justify-center">
-                          <RotaryKnob
-                            label=""
-                            value={hazardLevel}
-                            onChange={(v) => { setHazardLevel(v); playSound('knob'); }}
-                            max={10}
-                            size="ml"
-                            knobColor="border-amber-700 shadow-[0_0_10px_rgba(180,83,9,0.3)] bg-zinc-900"
-                            indicatorColor="bg-amber-600"
-                            labelClassName="hidden"
-                            valueClassName="text-amber-500"
-                          />
-                        </div>
-                        <div className="h-3 mt-[10.5px] flex items-center justify-center w-full text-center font-mono text-[11px] tracking-wider text-amber-400/90 select-none" title={`Vivier: ${chaosLabel}`}>
-                          {chaosLabel}
-                        </div>
-                      </div>
+                      )}
                     </div>
-                  </div>
 
-                  {/* CONTAINER 3: R.D.V KNOB (White Sparkly) */}
-                  <div className="flex-1 w-full flex items-center justify-center p-0 mt-0 bg-black/20">
-                    <div className="flex flex-col items-center gap-2 w-[90px]">
+                    {/* PRICE GRID DROPDOWN - MOVED HERE (LEFT SIDE) */}
+                    <div className="relative" ref={priceGridRef}>
                       <div
-                        className="h-6 flex items-center justify-center w-full text-center relative cursor-pointer select-none group"
-                        onClick={() => { setHighlightRDV(!highlightRDV); playSound('bling'); }}
-                        title="Cliquer pour mettre en lumière les fidèles du tirage"
+                        className="flex flex-col items-center group cursor-pointer"
+                        onClick={(e) => { e.stopPropagation(); setIsPriceGridOpen(!isPriceGridOpen); }}
+                        onContextMenu={(e) => showTooltip(e, {
+                          title: 'SÉLECTEUR DE TARIFS',
+                          description: 'Définit le budget et limite générative de la console.',
+                          reasoning: 'Les tarifs conditionnent la matrice Forbo pour s\'assurer que les combos générés respectent votre plafond.',
+                          example: '8 Boules + 2 Etoiles = 84.00 €',
+                          color: '#fbbf24'
+                        })}
+                        title="Voir la grille des prix (Clic droit: Info)"
                       >
-                        <span className={cn(
-                          "font-rajdhani font-bold text-base uppercase tracking-wider transition-all duration-500",
-                          highlightRDV ? "text-white drop-shadow-[0_0_8px_rgba(255,255,255,1)] scale-110" : "text-zinc-400 group-hover:text-zinc-200"
-                        )}>
-                          R.D.V
-                        </span>
-                        {highlightRDV && <Sparkles size={12} className="absolute -right-1 -top-1 text-white animate-pulse" />}
-                      </div>
-                      <div className="h-[80px] flex items-center justify-center">
-                        <RotaryKnob
-                          label=""
-                          value={rdvLevel}
-                          onChange={(v) => { setRdvLevel(v); playSound('knob'); }}
-                          max={10}
-                          size="ml"
-                          knobColor="border-zinc-200 shadow-[0_0_15px_rgba(255,255,255,0.4)] bg-zinc-900"
-                          indicatorColor="bg-white"
-                          labelClassName="hidden"
-                          valueClassName="text-white drop-shadow-[0_0_5px_rgba(255,255,255,0.5)] font-bold"
-                        />
-                      </div>
-                      <div className="h-3 mt-2.5 text-[11px] text-zinc-500 font-mono">Fidélité</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* PRICE RACK (NEW) - Fixed height to prevent footer movement */}
-              <SectionPanel title="PRIX DE LA GRILLE" className="h-[180px] flex flex-col justify-center items-center" showLed={false}>
-                <div className="flex flex-col items-center justify-center w-full gap-0.5">
-                  <div className="text-white font-rajdhani font-black text-xl tracking-wide">
-                    {displayNumCount} Numéros + {displayStarCount} Étoiles
-                  </div>
-                  <div className={cn(
-                    "font-bold font-lcd flex items-center gap-2",
-                    currentPrice === 0
-                      ? "text-5xl text-white animate-pulse drop-shadow-[0_0_20px_rgba(255,255,255,1)] shadow-white"
-                      : "text-3xl text-casino-gold text-shadow-glow"
-                  )}>
-                    <span className={currentPrice === 0 ? "animate-[pulse_0.8s_ease-in-out_infinite] drop-shadow-[0_0_30px_rgba(255,255,255,0.9)]" : ""}>
-                      {currentPrice.toFixed(2)} €
-                    </span>
-
-                    {/* RESET BUTTON */}
-                    <div
-                      onClick={handleReset}
-                      className="cursor-pointer transition-transform hover:scale-110 ml-2"
-                      title="Réinitialiser tous les réglages (y compris priorité de tri)"
-                    >
-                      <RefreshCcw size={24} className="text-white drop-shadow-[0_0_5px_rgba(255,255,255,0.5)] hover:text-red-400 transition-colors" />
-                    </div>
-                  </div>
-                </div>
-              </SectionPanel>
-            </div>
-
-            {/* RIGHT: STARS CONFIG - ÉLARGI */}
-            <div className="flex-none flex flex-col gap-2 justify-end" style={{ width: `${rightColumnWidth}px` }}>
-              {mode === 'manual' && (
-                <SectionPanel
-                  title={
-                    isSimplifiedMode ? (
-                      <span className="flex items-center justify-center w-full">
-                        <span className="text-center">Étoiles de 1 à 12 <span className="text-yellow-400 ml-2 text-xl align-middle">★</span></span>
-                      </span>
-                    ) : (
-                      <>CONFIGURATION ÉTOILES (1-12) <span className="text-yellow-400 ml-3 text-xl align-middle">★</span></>
-                    )
-                  }
-                  disabled={!canUseManual}
-                  className="flex flex-col p-[10px]"
-                  ledActive={true}
-                >
-                  <div className="flex flex-col justify-start">
-                    {/* Row 1: High Star (classic) or Stars 1-6 (simplified) */}
-                    <div className="bg-black/30 p-1.5 rounded border border-zinc-800 flex items-center transition-all duration-300 mb-[6px]">
-                      {mode === 'manual' && (
-                        <div className={cn("flex-1 flex justify-start", !isSimplifiedMode && "ml-2")}>
-                          <BallGrid
-                            stats={isSimplifiedMode ? getSimplifiedStarStats(simplifiedSortOrder).slice(0, 6) : highStarStats}
-                            countLimit={isSimplifiedMode ? 6 : 12}
-                            type="star"
-                            selectedNumbers={selectedNumbers}
-                            selectedStars={selectedStars}
-                            numberSources={numberSources}
-                            starSources={starSources}
-                            category={isSimplifiedMode ? undefined : "high"}
-                            onToggle={toggleSelection}
-                            className={isSimplifiedMode ? "py-0 justify-evenly w-full" : "py-0 justify-start gap-[4px]"}
-                            resolveCategory={isSimplifiedMode ? undefined : resolveCategory}
-                            highlightRDV={highlightRDV}
-                            rdvLevel={rdvLevel}
-                            rdvFaithfuls={rdvFaithfuls}
-                          />
+                        <div className="flex items-center gap-3 text-casino-gold font-orbitron font-bold text-xl leading-none shadow-gold-glow">
+                          <span>TARIFS</span>
+                          <ChevronDown size={18} className={cn("transition-transform", isPriceGridOpen && "rotate-180")} />
                         </div>
-                      )}
-                    </div>
+                      </div>
 
-                    {/* Row 2: Mid Star (classic) or Stars 7-12 (simplified) */}
-                    <div className="bg-black/30 p-1.5 rounded border border-zinc-800 flex items-center transition-all duration-300 mb-[6px]">
-                      {mode === 'manual' && (
-                        <div className={cn("flex-1 flex justify-start", !isSimplifiedMode && "ml-2")}>
-                          <BallGrid
-                            stats={isSimplifiedMode ? getSimplifiedStarStats(simplifiedSortOrder).slice(6, 12) : midStarStats}
-                            countLimit={isSimplifiedMode ? 6 : 12}
-                            type="star"
-                            selectedNumbers={selectedNumbers}
-                            selectedStars={selectedStars}
-                            numberSources={numberSources}
-                            starSources={starSources}
-                            category={undefined}
-                            onToggle={toggleSelection}
-                            className={isSimplifiedMode ? "py-0 justify-evenly w-full" : "py-0 justify-start gap-[4px]"}
-                            resolveCategory={undefined}
-                            highlightRDV={highlightRDV}
-                            rdvLevel={rdvLevel}
-                            rdvFaithfuls={rdvFaithfuls}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </SectionPanel>
-              )}
-
-              <SectionPanel
-                title="PROGRAMMATION DES TIRAGES"
-                disabled={false}
-                showLed={false}
-                className="h-[395px]"
-              >
-                <div className="h-full" />
-              </SectionPanel>
-            </div>
-
-          </div>
-
-          {/* BOTTOM: RESULT AREA */}
-          <div className="bg-gradient-to-t from-black to-zinc-900 border-t-4 border-casino-red rounded-b-xl p-1 shadow-2xl relative mt-1 mx-auto" style={{ width: `${totalColumnsWidth}px` }}>
-            {/* Header Row: Title - Button - Actions */}
-            <div className="flex flex-row items-center justify-between gap-2 relative z-20 mb-1">
-
-              {/* Title (Left) */}
-              <div className="flex-1 text-left min-w-[200px]">
-                {/* Title Removed */}
-              </div>
-
-              {/* Validate Button (Center) */}
-              <div className="flex-none mx-auto flex flex-col items-center">
-                {/* ProchainTirageSimple moved to rack title - hidden here */}
-
-                {/* Buttons moved to rack - only show in simplified manual mode (but they're in ACTIONS panel there too, so hide all) */}
-                {false && mode === 'manual' ? (
-                  <div className="relative flex items-center justify-center">
-                    <div className={cn(
-                      "flex items-center rounded-xl overflow-hidden min-w-[450px] justify-center",
-                      currentPrice === 0
-                        ? "animate-pulse shadow-[0_0_20px_rgba(255,0,0,0.8)]"
-                        : "shadow-[0_0_20px_rgba(255,215,0,0.4)] animate-pulse hover:animate-none"
-                    )}>
-                      <CasinoButton
-                        size="lg"
-                        variant={!selectedTariff ? "danger" : "primary"}
-                        className="text-lg px-8 py-6 rounded-none border-r border-black/20 w-[225px] flex items-center justify-center"
-                        onClick={() => {
-                          if (!selectedTariff) {
-                            playSound('error');
-                            return;
-                          }
-                          handleGenerate('auto');
-                        }}
-                        disabled={isGenerating}
-                      >
-                        {isGenerating ? "..." : (
-                          (weightHigh > 0 || manifestationBalance !== 0 || chaosLevel > 0 ||
-                            weightStarHigh > 0 || weightStarMid > 0 || weightStarLow > 0 || weightStarDormeur > 0)
-                            ? <span className="text-red-500 font-bold text-center leading-tight">RECHERCHE<br />PONDÉRÉE</span>
-                            : "RECHERCHER"
-                        )}
-                      </CasinoButton>
-                      <CasinoButton
-                        size="lg"
-                        variant={(!selectedTariff || selectedNumbers.length !== selectedTariff?.nums || selectedStars.length !== selectedTariff?.stars) ? "danger" : "primary"}
-                        className={cn(
-                          "text-lg px-8 py-6 rounded-none w-[225px] flex items-center justify-center",
-                          (!selectedTariff || selectedNumbers.length !== selectedTariff?.nums || selectedStars.length !== selectedTariff?.stars)
-                            ? "bg-gradient-to-b from-red-600 to-red-900 border-red-500 cursor-not-allowed"
-                            : "bg-gradient-to-b from-green-600 to-green-900 border-green-500 text-white hover:from-green-500 hover:to-green-800 shadow-none hover:shadow-[inset_0_0_20px_rgba(0,0,0,0.5)]"
-                        )}
-                        onClick={() => {
-                          if (!selectedTariff || selectedNumbers.length !== selectedTariff?.nums || selectedStars.length !== selectedTariff?.stars) {
-                            playSound('error');
-                            return;
-                          }
-                          handleGenerate('manual');
-                        }}
-                        disabled={isGenerating}
-                      >
-                        {isGenerating ? "..." : "VALIDER"}
-                      </CasinoButton>
-                    </div>
-
-                    {/* TRASH / CLEAR HISTORY BUTTON (MANUAL MODE - SAME AS AUTO) */}
-                    <div className="absolute left-full ml-[30px] top-1/2 -translate-y-1/2 z-50">
-                      {!showClearConfirm ? (
-                        <button
-                          onClick={() => {
-                            setShowClearConfirm(true);
-                          }}
-                          className="w-12 h-12 flex items-center justify-center bg-red-900/30 border border-red-500/50 rounded-lg text-red-500 hover:bg-red-900/50 hover:text-red-400 hover:border-red-400 transition-all"
-                          title="Effacer tout l'historique"
+                      {isPriceGridOpen && (
+                        <div
+                          className="absolute top-full left-0 mt-4 w-[420px] bg-zinc-950 border border-zinc-600 rounded-lg shadow-[0_20px_60px_rgba(0,0,0,0.9)] z-[9999] max-h-[80vh] overflow-y-auto custom-scrollbar pointer-events-auto ring-1 ring-white/10"
+                          onClick={(e) => e.stopPropagation()}
+                          onMouseDown={(e) => e.stopPropagation()}
                         >
-                          <Trash2 size={24} />
-                        </button>
-                      ) : (
-                        <div className="absolute top-1/2 -translate-y-1/2 left-full ml-2 flex items-center gap-2 bg-black border border-red-500 rounded-lg p-2 z-50 animate-in fade-in slide-in-from-left-2 duration-200 shadow-xl whitespace-nowrap">
-                          <button
-                            onClick={() => {
-                              setAutoDraws([]);
-                              setGeneratedNumbers([]);
-                              setGeneratedStars([]);
-                              setShowClearConfirm(false);
-                              playSound('click');
-                              toast.success("Historique effacé");
-                            }}
-                            className="px-6 py-3 bg-red-600 hover:bg-red-500 text-white text-sm font-bold rounded flex items-center gap-1 shadow-lg transform hover:scale-105 transition-all"
-                          >
-                            CONFIRMER
-                          </button>
-                          <button
-                            onClick={() => setShowClearConfirm(false)}
-                            className="px-6 py-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-sm font-bold rounded shadow-lg transform hover:scale-105 transition-all"
-                          >
-                            ANNULER
-                          </button>
+                          <div className="p-3 border-b border-zinc-800 bg-zinc-900/95 sticky top-0 backdrop-blur-md z-10">
+                            <div className="text-sm font-bold text-center text-zinc-300 font-rajdhani tracking-widest">COMBINAISONS MULTIPLES</div>
+                          </div>
+                          <div className="p-1 bg-black/90">
+                            {Object.entries(GRILLE_TARIFAIRE).flatMap(([nums, starPrices]) =>
+                              Object.entries(starPrices).map(([stars, price]) => ({
+                                nums: parseInt(nums),
+                                stars: parseInt(stars),
+                                price: price as number
+                              }))
+                            ).sort((a, b) => a.price - b.price).map((item, idx) => (
+                              <div key={idx}
+                                className="flex justify-between items-center px-4 py-3 hover:bg-zinc-800/80 active:bg-zinc-700 rounded transition-all border-b border-zinc-800/50 last:border-0 cursor-pointer group"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const { nums, stars } = item;
+
+                                  setMaxWeightLimit(nums);
+                                  setMaxStarWeightLimit(stars);
+
+                                  // UPDATE SELECTED TARIFF STATE
+                                  setSelectedTariff({ nums, stars, price: item.price });
+
+                                  // RESET ALL WEIGHT KNOBS TO 0 when tariff changes
+                                  // IMPORTANT: Do NOT reset DORMEURS here (it's a Statistique control).
+                                  setWeightHigh(0);
+                                  setWeightStarHigh(0); setWeightStarMid(0); setWeightStarLow(0); setWeightStarDormeur(0);
+
+                                  setIsPriceGridOpen(false);
+                                  playSound('click');
+                                  toast.success(`Limite définie : ${nums} Boules + ${stars} Étoiles`);
+                                }}
+                              >
+                                <div className="flex items-center gap-3 text-lg font-rajdhani text-zinc-300">
+                                  <span className="font-bold text-white">{item.nums}</span> numéros
+                                  <span className="text-zinc-600">+</span>
+                                  <span className="font-bold text-yellow-500">{item.stars}</span> ★
+                                </div>
+                                <div className="text-casino-gold font-bold font-mono text-xl">
+                                  {item.price.toFixed(2)} €
+                                </div>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       )}
                     </div>
                   </div>
-                ) : null /* Buttons moved to rack in classic mode */}
-              </div>
 
-              {/* Actions moved to rack - keep empty space for layout balance */}
-              <div className="flex-1 min-w-[200px]" />
-            </div>
+                  {/* CENTER: SOUND + (ADMIN: CLÉ) + CHAT */}
+                  <div className="flex items-center justify-center gap-[20px] h-full pt-[24px]">
 
-            {/* Results Row (Full Width Below) */}
-            {mode === 'manual' && autoDraws.length === 0 ? (
-              <div
-                className="w-full bg-black/50 p-2 rounded-2xl border border-zinc-800 shadow-[inset_0_0_20px_rgba(0,0,0,0.8)] min-h-[60px] flex items-center justify-center relative z-10"
-                onClick={handleReveal}
-              >
-                {/* Small trash button to clear current selection */}
-                {generatedNumbers.length > 0 && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setSelectedNumbers([]);
-                      setSelectedStars([]);
-                      setGeneratedNumbers([]);
-                      setGeneratedStars([]);
-                      setNumberSources({});
-                      setStarSources({});
-                      playSound('click');
-                    }}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center rounded-lg bg-red-950/30 text-red-600 hover:bg-red-900/80 hover:text-white transition-all z-50 border border-red-900/50 hover:border-red-500 shadow-lg hover:shadow-red-900/20 hover:scale-110"
-                    title="Effacer ce tirage"
-                  >
-                    <Trash2 size={20} />
-                  </button>
-                )}
+                    {/* SOUND TOGGLE */}
+                    <button
+                      onClick={() => setSoundEnabled(!soundEnabled)}
+                      onContextMenu={(e) => showTooltip(e, {
+                        title: 'EFFETS SONORES',
+                        description: 'Active ou désactive les retours audio de la console.',
+                        reasoning: 'L\'audio aide à percevoir la "physique" de la machine Forbo pendant la sélection.',
+                        color: soundEnabled ? '#22c55e' : '#ef4444' // green-500 or red-500
+                      })}
+                      className={cn(
+                        "w-10 h-10 rounded-full border-2 flex items-center justify-center transition-colors text-lg flex-shrink-0",
+                        soundEnabled ? "bg-green-900/50 border-green-500 text-green-500" : "bg-red-900/50 border-red-500 text-red-500"
+                      )}
+                      title={soundEnabled ? "Son activé (Clic droit: Info)" : "Son désactivé (Clic droit: Info)"}
+                    >
+                      {soundEnabled ? "♪" : "×"}
+                    </button>
 
-                {generatedNumbers.length > 0 ? (
-                  <div className={cn(
-                    "flex flex-wrap justify-center items-center gap-x-4 gap-y-2 text-2xl md:text-3xl font-black font-mono tracking-wider transition-all duration-700",
-                    // Manual mode doesn't really use isRevealed usually, but let's keep it safe
-                  )}>
-                    {/* NUMBERS IN WHITE */}
-                    <div className="flex flex-wrap justify-center gap-2">
-                      {generatedNumbers.map((n, i) => (
-                        <div key={`n-${i}`} className={cn(
-                          "w-10 h-10 md:w-12 md:h-12 rounded-full flex items-center justify-center shadow-lg border-2 transition-all",
-                          n === 0
-                            ? "bg-zinc-800 border-zinc-600 text-zinc-400"
-                            : "bg-white border-zinc-200 text-black shadow-[0_0_15px_rgba(255,255,255,0.5)]"
-                        )}>
-                          {n === 0 ? '?' : n}
-                        </div>
-                      ))}
+                    {/* NEXUS DETAIL: LOUPE */}
+                    <button
+                      onClick={() => setNexusDetailOpen(true)}
+                      onContextMenu={(e) => showTooltip(e, {
+                        title: 'NEXUS DÉTAILS',
+                        description: 'Affiche l\'analyse structurelle complète de la combinaison sélectionnée.',
+                        reasoning: 'La loupe permet de plonger dans les entrailles magnétiques du Nexus pour vérifier les concordances.',
+                        color: '#facc15' // casino-gold
+                      })}
+                      className="w-11 h-11 rounded-full border-2 border-casino-gold/50 bg-zinc-900 text-casino-gold hover:bg-casino-gold/20 hover:border-casino-gold hover:shadow-[0_0_12px_rgba(250,204,21,0.4)] transition-all duration-300 flex items-center justify-center flex-shrink-0"
+                      title="Détails Nexus (Clic droit: Info)"
+                    >
+                      <Search size={20} />
+                    </button>
+
+                    {/* CHAT - bulle de parole, style bleu + nombre connectés + badge non lus */}
+                    <div className="flex flex-col items-center gap-0.5">
+                      {!isChatOpen && (chatSocket.totalUnread ?? 0) > 0 && (
+                        <span className="text-[11px] text-red-500 font-mono tabular-nums font-bold leading-none">
+                          {chatSocket.totalUnread}
+                        </span>
+                      )}
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => setIsChatOpen(!isChatOpen)}
+                          onContextMenu={(e) => showTooltip(e, {
+                            title: 'SYNDICAT COOPÉRATIF',
+                            description: 'Ouvre le canal de communication en temps réel avec les autres joueurs connectés.',
+                            reasoning: 'Le jeu coopératif permet de partager les algorithmes et couvrir plus de grilles matrix.',
+                            example: `${chatSocket.othersConnectedCount} membre(s) en ligne actuellement.`,
+                            color: '#3b82f6' // blue-500
+                          })}
+                          className="w-9 h-9 rounded-full border-2 border-blue-500 bg-[linear-gradient(180deg,#1e3a5f_0%,#0f172a_100%)] text-blue-400 hover:bg-[linear-gradient(180deg,#2563eb_0%,#1e40af_100%)] hover:border-blue-400 hover:text-white hover:shadow-[0_0_12px_rgba(59,130,246,0.6)] transition-all duration-300 flex items-center justify-center flex-shrink-0"
+                          title="Chat (Clic droit: Info)"
+                        >
+                          <MessageSquare size={18} strokeWidth={2.5} />
+                        </button>
+                        <span className="text-[15px] text-zinc-500 font-mono tabular-nums leading-none">
+                          {chatSocket.connected ? chatSocket.othersConnectedCount : '—'}
+                        </span>
+                      </div>
                     </div>
 
-                    {/* SEPARATOR */}
-                    <div className="text-zinc-600 hidden md:flex items-center mx-2 text-4xl">|</div>
+                  </div>
 
-                    {/* STARS IN YELLOW */}
-                    <div className="flex flex-wrap justify-center gap-2">
-                      {generatedStars.map((n, i) => (
-                        <div key={`s-${i}`} className={cn(
-                          "w-10 h-10 md:w-12 md:h-12 rounded-full flex items-center justify-center shadow-lg border-2 transition-all",
-                          n === 0
-                            ? "bg-zinc-800 border-yellow-900/50 text-yellow-700"
-                            : "bg-yellow-400 border-yellow-200 text-yellow-900 shadow-[0_0_15px_rgba(255,215,0,0.5)]"
-                        )}>
-                          {n === 0 ? '?' : n}
+                  {/* RIGHT: CONTROL, DATE & PRESET */}
+                  <div className="flex items-center gap-3 justify-end">
+
+                    {/* TRASH MOVED TO BOTTOM */}
+
+                    <div className="flex flex-col items-end">
+
+                      <div className="flex flex-col items-end mr-2">
+                        <label className="text-[10px] text-zinc-500 uppercase mb-0.5 tracking-wider font-bold">PROCHAIN TIRAGE</label>
+                        <div className="text-casino-gold font-orbitron font-bold text-lg leading-none text-right shadow-gold-glow flex items-center gap-2">
+                          <span className="uppercase">
+                            {prochainTirage ? `${prochainTirage.jour} ${format(prochainTirage.date, 'd MMMM yyyy', { locale: frLocale })}`.toUpperCase() : '-- --'}
+                          </span>
                         </div>
-                      ))}
+                      </div>
                     </div>
-                  </div>
-                ) : (
-                  <div className="flex items-center text-zinc-600 font-lcd text-lg tracking-widest opacity-50">
-                    -- -- -- -- --  |  -- --
-                  </div>
-                )}
 
-                {showSuccessMessage && !isAdminOrVip && (
-                  <div className="absolute bottom-1 right-2 text-green-500 font-rajdhani font-bold text-xs animate-bounce">
-                    ✓ Envoyé avec succès
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div ref={autoDrawsContainerRef} className="w-full flex flex-col gap-2 mt-2 max-h-[400px] overflow-y-auto custom-scrollbar">
-                {autoDraws.length > 0 ? (
-                  autoDraws.map((draw, idx) => {
-                    // Logique de visibilité :
-                    // - Mode manuel : toujours visible (Admin/VIP/Abonné ont le mode manuel)
-                    // - Mode auto : Invite masqué, Admin/VIP/Abonné visibles
-                    const isRevealed = mode === 'manual' ? true : (isInvite ? false : (draw.revealed !== undefined ? draw.revealed : true));
-                    const shouldBlur = !isRevealed;
-                    const shouldHideNumbers = isInvite; // Masquer uniquement pour les invités
-
-                    return (
+                    {/* CUSTOM RÉGLAGE SELECTOR - White style - Same height as Pondération */}
+                    <div className="flex flex-col items-center pt-[24px]">
                       <div
-                        key={`draw-${idx}`}
-                        className={cn(
-                          "w-full bg-black/50 p-2 rounded-2xl border shadow-[inset_0_0_20px_rgba(0,0,0,0.8)] min-h-[60px] flex items-center justify-center relative z-10 animate-in slide-in-from-top-4 duration-500 fade-in",
-                          isInvite ? "border-zinc-700 opacity-60" : "border-zinc-800 cursor-pointer"
-                        )}
-                        onClick={() => {
-                          // Seuls les invités ne peuvent pas révéler (en mode auto)
-                          if (shouldBlur && !isInvite) {
-                            const newDraws = [...autoDraws];
-                            newDraws[idx].revealed = true;
-                            setAutoDraws(newDraws);
-                          }
-                        }}
+                        className="relative flex items-center bg-black border border-white/70 rounded h-[38px] w-[190px] shadow-[0_0_10px_rgba(255,255,255,0.1)]"
+                        onContextMenu={(e) => showTooltip(e, {
+                          title: `PRÉRÉGLAGE ${selectedPreset}`,
+                          description: 'Les presets (0 à 7) mémorisent la totalité de la table de mixage (boutons, curseurs, tarifs).',
+                          reasoning: 'Le mode 0 est le Neutre. Double-cliquez sur un slot pour y forger votre machine. Clic droit pour effacer.',
+                          example: 'Idéal pour isoler une configuration "Mardi" et une "Vendredi".',
+                          color: '#ffffff'
+                        })}
                       >
-                        <div className="absolute left-4 text-xs text-zinc-600 font-mono">
-                          #{autoDraws.length - idx} {draw.revealed === true && mode === 'manual' && idx === 0 ? '(MANUEL)' : ''}
+                        {/* Réglage Name Display */}
+                        <div
+                          className={cn(
+                            "flex-1 px-3 text-2xl font-rajdhani cursor-pointer select-none truncate h-full flex items-center transition-colors",
+                            presetHasData[selectedPreset] ? "text-white font-bold" : "text-zinc-400"
+                          )}
+                          onClick={(e) => { e.stopPropagation(); setIsPresetDropdownOpen(!isPresetDropdownOpen); }}
+                          onDoubleClick={handlePresetDoubleClick}
+                          onContextMenu={handlePresetContextMenu}
+                          title="Clic G: Menu | Clic D: Infos/Effacer | Double Clic: Sauvegarder"
+                        >
+                          Réglage {selectedPreset}
                         </div>
-                        {mode === 'manual' && !isInvite && (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              const newDraws = [...autoDraws];
-                              newDraws.splice(idx, 1);
-                              setAutoDraws(newDraws);
 
-                              // If this was the first/current draw, also clear the selections
-                              if (idx === 0) {
-                                setSelectedNumbers([]);
-                                setSelectedStars([]);
-                                setGeneratedNumbers([]);
-                                setGeneratedStars([]);
-                                setNumberSources({});
-                                setStarSources({});
-                              }
+                        {/* Arrow Trigger */}
+                        <button
+                          className="h-full px-2 border-l border-white/30 hover:bg-white/10 text-zinc-400 hover:text-white transition-colors flex items-center justify-center"
+                          onClick={(e) => { e.stopPropagation(); setIsPresetDropdownOpen(!isPresetDropdownOpen); }}
+                        >
+                          <ChevronDown size={18} />
+                        </button>
 
-                              playSound('click');
-                            }}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 flex items-center justify-center rounded-lg bg-red-950/30 text-red-600 hover:bg-red-900/80 hover:text-white transition-all z-50 border border-red-900/50 hover:border-red-500 shadow-lg hover:shadow-red-900/20 hover:scale-110"
-                            title="Supprimer ce tirage"
-                          >
-                            <Trash2 size={20} />
-                          </button>
+                        {/* Dropdown Menu */}
+                        {isPresetDropdownOpen && (
+                          <div className="absolute top-full left-0 right-0 mt-1 bg-black border border-white/50 rounded shadow-[0_0_20px_rgba(255,255,255,0.2)] z-[100] max-h-[300px] overflow-y-auto custom-scrollbar">
+                            {[0, 1, 2, 3, 4, 5, 6, 7].map(num => {
+                              const presetId = num.toString();
+                              const isSaved = !!presetHasData[presetId];
+                              const isPreset0 = presetId === "0";
+
+                              return (
+                                <div
+                                  key={num}
+                                  className={cn(
+                                    "px-4 py-2 text-xl font-rajdhani cursor-pointer hover:bg-white/10 transition-colors flex justify-between items-center",
+                                    selectedPreset === presetId && "bg-white/20 text-white",
+                                    isPreset0 && "text-zinc-500 italic"
+                                  )}
+                                  onClick={() => handleLoadPreset(presetId)}
+                                >
+                                  <span className={isPreset0 ? "text-zinc-500 italic" : (isSaved ? "text-white font-bold" : "text-zinc-400")}>
+                                    Réglage {num} {isPreset0 && "(Aucun préréglage)"}
+                                  </span>
+
+                                  <div className="flex items-center gap-2">
+                                    {isPreset0 ? (
+                                      <span className="text-xs text-zinc-500 italic">Ne fait rien</span>
+                                    ) : isSaved ? (
+                                      <>
+                                        {/* Delete button - Red square */}
+                                        <button
+                                          onClick={(e) => handleDeletePreset(presetId, e)}
+                                          className="w-5 h-5 bg-red-600 hover:bg-red-500 rounded flex items-center justify-center transition-colors"
+                                          title="Effacer ce réglage"
+                                        >
+                                          <span className="text-white text-xs font-bold">✕</span>
+                                        </button>
+                                        {/* Saved indicator - White */}
+                                        <span className="text-sm text-white font-bold">
+                                          Enregistré
+                                        </span>
+                                      </>
+                                    ) : (
+                                      /* Save button */
+                                      <button
+                                        onClick={(e) => handleSavePreset(presetId, e)}
+                                        className="text-sm text-zinc-400 hover:text-white transition-colors"
+                                      >
+                                        Enregistrer
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
                         )}
-                        <div className={cn(
-                          "flex flex-wrap justify-center items-center gap-x-4 gap-y-2 text-2xl md:text-3xl font-black font-mono tracking-wider transition-all duration-700",
-                          shouldBlur && !shouldHideNumbers ? "blur-sm" : ""
-                        )}>
-                          {/* NUMBERS - Masqués uniquement pour Invités */}
-                          <div className="flex flex-wrap justify-center gap-2">
-                            {draw.nums.map((n, i) => (
-                              <div key={`n-${i}`} className={cn(
-                                "w-10 h-10 md:w-12 md:h-12 rounded-full flex items-center justify-center shadow-lg border-2",
-                                shouldHideNumbers
-                                  ? "bg-zinc-800 border-zinc-600 text-zinc-500"
-                                  : "bg-white border-zinc-200 text-black shadow-[0_0_15px_rgba(255,255,255,0.5)]"
-                              )}>
-                                {shouldHideNumbers ? '?' : n}
-                              </div>
-                            ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* MAIN COCKPIT GRID */}
+              <div className="flex flex-row relative items-stretch mx-auto" style={{ width: `${totalColumnsWidth}px`, gap: `${columnGap}px` }}>
+
+                {/* LEFT: NUMBERS CONFIG - RESSERRÉ ET CORRIGÉ */}
+                <div className={cn("flex-none flex flex-col gap-2", mode === 'auto' && "justify-end")} style={{ width: `${leftColumnWidth}px` }}>
+                  {mode === 'manual' && (
+                    <SectionPanel
+                      title={
+                        isSimplifiedMode ? (
+                          <span className="flex flex-nowrap items-center justify-start w-full gap-2">
+                            <button
+                              className={cn(
+                                "px-3 py-1 text-sm font-bold rounded transition-colors whitespace-nowrap",
+                                "w-[140px] flex items-center justify-center shrink-0",
+                                simplifiedSortOrder === 'numeric'
+                                  ? "bg-white text-black hover:bg-zinc-200"
+                                  : "bg-white/20 text-white/80 hover:bg-white/30"
+                              )}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSimplifiedSortOrder('numeric');
+                                playSound('click');
+                              }}
+                              aria-pressed={simplifiedSortOrder === 'numeric'}
+                            >
+                              Boules de 1 à 50
+                            </button>
+                            <div className="flex flex-nowrap items-center gap-2 min-w-0">
+                              <button
+                                className={cn(
+                                  "px-3 py-1 text-sm font-bold rounded transition-colors",
+                                  simplifiedSortOrder === 'frequency'
+                                    ? "bg-green-600 text-white hover:bg-green-500"
+                                    : "bg-green-600/25 text-white/80 hover:bg-green-600/35"
+                                )}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSimplifiedSortOrder('frequency');
+                                  playSound('click');
+                                }}
+                                aria-pressed={simplifiedSortOrder === 'frequency'}
+                              >
+                                Fréquence
+                              </button>
+                              <button
+                                className={cn(
+                                  "px-3 py-1 text-sm font-bold rounded transition-colors",
+                                  simplifiedSortOrder === 'surrepr'
+                                    ? "bg-violet-600 text-white hover:bg-violet-500"
+                                    : "bg-violet-600/25 text-white/80 hover:bg-violet-600/35"
+                                )}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSimplifiedSortOrder('surrepr');
+                                  playSound('click');
+                                }}
+                                aria-pressed={simplifiedSortOrder === 'surrepr'}
+                              >
+                                Surreprés.
+                              </button>
+                              <button
+                                className={cn(
+                                  "px-3 py-1 text-sm font-bold rounded transition-colors",
+                                  simplifiedSortOrder === 'trend'
+                                    ? "bg-red-600 text-white hover:bg-red-500"
+                                    : "bg-red-600/25 text-white/80 hover:bg-red-600/35"
+                                )}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSimplifiedSortOrder('trend');
+                                  playSound('click');
+                                }}
+                                aria-pressed={simplifiedSortOrder === 'trend'}
+                              >
+                                Tendance
+                              </button>
+                              <button
+                                className={cn(
+                                  "px-3 py-1 text-sm font-bold rounded transition-colors",
+                                  simplifiedSortOrder === 'dormeur'
+                                    ? "bg-blue-600 text-white hover:bg-blue-500"
+                                    : "bg-blue-600/25 text-white/80 hover:bg-blue-600/35"
+                                )}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSimplifiedSortOrder('dormeur');
+                                  playSound('click');
+                                }}
+                                aria-pressed={simplifiedSortOrder === 'dormeur'}
+                              >
+                                Dormeur
+                              </button>
+                              <LCDDisplay
+                                value={lcdText}
+                                size="btn"
+                                variant="inline"
+                                color="green"
+                                className="ml-0 shrink-0 w-[150px]"
+                              />
+                            </div>
+                          </span>
+                        ) : "CONFIGURATION BOULES (1-50)"
+                      }
+                      disabled={!canUseManual}
+                      className="flex flex-col p-[10px]"
+                      ledActive={true}
+                    >
+                      <div className="flex-1 flex flex-col justify-start">
+                        {/* Row 1: High Freq (classic) or Balls 1-13 (simplified) */}
+                        <div className="bg-black/30 p-1.5 rounded border border-zinc-800 flex items-center transition-all duration-300 mb-[6px]">
+                          {mode === 'manual' && (
+                            <div className={cn("flex-1 flex justify-start", !isSimplifiedMode && "ml-2")}>
+                              <BallGrid
+                                stats={isSimplifiedMode ? getSimplifiedBallStats(simplifiedSortOrder).slice(0, 13) : highFreqStats}
+                                countLimit={isSimplifiedMode ? 13 : 10}
+                                selectedNumbers={selectedNumbers}
+                                selectedStars={selectedStars}
+                                numberSources={numberSources}
+                                starSources={starSources}
+                                category={isSimplifiedMode ? undefined : "high"}
+                                onToggle={toggleSelection}
+                                className={isSimplifiedMode ? "py-0 justify-between w-full" : "py-0 justify-start gap-[4px]"}
+                                resolveCategory={isSimplifiedMode ? undefined : resolveCategory}
+                                nexusActive={nexusActive}
+                                nexusAncreNums={nexusAncresNum}
+                                nexusAncreStars={nexusAncresEtoile}
+                                highlightRDV={highlightRDV}
+                                rdvLevel={rdvLevel}
+                                rdvFaithfuls={rdvFaithfuls}
+                              />
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Row 2: Mid Freq (classic) or Balls 14-26 (simplified) */}
+                        <div className="bg-black/30 p-1.5 rounded border border-zinc-800 flex items-center transition-all duration-300 mb-[6px]">
+                          {mode === 'manual' && (
+                            <div className={cn("flex-1 flex justify-start", !isSimplifiedMode && "ml-2")}>
+                              <BallGrid
+                                stats={isSimplifiedMode ? getSimplifiedBallStats(simplifiedSortOrder).slice(13, 26) : midFreqStats}
+                                countLimit={isSimplifiedMode ? 13 : 10}
+                                selectedNumbers={selectedNumbers}
+                                selectedStars={selectedStars}
+                                numberSources={numberSources}
+                                starSources={starSources}
+                                category={undefined}
+                                onToggle={toggleSelection}
+                                className={isSimplifiedMode ? "py-0 justify-between w-full" : "py-0 justify-start gap-[4px]"}
+                                resolveCategory={undefined}
+                                nexusActive={nexusActive}
+                                nexusAncreNums={nexusAncresNum}
+                                nexusAncreStars={nexusAncresEtoile}
+                                highlightRDV={highlightRDV}
+                                rdvLevel={rdvLevel}
+                                rdvFaithfuls={rdvFaithfuls}
+                              />
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Row 3: Low Freq (classic) or Balls 27-39 (simplified) */}
+                        <div className="bg-black/30 p-1.5 rounded border border-zinc-800 flex items-center transition-all duration-300 mb-[6px]">
+                          {mode === 'manual' && (
+                            <div className={cn("flex-1 flex justify-start", !isSimplifiedMode && "ml-2")}>
+                              <BallGrid
+                                stats={isSimplifiedMode ? getSimplifiedBallStats(simplifiedSortOrder).slice(26, 39) : lowFreqStats}
+                                countLimit={isSimplifiedMode ? 13 : 10}
+                                selectedNumbers={selectedNumbers}
+                                selectedStars={selectedStars}
+                                numberSources={numberSources}
+                                starSources={starSources}
+                                category={undefined}
+                                onToggle={toggleSelection}
+                                className={isSimplifiedMode ? "py-0 justify-between w-full" : "py-0 justify-start gap-[4px]"}
+                                resolveCategory={undefined}
+                                nexusActive={nexusActive}
+                                nexusAncreNums={nexusAncresNum}
+                                nexusAncreStars={nexusAncresEtoile}
+                                highlightRDV={highlightRDV}
+                                rdvLevel={rdvLevel}
+                                rdvFaithfuls={rdvFaithfuls}
+                              />
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Row 4: Dormeur (classic) or Balls 40-50 (simplified) */}
+                        <div className="bg-black/30 p-1.5 rounded border border-zinc-800 flex items-center transition-all duration-300 mb-[6px]">
+                          {mode === 'manual' && (
+                            <div className={cn("flex-1 flex justify-start", !isSimplifiedMode && "ml-2")}>
+                              <BallGrid
+                                stats={isSimplifiedMode
+                                  ? [
+                                    ...getSimplifiedBallStats(simplifiedSortOrder).slice(39, 50),
+                                    // Add 2 invisible placeholders to maintain spacing like 13 balls
+                                    { number: -1, frequency: 0, trendScore: 0, trendDirection: 'stable' as const },
+                                    { number: -2, frequency: 0, trendScore: 0, trendDirection: 'stable' as const }
+                                  ]
+                                  : dormeurStats
+                                }
+                                countLimit={isSimplifiedMode ? 13 : 10}
+                                selectedNumbers={selectedNumbers}
+                                selectedStars={selectedStars}
+                                numberSources={numberSources}
+                                starSources={starSources}
+                                category={isSimplifiedMode ? undefined : "dormeur"}
+                                onToggle={toggleSelection}
+                                className={isSimplifiedMode ? "py-0 justify-between w-full" : "py-0 justify-start gap-[4px]"}
+                                resolveCategory={isSimplifiedMode ? undefined : resolveCategory}
+                                nexusActive={nexusActive}
+                                nexusAncreNums={nexusAncresNum}
+                                nexusAncreStars={nexusAncresEtoile}
+                                highlightRDV={highlightRDV}
+                                rdvLevel={rdvLevel}
+                                rdvFaithfuls={rdvFaithfuls}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </SectionPanel>
+                  )}
+
+                  <SectionPanel
+                    title={
+                      <div className="w-full grid grid-cols-2 items-center gap-4">
+                        {/* Left: PRIORITÉS DE TRI */}
+                        <div className="text-center">
+                          <span className="text-zinc-300 font-bold text-[10px] sm:text-xs tracking-widest uppercase drop-shadow-md whitespace-nowrap">
+                            PRIORITÉS DE TRI
+                          </span>
+                        </div>
+
+                        {/* Right: RÉALISER LES TIRAGES */}
+                        <div className="text-center">
+                          <span className="font-orbitron text-casino-gold text-lg tracking-widest uppercase truncate whitespace-nowrap block">
+                            RÉALISER LES TIRAGES
+                          </span>
+                        </div>
+                      </div>
+                    }
+                    disabled={!isWeightsEnabled}
+                    headerAction={
+                      <LEDIndicator active={true} color="green" />
+                    }
+                    className="h-[200px] flex flex-col"
+                  >
+                    {isSimplifiedMode ? (
+                      /* Mode simplifié : Priorité de tri déplacée dans la colonne Statistique */
+                      <div className="flex-1 min-h-0 flex items-center justify-center py-1">
+                        <ActionsControls variant="rack" />
+                      </div>
+                    ) : (
+                      <div className="flex-1 min-h-0 flex items-center justify-center">
+                        <ActionsControls variant="rack" />
+                      </div>
+                    )}
+                  </SectionPanel>
+                </div>
+
+                {/* CENTER: DASHBOARD / OPTIONS */}
+                <div className="w-[280px] flex flex-col gap-2 flex-shrink-0">
+                  {/* OPTIONS PANEL - hauteur fixe pour stabilité */}
+                  <div className="bg-[#111] border-2 border-zinc-800 rounded-xl p-2 flex flex-col items-center justify-start gap-2 shadow-inner relative overflow-hidden min-h-[465px] flex-shrink-0">
+                    <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-zinc-800/20 via-black to-black pointer-events-none" />
+
+
+                    {/* HAZARD CONTROL */}
+                    <div className="w-full relative z-10 flex flex-col items-center flex-1 justify-end -mt-[10px] pb-0 gap-0">
+                      <div className="flex flex-col w-full mb-1 items-center justify-center relative h-[60px]">
+                        {/* Top Line */}
+                        <div className="w-full h-px bg-zinc-800 absolute top-2" />
+
+                        {/* Title + LED Container */}
+                        <div className="flex items-center justify-center w-full z-10 px-4 bg-[#111]">
+                          <div className="text-center font-rajdhani font-bold tracking-widest text-[28px] text-amber-500 text-shadow-glow mx-auto">
+                            STATISTIQUE
                           </div>
-
-                          {/* SEPARATOR */}
-                          <div className="text-zinc-600 hidden md:flex items-center mx-2 text-4xl">|</div>
-
-                          {/* STARS - Masquées uniquement pour Invités */}
-                          <div className="flex flex-wrap justify-center gap-2">
-                            {draw.stars.map((n, i) => (
-                              <div key={`s-${i}`} className={cn(
-                                "w-10 h-10 md:w-12 md:h-12 rounded-full flex items-center justify-center shadow-lg border-2",
-                                shouldHideNumbers
-                                  ? "bg-zinc-800 border-yellow-900/30 text-yellow-700/50"
-                                  : "bg-yellow-400 border-yellow-200 text-yellow-900 shadow-[0_0_15px_rgba(255,215,0,0.5)]"
-                              )}>
-                                {shouldHideNumbers ? '★' : n}
-                              </div>
-                            ))}
+                          <div className="absolute right-4 top-1/2 -translate-y-1/2">
+                            <LEDIndicator active={hazardLevel > 0} color="purple" />
                           </div>
                         </div>
 
-                        {/* Message pour Admin/VIP/Abonné qui peuvent révéler */}
-                        {shouldBlur && !isInvite && (
-                          <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
-                            <div className="bg-black/60 backdrop-blur-sm px-4 py-2 rounded-full border border-white/20 text-white font-rajdhani uppercase tracking-widest text-sm animate-pulse">
-                              Cliquez pour révéler
+                        {/* Bottom Line */}
+                        <div className="w-full h-px bg-zinc-800 absolute bottom-2" />
+                      </div>
+
+                      {/* CONTAINER 1: WEIGHT KNOBS (Top) */}
+                      <div className="flex-1 w-full flex items-center justify-center p-0 bg-black/20">
+                        <div className="flex items-start justify-center gap-1 w-full px-1 -translate-y-2.5">
+                          {/* Knob FRÉQUENCE (Left) */}
+                          <div className="flex flex-col items-center gap-2 w-[90px]">
+                            <div className="h-5 flex items-center justify-center w-full text-center relative mb-0">
+                              <span className="text-white font-rajdhani font-bold text-base uppercase tracking-wider">FRÉQUENCE</span>
+                            </div>
+                            <div className="h-[80px] flex items-center justify-center">
+                              <RotaryKnob
+                                label=""
+                                value={influenceFreq}
+                                onChange={(v) => { setInfluenceFreq(v); playSound('knob'); }}
+                                max={10}
+                                size="ml"
+                                knobColor="border-green-700 shadow-[0_0_10px_rgba(22,163,74,0.3)] bg-zinc-900"
+                                indicatorColor="bg-green-600"
+                                labelClassName="hidden"
+                                valueClassName="text-green-500"
+                              />
                             </div>
                           </div>
-                        )}
-
+                          {/* Knob SURREPRÉS (Middle) */}
+                          <div className="flex flex-col items-center gap-2 w-[90px]">
+                            <div className="h-5 flex items-center justify-center w-full text-center relative mb-0">
+                              <span className="text-white font-rajdhani font-bold text-base uppercase tracking-wider">SURREPRÉS</span>
+                            </div>
+                            <div className="h-[80px] flex items-center justify-center">
+                              <RotaryKnob
+                                label=""
+                                value={influenceSurrepr}
+                                onChange={(v) => { setInfluenceSurrepr(v); playSound('knob'); }}
+                                max={10}
+                                size="ml"
+                                knobColor="border-violet-700 shadow-[0_0_10px_rgba(124,58,237,0.3)] bg-zinc-900"
+                                indicatorColor="bg-violet-600"
+                                labelClassName="hidden"
+                                valueClassName="text-violet-500"
+                              />
+                            </div>
+                          </div>
+                          {/* Knob TENDANCE (Right) */}
+                          <div className="flex flex-col items-center gap-2 w-[90px]">
+                            <div className="h-5 flex items-center justify-center w-full text-center relative mb-0">
+                              <span className="text-white font-rajdhani font-bold text-base uppercase tracking-wider">TENDANCE</span>
+                            </div>
+                            <div className="h-[80px] flex items-center justify-center">
+                              <RotaryKnob
+                                label=""
+                                value={influenceTrend}
+                                onChange={(v) => { setInfluenceTrend(v); playSound('knob'); }}
+                                max={10}
+                                size="ml"
+                                knobColor="border-red-700 shadow-[0_0_10px_rgba(220,38,38,0.3)] bg-zinc-900"
+                                indicatorColor="bg-red-600"
+                                labelClassName="hidden"
+                                valueClassName="text-red-500"
+                              />
+                            </div>
+                          </div>
+                        </div>
                       </div>
-                    )
-                  })
-                ) : (
-                  <div className="w-full bg-black/50 p-4 rounded-2xl border border-zinc-800 flex items-center justify-center text-zinc-600 font-lcd text-lg tracking-widest opacity-50">
-                    {mode === 'manual' ? "VALIDEZ VOTRE SÉLECTION" : "LANCEZ UNE RECHERCHE"}
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
 
-          <DebugPanel
-            isOpen={isDebugOpen}
-            onClose={() => setIsDebugOpen(false)}
-            onToggle={() => setIsDebugOpen(!isDebugOpen)}
-            stats={stats}
-            mode={mode}
-            config={{
-              highFreqCount: 0, midFreqCount: 0, lowFreqCount: 0,
-              highStarCount: 0, midStarCount: 0, lowStarCount: 0,
-              weightHigh, weightMid: 0, weightLow: 0,
-              weightDormeur: manifestationBalance + 5, // compat debug panel
-              weightStarHigh, weightStarMid, weightStarLow, weightStarDormeur
-            }}
-            numberSources={numberSources}
-            starSources={starSources}
-            dormeurProof={lastDormeurProof}
-            selectedNumbers={selectedNumbers}
-            selectedStars={selectedStars}
-            generatedNumbers={generatedNumbers}
-            generatedStars={generatedStars}
-            lastDrawDate={dernierTirage && dernierTirage.date && !isNaN(new Date(dernierTirage.date).getTime()) ? format(new Date(dernierTirage.date), 'yyyy-MM-dd') : '...'}
-            totalDraws={stats ? 1899 : 0}
-          />
+                      {/* CONTAINER 2: CONTROL KNOBS (Middle) */}
+                      <div className="flex-1 w-full flex items-center justify-center p-0 mt-0 bg-black/20">
+                        <div className="flex items-start justify-center gap-1 w-full px-1 -translate-y-2.5">
+                          {/* MANIFESTATION Knob (Left) */}
+                          <div className="flex flex-col items-center gap-2 w-[90px]">
+                            <div
+                              className={cn("h-6 flex items-center justify-center w-full text-center relative cursor-pointer select-none rounded decoration-2 underline-offset-4 mb-0", manifestationBalance === 0 ? "hover:underline active:scale-95 transition-all" : "")}
+                              onClick={() => { if (manifestationBalance === 0) { setManifestationBias(!manifestationBias); playSound('click'); } }}
+                              title={manifestationBalance === 0 ? "Cliquer pour alterner la priorité (High vs Dormeur)" : undefined}
+                            >
+                              <span className={cn("font-rajdhani font-bold text-base uppercase tracking-wider transition-colors duration-300", manifestationBalance < 0 ? "text-white" : manifestationBalance > 0 ? "text-blue-500" : manifestationBias ? "text-blue-500" : "text-white")}>
+                                {manifestationBalance < 0 ? "MANIFEST." : manifestationBalance > 0 ? "COMPENS." : "MAN./COMP."}
+                              </span>
+                            </div>
+                            <div className="h-[80px] flex items-center justify-center">
+                              <RotaryKnob
+                                label=""
+                                value={manifestationBalance + 5}
+                                onChange={(v) => { const bal = v - 5; setManifestationBalance(bal); playSound('knob'); }}
+                                max={10}
+                                size="ml"
+                                knobColor={cn("transition-colors duration-300", (manifestationBalance < 0 || (manifestationBalance === 0 && !manifestationBias)) ? "border-white shadow-[0_0_10px_rgba(255,255,255,0.3)] bg-zinc-900" : "border-blue-600 shadow-[0_0_10px_rgba(37,99,235,0.4)] bg-zinc-900")}
+                                indicatorColor={cn("transition-colors duration-300", (manifestationBalance < 0 || (manifestationBalance === 0 && !manifestationBias)) ? "bg-white" : "bg-blue-500")}
+                                labelClassName="hidden"
+                                valueClassName={cn("transition-colors duration-300", (manifestationBalance < 0 || (manifestationBalance === 0 && !manifestationBias)) ? "text-white" : "text-blue-500")}
+                                displayTransformer={(v) => Math.abs(v - 5)}
+                              />
+                            </div>
+                            <div className="h-3 mt-2.5 text-[11px] text-zinc-500 font-mono">
+                              {manifestationBalance < 0 ? "High" : manifestationBalance > 0 ? "Dormeur" : (manifestationBias ? "Bias: Dormeur" : "Bias: High")}
+                            </div>
+                          </div>
+                          {/* CHAOS Knob (Middle) */}
+                          <div className="flex flex-col items-center gap-2 w-[90px]">
+                            <div className="h-6 flex items-center justify-center w-full text-center relative mb-0">
+                              <span className="text-zinc-400 font-rajdhani font-bold text-base uppercase tracking-wider">CHAOS</span>
+                            </div>
+                            <div className="h-[80px] flex items-center justify-center">
+                              <RotaryKnob
+                                label=""
+                                value={chaosLevel}
+                                onChange={(v) => { setChaosLevel(v); playSound('knob'); }}
+                                max={10}
+                                size="ml"
+                                knobColor="border-zinc-500 shadow-[0_0_10px_rgba(0,0,0,0.3)] bg-zinc-300"
+                                indicatorColor="bg-black"
+                                labelClassName="hidden"
+                                valueClassName="text-black"
+                              />
+                            </div>
+                            <div className="h-3 mt-2.5 text-[11px] text-zinc-600 font-mono">Entropie</div>
+                          </div>
+                          {/* VIVIER Knob (Right) */}
+                          <div className="flex flex-col items-center gap-2 w-[90px]">
+                            <div className="h-6 flex items-center justify-center w-full text-center relative mb-0">
+                              <span className="text-amber-500 font-rajdhani font-bold text-base uppercase tracking-wider">VIVIER</span>
+                            </div>
+                            <div className={`h-[80px] flex items-center justify-center${rouePulseVivier ? ' animate-pulse' : ''}`}>
+                              <RotaryKnob
+                                label=""
+                                value={hazardLevel}
+                                onChange={(v) => { setHazardLevel(v); playSound('knob'); }}
+                                max={10}
+                                size="ml"
+                                knobColor={rouePulseVivier
+                                  ? "border-amber-400 shadow-[0_0_18px_rgba(251,191,36,0.8)] bg-zinc-900"
+                                  : "border-amber-700 shadow-[0_0_10px_rgba(180,83,9,0.3)] bg-zinc-900"}
+                                indicatorColor="bg-amber-600"
+                                labelClassName="hidden"
+                                valueClassName="text-amber-500"
+                              />
+                            </div>
+                            <div className="h-3 mt-[10.5px] flex items-center justify-center w-full text-center font-mono text-[11px] tracking-wider text-amber-400/90 select-none" title={`Vivier: ${chaosLabel}`}>
+                              {chaosLabel}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
 
-          {/* Panneau Chat (glisse depuis la droite) */}
-          {isChatOpen && (
-            <>
-              <div
-                className="fixed inset-0 bg-black/50 z-40"
-                onClick={handleCloseChat}
-                aria-hidden="true"
-              />
-              <div
-                className="fixed top-0 right-0 bottom-0 w-full max-w-[498px] bg-zinc-950 border-l-2 border-casino-gold/50 shadow-[-10px_0_30px_rgba(0,0,0,0.5)] z-50 flex flex-col transition-transform duration-[350ms] ease-out"
-                style={{ transform: chatPanelSlideIn ? 'translateX(0)' : 'translateX(100%)' }}
-              >
-
-
-
-
-                <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
-                  {user?.id ? (
-                    <ChatPanel
-                      onClose={handleCloseChat}
-                      isOpen={isChatOpen}
-                      currentUserId={user.id}
-                      currentUsername={user.username ?? ''}
-                      currentUserRole={user.role ?? 'invite'}
-                      chatSocket={chatSocket}
-                    />
-                  ) : (
-                    <div className="flex-1 p-4 text-zinc-400 text-lg overflow-auto">
-                      Connexion requise pour le chat.
+                      {/* CONTAINER 3: R.D.V KNOB (White Sparkly) */}
+                      <div className="flex-1 w-full flex items-center justify-center p-0 mt-0 bg-black/20">
+                        <div className="flex flex-col items-center gap-2 w-[90px]">
+                          <div
+                            className="h-6 flex items-center justify-center w-full text-center relative cursor-pointer select-none group"
+                            onClick={() => { setHighlightRDV(!highlightRDV); playSound('bling'); }}
+                            title="Cliquer pour mettre en lumière les fidèles du tirage"
+                          >
+                            <span className={cn(
+                              "font-rajdhani font-bold text-base uppercase tracking-wider transition-all duration-500",
+                              highlightRDV ? "text-white drop-shadow-[0_0_8px_rgba(255,255,255,1)] scale-110" : "text-zinc-400 group-hover:text-zinc-200"
+                            )}>
+                              R.D.V
+                            </span>
+                            {highlightRDV && <Sparkles size={12} className="absolute -right-1 -top-1 text-white animate-pulse" />}
+                          </div>
+                          <div className="h-[80px] flex items-center justify-center">
+                            <RotaryKnob
+                              label=""
+                              value={rdvLevel}
+                              onChange={(v) => { setRdvLevel(v); playSound('knob'); }}
+                              max={10}
+                              size="ml"
+                              knobColor="border-zinc-200 shadow-[0_0_15px_rgba(255,255,255,0.4)] bg-zinc-900"
+                              indicatorColor="bg-white"
+                              labelClassName="hidden"
+                              valueClassName="text-white drop-shadow-[0_0_5px_rgba(255,255,255,0.5)] font-bold"
+                            />
+                          </div>
+                          <div className="h-3 mt-2.5 text-[10px] uppercase font-bold tracking-tighter text-zinc-500 whitespace-nowrap">
+                            {highlightRDV ? "Mode Injection" : "Mode Pondération"}
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                  )}
-                </div>
-              </div>
-            </>
-          )}
+                  </div>
 
-        </div>
+                  {/* PRICE RACK (NEW) - Fixed height to prevent footer movement */}
+                  <SectionPanel title="PRIX DE LA GRILLE" className="h-[180px] flex flex-col justify-center items-center" showLed={false}>
+                    <div className="flex flex-col items-center justify-center w-full gap-0.5">
+                      <div className="text-white font-rajdhani font-black text-xl tracking-wide">
+                        {displayNumCount} Numéros + {displayStarCount} Étoiles
+                      </div>
+                      <div className={cn(
+                        "font-bold font-lcd flex items-center gap-2",
+                        currentPrice === 0
+                          ? "text-5xl text-white animate-pulse drop-shadow-[0_0_20px_rgba(255,255,255,1)] shadow-white"
+                          : "text-3xl text-casino-gold text-shadow-glow"
+                      )}>
+                        <span className={currentPrice === 0 ? "animate-[pulse_0.8s_ease-in-out_infinite] drop-shadow-[0_0_30px_rgba(255,255,255,0.9)]" : ""}>
+                          {currentPrice.toFixed(2)} €
+                        </span>
+
+                        {/* RESET BUTTON */}
+                        <div
+                          onClick={handleReset}
+                          className="cursor-pointer transition-transform hover:scale-110 ml-2"
+                          title="Réinitialiser tous les réglages (y compris priorité de tri)"
+                        >
+                          <RefreshCcw size={24} className="text-white drop-shadow-[0_0_5px_rgba(255,255,255,0.5)] hover:text-red-400 transition-colors" />
+                        </div>
+                      </div>
+                    </div>
+                  </SectionPanel>
+                </div>
+
+                {/* RIGHT: STARS CONFIG - ÉLARGI */}
+                <div className="flex-none flex flex-col gap-2 justify-end" style={{ width: `${rightColumnWidth}px` }}>
+                  {mode === 'manual' && (
+                    <SectionPanel
+                      title={
+                        isSimplifiedMode ? (
+                          <span className="flex items-center justify-center w-full">
+                            <span className="text-center">Étoiles de 1 à 12 <span className="text-yellow-400 ml-2 text-xl align-middle">★</span></span>
+                          </span>
+                        ) : (
+                          <>CONFIGURATION ÉTOILES (1-12) <span className="text-yellow-400 ml-3 text-xl align-middle">★</span></>
+                        )
+                      }
+                      disabled={!canUseManual}
+                      className="flex flex-col p-[10px]"
+                      ledActive={true}
+                    >
+                      <div className="flex flex-col justify-start">
+                        {/* Row 1: High Star (classic) or Stars 1-6 (simplified) */}
+                        <div className="bg-black/30 p-1.5 rounded border border-zinc-800 flex items-center transition-all duration-300 mb-[6px]">
+                          {mode === 'manual' && (
+                            <div className={cn("flex-1 flex justify-start", !isSimplifiedMode && "ml-2")}>
+                              <BallGrid
+                                stats={isSimplifiedMode ? getSimplifiedStarStats(simplifiedSortOrder).slice(0, 6) : highStarStats}
+                                countLimit={isSimplifiedMode ? 6 : 12}
+                                type="star"
+                                selectedNumbers={selectedNumbers}
+                                selectedStars={selectedStars}
+                                numberSources={numberSources}
+                                starSources={starSources}
+                                category={isSimplifiedMode ? undefined : "high"}
+                                onToggle={toggleSelection}
+                                className={isSimplifiedMode ? "py-0 justify-evenly w-full" : "py-0 justify-start gap-[4px]"}
+                                resolveCategory={isSimplifiedMode ? undefined : resolveCategory}
+                                nexusActive={nexusActive}
+                                nexusAncreNums={nexusAncresNum}
+                                nexusAncreStars={nexusAncresEtoile}
+                                highlightRDV={highlightRDV}
+                                rdvLevel={rdvLevel}
+                                rdvFaithfuls={rdvFaithfuls}
+                              />
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Row 2: Mid Star (classic) or Stars 7-12 (simplified) */}
+                        <div className="bg-black/30 p-1.5 rounded border border-zinc-800 flex items-center transition-all duration-300 mb-[6px]">
+                          {mode === 'manual' && (
+                            <div className={cn("flex-1 flex justify-start", !isSimplifiedMode && "ml-2")}>
+                              <BallGrid
+                                stats={isSimplifiedMode ? getSimplifiedStarStats(simplifiedSortOrder).slice(6, 12) : midStarStats}
+                                countLimit={isSimplifiedMode ? 6 : 12}
+                                type="star"
+                                selectedNumbers={selectedNumbers}
+                                selectedStars={selectedStars}
+                                numberSources={numberSources}
+                                starSources={starSources}
+                                category={undefined}
+                                onToggle={toggleSelection}
+                                className={isSimplifiedMode ? "py-0 justify-evenly w-full" : "py-0 justify-start gap-[4px]"}
+                                resolveCategory={undefined}
+                                nexusActive={nexusActive}
+                                nexusAncreNums={nexusAncresNum}
+                                nexusAncreStars={nexusAncresEtoile}
+                                highlightRDV={highlightRDV}
+                                rdvLevel={rdvLevel}
+                                rdvFaithfuls={rdvFaithfuls}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </SectionPanel>
+                  )}
+
+                  {/* RACK NEXUS + Email (SmartRackPanel) */}
+                  <div className="relative" style={{ height: '395px' }}>
+
+                    {/* SmartRackPanel : Bloc A (NEXUS+ROUE + LCD) + Bloc B (Email) */}
+                    <SmartRackPanel
+                      nexusState={nexusState}
+                      roueCost={roueCost}
+                      roueModeLabel={roueModeComplete === 'complete' ? 'Complète' : 'Abrégée'}
+                      vivierSize={KO_GRADUATIONS[koGrad].balls}
+                      roueCombosCount={roueCombosCount}
+                      tarifOptions={['5×2 — 2.50€', '5×3 — 7.50€', '5×4 — 15.00€', '5×5 — 25.00€', '6×2 — 15.00€', '6×3 — 45.00€', '7×2 — 52.50€', '8×2 — 140.00€']}
+                      onEmailSave={(s) => setEmailScheduleState(s)}
+                      onNexusClick={handleNexusClick}
+                      onRoueClick={handleRoueClick}
+                      nexusLcdMsg={nexusLcdMsg}
+                      nexusGenerating={nexusGenerating}
+                      nexusTimer={nexusTimer}
+                      disabled={!selectedTariff}
+                    />
+                  </div>
+                </div>
+
+              </div>
+
+              {/* BOTTOM: LIGNE ROUGE FINALE (SUPPRIMÉE SUR DEMANDE UTILISATEUR) */}
+              {/* <div className="border-t-4 border-casino-red shadow-[0_0_10px_rgba(255,0,0,0.5)] mx-auto mt-1" style={{ width: `${totalColumnsWidth}px` }} /> */}
+
+              {/* ══ VOLET LISTE DES COMBOS — overlay ascendant sur la ligne rouge ══ */}
+              <div className="absolute bottom-0 left-[50%] -translate-x-1/2 z-50 flex items-end" style={{ width: `${totalColumnsWidth}px`, pointerEvents: 'auto' }}>
+                <CombosListPanel
+                  entries={combosList}
+                  isOpen={combosListOpen}
+                  onToggle={() => setCombosListOpen(p => !p)}
+                  onOpenDetail={(combo) => {
+                    setNexusDetailCombo(combo);
+                    setNexusDetailOpen(true);
+                  }}
+                  onClear={() => {
+                    setCombosList([]);
+                    setCombosListOpen(false);
+                  }}
+                  onDelete={(index) => {
+                    setCombosList(prev => {
+                      const next = prev.filter((_, i) => i !== index);
+                      // Ré-indexation automatique : les index sont recalculés par position dans le tableau
+                      return next.map((entry, i) => ({ ...entry, index: i }));
+                    });
+                  }}
+                />
+              </div>
+
+
+            </div> {/* Fin du TitleDiv 4903 */}
+
+            {/* Panneau Chat (direct integration, self-animated) */}
+            <ChatPanel
+              onClose={handleCloseChat}
+              isOpen={isChatOpen}
+              currentUserId={user?.id || 0}
+              currentUsername={user?.username || ''}
+              currentUserRole={user?.role || 'invite'}
+              chatSocket={chatSocket}
+            />
+
+            {/* Panneau NEXUS Détail — replacé à l'intérieur du transform scale */}
+            <NexusDetailPanel
+              combo={nexusDetailCombo}
+              isOpen={nexusDetailOpen}
+              onClose={() => setNexusDetailOpen(false)}
+            />
+
+          </div> {/* Fin du ZoomScale 4885 */}
+
+        </div> {/* Fin du WrapperCenter 4884 */}
       </div>
-    </CasinoLayout >
+    </CasinoLayout>
   );
 }

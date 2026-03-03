@@ -12,16 +12,20 @@ function normalizeDate(d: Date) {
 function getLatestDrawDateCandidate(now: Date) {
   // Draw days: Tuesday & Friday at 21:00 Paris time.
   // We want the latest draw date where results are AVAILABLE (i.e., tirage already happened).
-  // If today is Tue/Fri but before ~21:30, skip today and go to the previous draw day.
-  const currentHour = now.getUTCHours() + 1; // Approximate Paris time (UTC+1)
-  const drawHour = 21; // Tirage at 21h Paris time
-  
+  // If today is Tue/Fri but before 21:30, skip today and go to the previous draw day.
+  // IMPORTANT: on utilise getHours() (heure locale du serveur) et NON getUTCHours()+1,
+  // car le décalage varie : UTC+1 en hiver, UTC+2 en été → l'approximation +1 était fausse en été.
+  const currentHour = now.getHours();   // Heure locale réelle (Paris, hiver & été)
+  const currentMin = now.getMinutes();
+  const drawHour = 21;   // Tirage à 21h heure de Paris
+  const drawMin = 30;   // Résultats disponibles vers 21h15-21h30 → marge à 21h30
+
   for (let i = 0; i < 7; i++) {
     const d = subDays(now, i);
     if (isTuesday(d) || isFriday(d)) {
-      // If it's today and before draw time, skip to previous draw day
-      if (i === 0 && currentHour < drawHour + 1) {
-        continue; // Skip today, tirage not yet happened
+      // Si c'est aujourd'hui et que le tirage n'est pas encore terminé, on passe au suivant
+      if (i === 0 && (currentHour < drawHour || (currentHour === drawHour && currentMin < drawMin))) {
+        continue; // Tirage du soir pas encore disponible
       }
       return d;
     }
@@ -114,7 +118,7 @@ export async function runHistoryAutoUpdateOnce(opts: { hasDatabase: boolean }): 
     try {
       await db.delete(drawPayouts).where(lt(drawPayouts.expiresAt, new Date()) as any);
       await db.delete(autoUpdateRuns).where(lt(autoUpdateRuns.expiresAt, new Date()) as any);
-    } catch {}
+    } catch { }
 
     return {
       ok: true,
@@ -139,7 +143,7 @@ export async function runHistoryAutoUpdateOnce(opts: { hasDatabase: boolean }): 
         url: urlForLog,
         expiresAt,
       });
-    } catch {}
+    } catch { }
 
     return { ok: false, message: msg, url: urlForLog, drawDate };
   }
@@ -200,6 +204,6 @@ export function startHistoryAutoUpdater(opts: { hasDatabase: boolean; getMode: (
   // Start loop: every 60 seconds
   setInterval(tick, 60 * 1000);
   // fire once quickly
-  tick().catch(() => {});
+  tick().catch(() => { });
 }
 

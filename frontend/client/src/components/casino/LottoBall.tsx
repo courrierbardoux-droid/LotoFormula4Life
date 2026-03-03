@@ -13,10 +13,12 @@ interface LottoBallProps {
   pulse?: boolean;
   /** Animation pulse blanche éclatante pour le RDV */
   highlight?: boolean;
+  /** Badge ancre ⚓ (NeXus) */
+  isAncre?: boolean;
   className?: string;
 }
 
-export const LottoBall = ({ number, isStar = false, size = 'md', status = 'default', isWinning = false, pulse = false, highlight = false, className }: LottoBallProps) => {
+export const LottoBall = ({ number, isStar = false, size = 'md', status = 'default', isWinning = false, pulse = false, highlight = false, isAncre = false, className }: LottoBallProps) => {
   const sizeClasses = {
     sm: "w-[32px] h-[32px] text-[16px]",
     md: "w-[44px] h-[44px] text-[22px]",
@@ -46,6 +48,12 @@ export const LottoBall = ({ number, isStar = false, size = 'md', status = 'defau
       highlight && "animate-[pulse_1s_ease-in-out_infinite] border-white shadow-[0_0_25px_rgba(255,255,255,0.8)] scale-110 z-30"
     )}>
       <span className={numberSpanClass}>{number}</span>
+
+      {isAncre && (
+        <div className="absolute -top-1 -right-1 w-5 h-5 bg-blue-600 rounded-full flex items-center justify-center border border-white/40 shadow-lg z-20">
+          <span className="text-[10px] leading-none">⚓</span>
+        </div>
+      )}
 
       {/* Specular highlight for 3D effect REMOVED per user request */}
       {/* <div className="absolute top-[15%] left-[20%] w-[30%] h-[20%] bg-white rounded-full opacity-60 blur-[1px]" /> */}

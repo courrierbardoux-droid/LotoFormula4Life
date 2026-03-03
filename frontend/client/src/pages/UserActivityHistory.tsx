@@ -7,6 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 import { fr } from "date-fns/locale";
+import { Network } from "lucide-react";
+import { BlockchainPopup } from "@/components/casino/BlockchainPopup";
 
 type GridWithResult = {
   id: number;
@@ -27,6 +29,7 @@ type GridWithResult = {
   drawNumbers?: number[];
   drawStars?: number[];
   adminSeenAt?: string | null;
+  blockchain?: string;
 };
 
 function getRankLabel(matchNum: number, matchStar: number): string {
@@ -65,6 +68,7 @@ export default function UserActivityHistory() {
   const [loading, setLoading] = useState(true);
   const [pulseStoppedIds, setPulseStoppedIds] = useState<Set<number>>(new Set());
   const [highlightedGrids, setHighlightedGrids] = useState<Set<number>>(new Set());
+  const [selectedBlockchain, setSelectedBlockchain] = useState<string | null>(null);
   const { user } = useUser();
   const [, setLocation] = useLocation();
 
@@ -144,6 +148,12 @@ export default function UserActivityHistory() {
                   <th className="p-2">Utilisateur</th>
                   <th className="p-2">Date Jeu</th>
                   <th className="p-2">Tirage Visé</th>
+                  <th className="p-2 text-center text-zinc-300">
+                    <div className="flex flex-col items-center">
+                      <Network size={16} className="text-casino-gold mb-1" />
+                      <span className="text-[10px] leading-tight text-casino-gold/80">Réglages<br />console</span>
+                    </div>
+                  </th>
                   <th className="p-2 text-center">Combinaison</th>
                   <th className="p-2 text-center">Rang</th>
                   <th className="p-2 text-center">Résultat</th>
@@ -183,6 +193,20 @@ export default function UserActivityHistory() {
                         </td>
                         <td className="p-2 text-white font-bold text-sm whitespace-nowrap">
                           {grid.targetDate ? format(new Date(grid.targetDate), "dd MMMM yyyy", { locale: fr }) : "-"}
+                        </td>
+                        <td className="p-2 text-center" onClick={(e) => e.stopPropagation()}>
+                          {grid.blockchain ? (
+                            <button
+                              onClick={() => setSelectedBlockchain(grid.blockchain!)}
+                              className="group relative transition-all duration-300 hover:scale-110 active:scale-95"
+                              title="Voir les réglages console"
+                            >
+                              <div className="absolute inset-0 bg-casino-gold/20 rounded-full blur-md group-hover:bg-casino-gold/40 transition-all duration-500 animate-pulse"></div>
+                              <Network size={22} className="text-casino-gold relative z-10 drop-shadow-[0_0_8px_rgba(255,215,0,0.8)]" />
+                            </button>
+                          ) : (
+                            <span className="text-zinc-600 text-xs italic">-</span>
+                          )}
                         </td>
                         <td className="p-2">
                           <div className="flex justify-center gap-0.5 md:gap-1 scale-75 origin-center">
@@ -246,6 +270,13 @@ export default function UserActivityHistory() {
           </div>
         </div>
       </div>
+
+      <BlockchainPopup
+        isOpen={!!selectedBlockchain}
+        onClose={() => setSelectedBlockchain(null)}
+        blockchainData={selectedBlockchain || ''}
+        onCopySettings={() => { }}
+      />
     </CasinoLayout>
   );
 }

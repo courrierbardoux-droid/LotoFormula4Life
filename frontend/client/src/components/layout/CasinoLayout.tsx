@@ -29,27 +29,27 @@ export const CasinoLayout = ({ children }: CasinoLayoutProps) => {
   const showLogout = location !== "/";
 
   return (
-    <div className="min-h-screen w-full bg-background text-foreground overflow-auto flex flex-col relative font-rajdhani">
+    <div className="h-screen w-full bg-background text-foreground overflow-hidden flex flex-col relative font-rajdhani">
       {/* Background Image */}
-      <div 
+      <div
         className="fixed inset-0 z-0 opacity-40 pointer-events-none"
-        style={{ 
+        style={{
           backgroundImage: `none`,
           backgroundSize: 'cover',
           backgroundPosition: 'center'
         }}
       />
-      
+
       {/* Overlay Gradient - subtler for visibility */}
       <div className="fixed inset-0 z-0 bg-gradient-to-b from-black/30 via-transparent to-black/50 pointer-events-none" />
 
-      {/* Content */}
-      <div className="relative z-10 flex-1 flex flex-col">
+      {/* Main Content Wrapper with padding to clear the fixed footer */}
+      <div className="relative z-10 flex-1 flex flex-col pb-12">
         {children}
       </div>
 
-      {/* Footer / Signature */}
-      <footer className="relative z-20 py-2 text-center text-xs text-muted-foreground font-orbitron opacity-50 border-t border-white/5 mt-auto">
+      {/* Footer / Signature - Fixed for absolute permanent visibility */}
+      <footer className="fixed bottom-0 left-0 w-full z-40 py-3 text-center text-xs text-muted-foreground font-orbitron bg-background/80 backdrop-blur-md border-t border-white/5 shadow-[0_-10px_30px_rgba(0,0,0,0.5)]">
         LOTOFORMULA4LIFE © 2025 • A&C STUDIO
       </footer>
     </div>
